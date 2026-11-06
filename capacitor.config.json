@@ -1,11 +1,22 @@
 {
   "appId": "com.qingricheng.app",
-  "appName": "轻日程",
+  "appName": "氢计划",
   "webDir": "www",
   "server": {
     "androidScheme": "https"
   },
   "android": {
     "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_icon"
+    },
+    "Geolocation": {
+      "androidPermissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
+    },
+    "Filesystem": {
+      "androidPermissions": ["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
+    }
   }
 }

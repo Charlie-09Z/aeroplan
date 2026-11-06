@@ -1,31 +1,58 @@
-# 轻日程 · 安卓 APK 打包工程
+# 氢计划（AeroPlan）· Android 打包工程
 
-把现有的「轻日程」网页（PWA）用 [Capacitor](https://capacitorjs.com/) 包成安卓应用，由 GitHub Actions 在云端生成 Android 工程并打出 APK。**不需要安装 Android Studio，也不需要在自己电脑上装 Java / Android SDK。**
+把「氢计划」网页应用用 Capacitor 包成安卓 APK，全部在 GitHub Actions 云端完成，电脑上不需要装 Android Studio。
 
-- 应用版本：0.3.1
-- 应用包名：`com.qingricheng.app`
-- 产物：`light-schedule-0.3.1.apk`（在 Actions 运行页面的 Artifacts 里下载）
-- 网页文件仍然原样保留在仓库根目录，打包时由脚本复制到临时目录 `www/`
+显示名仍然是中文「氢计划」；英文名 AeroPlan 用在包信息、导出文件名、关于页和英文模式下。
 
-## 从哪里开始
-
-请直接打开 **[打包说明.md](打包说明.md)**，里面是从「新建 GitHub 仓库」到「装到手机上」的逐步点按说明。
-
-## 仓库里有什么
+## 这个文件夹里有什么
 
 | 文件 / 文件夹 | 作用 |
 | --- | --- |
-| `index.html`、`styles.css`、`app.js`、`sw.js`、`manifest.webmanifest`、`icons/` | 轻日程网页本体（与 PWA 包内一致，仅 `app.js` 增加了一行「APK 内跳过 Service Worker」的判断） |
-| `package.json` | 打包所需的 Capacitor 依赖与脚本 |
-| `capacitor.config.json` | 应用名、包名、网页目录 `www` |
-| `scripts/copy-web.mjs` | 把根目录网页文件复制到 `www/` |
-| `scripts/prepare-android.mjs` | 写入签名、版本号，并用 `icons/icon-512.png` 生成安卓桌面图标 |
-| `keystore/light-schedule-release.keystore` | 个人自签名文件（固定签名，保证新版能覆盖安装旧版） |
-| `.github/workflows/build-apk.yml` | GitHub Actions：手动触发，构建 release APK 并上传为 artifact |
+| `index.html`、`styles.css`、`i18n.js`、`app.js`、`sw.js`、`manifest.webmanifest`、`icons/`、`fonts/` | 网页本体，打包时会被复制进 APK |
+| `package.json` | 版本号在这里（`version`），打包时会自动换算成安卓的版本号 |
+| `capacitor.config.json` | 应用名、包名、网页目录，以及通知 / 定位 / 存储权限的说明 |
+| `scripts/copy-web.mjs` | 把网页文件（含 `i18n.js` 与 `fonts/`）复制到 `www/` |
+| `scripts/prepare-android.mjs` | 写入签名、版本号、应用显示名「氢计划」、联网 / 通知 / 定位 / 存储权限、图标和启动图 |
+| `keystore/light-schedule-release.keystore` | 固定签名文件（PKCS12，别名和密码都是 `qingricheng`） |
+| `.github/workflows/build-apk.yml` | GitHub 上的自动打包流程 |
+| `打包说明.md` | 从建仓库到装到手机的中文分步说明 |
 
-## 必须知道的限制
+`www/`、`android/`、`node_modules/`、`dist/` 都是打包过程中自动生成的，不需要上传，也不要手动创建。
 
-- APK 里仍然是网页技术（Android WebView），不是原生程序，**不会变成原生闹钟**。
-- 提醒只在应用页面处于活动状态时可能触发；退到后台、锁屏被系统冻结或划掉应用后不会响。重要事项请同时用系统闹钟。
-- 数据只存在这台手机的应用数据里；卸载应用或在系统设置里清除应用数据会全部丢失。APK 内「备份数据」的下载行为尚未在真机验证，重要数据建议先在网页版导出备份。
-- 自签名 APK 可以自己安装、可以覆盖升级，**不能上架应用商店**。
+## 本次（v0.4.3）依赖与权限变化
+
+新增三个 Capacitor 官方插件，`npm install` 会自动装好，不需要额外密钥或权限：
+
+- `@capacitor/filesystem`：把备份写到应用专属目录 `files/backups`。
+- `@capacitor/share`：点「打开位置」时调用系统分享面板，把备份另存到「下载」或网盘。
+- `@capacitor/geolocation`：只调用 `requestPermissions()` / `checkPermissions()`，**没有任何读取坐标的代码**。
+
+`prepare-android.mjs` 会把这些权限写进 `AndroidManifest.xml`：
+
+- `INTERNET`（安装时授予）
+- `POST_NOTIFICATIONS`（Android 13+ 运行时申请）
+- `ACCESS_COARSE_LOCATION`、`ACCESS_FINE_LOCATION`（定位：只声明与申请，不读取坐标）
+- `READ_EXTERNAL_STORAGE`（仅 Android 12 及以下）、`WRITE_EXTERNAL_STORAGE`（仅 Android 9 及以下）
+- `SCHEDULE_EXACT_ALARM`（精确闹钟，用于到点提醒；部分系统需要你在「设置 → 应用 → 氢计划 → 闹钟与提醒」里手动允许）
+- `RECEIVE_BOOT_COMPLETED`（重启后恢复已排好的本地通知）
+
+## 版本号规则
+
+只改 `package.json` 里的 `version`，例如：
+
+- `0.3.2` → 安卓 `versionCode 302`（主版本 ×10000 + 次版本 ×100 + 修订号）
+- `0.4.2` → `versionCode 402`
+- `0.4.3` → `versionCode 403`
+
+APK 文件名也会自动变成 `qingjihua-0.4.3.apk`，不需要手改任何地方。
+
+## 签名说明
+
+用的是仓库里固定的自签名文件，好处是以后每次打包签名一致，可以直接覆盖安装升级；代价是这种 APK 不能上架应用商店（上架需要 Google Play 的正式签名）。签名文件丢了就没法覆盖升级，只能先卸载旧版再装新版。
+
+## 限制
+
+- APK 里跑的仍然是网页技术（WebView），不是原生应用。
+- 安装版会通过 `@capacitor/local-notifications` 把到点提醒排成系统本地通知，应用退到后台也能弹；受系统省电策略和精确闹钟权限影响，个别机型可能略有延迟。网页版仍只在页面打开时触发，没有通知权限时回落到页面内提醒卡片。
+- 数据存在手机本机（应用专属目录 / 浏览器数据库），不上传服务器。
+- 开屏字标为本地打包的 OFL 字体（ZCOOL XiaoWei / Cormorant Garamond），不联网加载。

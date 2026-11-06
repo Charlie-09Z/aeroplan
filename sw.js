@@ -1,12 +1,16 @@
-/* 轻日程 Service Worker：只缓存 app shell，让断网时也能打开。
+/* 氢计划 Service Worker：只缓存 app shell，让断网时也能打开。
    上传到 https 网址后，手机浏览器访问时会自动启用离线缓存。 */
 
-const CACHE_NAME = 'light-schedule-v13';
+const CACHE_NAME = 'qingjihua-v24';
 
 const ASSETS = [
   './index.html',
-  './styles.css?v=13',
-  './app.js?v=13',
+  './styles.css?v=24',
+  './i18n.js?v=24',
+  './weather.js?v=24',
+  './app.js?v=24',
+  './fonts/zcool-xiaowei-subset.woff2',
+  './fonts/cormorant-garamond-subset.woff2',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
