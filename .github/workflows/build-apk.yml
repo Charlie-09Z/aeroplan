@@ -8,45 +8,85 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      CI: true
 
     steps:
       - name: 取回仓库文件
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: 安装 Node.js 20
-        uses: actions/setup-node@v4
+      - name: 安装 Node.js 22
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: 安装 Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: 准备 Android SDK
-        uses: android-actions/setup-android@v3
+      # 不再使用 android-actions/setup-android：它自带的 sdkmanager 在新 runner 上会失败。
+      # GitHub 的 ubuntu-latest 已经预装 Android SDK（/usr/local/lib/android/sdk）。
+      # 这里只做两件事：把路径写进环境变量、补签许可证（失败也不影响构建）。
+      - name: 使用运行机预装的 Android SDK
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if [ ! -d "$SDK_ROOT" ]; then
+            SDK_ROOT="/usr/local/lib/android/sdk"
+          fi
+          if [ ! -d "$SDK_ROOT" ]; then
+            echo "没有找到预装的 Android SDK，路径：$SDK_ROOT"
+            exit 1
+          fi
+          {
+            echo "ANDROID_HOME=$SDK_ROOT"
+            echo "ANDROID_SDK_ROOT=$SDK_ROOT"
+          } >> "$GITHUB_ENV"
+          echo "本次使用 SDK：$SDK_ROOT"
+          echo "--- 已安装的平台 ---"
+          ls "$SDK_ROOT/platforms" || true
+          echo "--- 已安装的 build-tools ---"
+          ls "$SDK_ROOT/build-tools" || true
+
+          # 新版 runner 的命令行工具目录带版本号（例如 cmdline-tools/16.0），所以两种位置都找一遍
+          SDKM="$(command -v sdkmanager || true)"
+          if [ -z "$SDKM" ]; then
+            SDKM="$(ls -d "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1)"
+          fi
+          echo "sdkmanager 位置：${SDKM:-没找到（不影响构建）}"
+
+          # 1) 补签许可证：即使这一句失败也不让任务中断（预装 SDK 一般已签好）
+          if [ -n "$SDKM" ]; then
+            yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          fi
+
+          # 2) 万一镜像里没有 Android 34 平台，尝试补装一次；失败也继续往下走
+          if [ -n "$SDKM" ] && [ ! -d "$SDK_ROOT/platforms/android-34" ]; then
+            echo "没有找到 Android 34 平台，尝试补装（失败不影响后续步骤）"
+            yes | "$SDKM" "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
+          fi
+
+      - name: 检查签名文件
+        run: |
+          keytool -list -keystore keystore/light-schedule-release.keystore \
+            -storetype PKCS12 -storepass qingricheng
+          echo "签名文件可以正常读取"
 
       - name: 安装打包依赖
         run: npm install --no-audit --no-fund
-        env:
-          CI: true
 
       - name: 复制网页文件到 www
         run: node scripts/copy-web.mjs
 
       - name: 生成 Android 工程
         run: npx cap add android
-        env:
-          CI: true
 
       - name: 写入签名、版本号和图标
         run: node scripts/prepare-android.mjs
 
       - name: 同步网页资源
         run: npx cap sync android
-        env:
-          CI: true
 
       - name: 构建 release APK
         working-directory: android
@@ -58,11 +98,14 @@ jobs:
         run: |
           mkdir -p dist
           VERSION=$(node -p "require('./package.json').version")
+          echo "package.json 里的版本号是：$VERSION"
           cp android/app/build/outputs/apk/release/app-release.apk "dist/light-schedule-${VERSION}.apk"
+          ls -l dist
 
       - name: 上传 APK（在运行页面底部下载）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: light-schedule-apk
           path: dist/*.apk
           if-no-files-found: error
+          retention-days: 30
