@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#4C6FFF">
+  <meta name="description" content="轻日程：日历、日程、待办与周月年计划，数据只存在本机，无需账号。">
+  <title>轻日程</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
+  <link rel="stylesheet" href="./styles.css?v=13">
+</head>
+<body>
+  <div class="phone">
+    <div class="app" id="app">
+
+      <div class="storage-banner" id="storageBanner" hidden>
+        当前浏览模式无法保存数据，请用普通模式打开
+      </div>
+
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="nav-btn" id="prevBtn" type="button" aria-label="上一页">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <button class="topbar-title" id="topbarTitle" type="button" aria-label="切换年月">日历</button>
+          <button class="nav-btn" id="nextBtn" type="button" aria-label="下一页">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>
+          </button>
+        </div>
+        <div class="topbar-right">
+          <button class="today-btn" id="todayBtn" type="button">今天</button>
+          <button class="icon-btn" id="settingsBtn" type="button" aria-label="设置">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6.5h9M17.5 6.5H20M4 12h4.5M12.5 12H20M4 17.5h9M17.5 17.5H20"/>
+              <circle cx="15" cy="6.5" r="2.2"/>
+              <circle cx="10" cy="12" r="2.2"/>
+              <circle cx="15" cy="17.5" r="2.2"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="summary" id="summaryBar" hidden>
+        <div class="summary-text" id="summaryText"></div>
+        <button class="summary-btn" id="summaryBtn" type="button">查看</button>
+      </div>
+
+      <main class="content" id="content">
+        <section class="view" id="viewCalendar">
+          <div class="weekdays">
+            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+          </div>
+          <div class="cal-grid" id="calGrid"></div>
+          <div class="cal-foot">
+            <div class="legend">
+              <span class="legend-item"><i style="background:var(--event)"></i>日程</span>
+              <span class="legend-item"><i style="background:var(--todo)"></i>待办</span>
+            </div>
+            <div class="month-stat" id="monthStat"></div>
+          </div>
+          <div class="day-detail" id="dayDetail">
+            <div class="day-detail-inner" id="dayDetailInner"></div>
+          </div>
+          <div class="empty-state compact" id="calendarEmpty" hidden>
+            <p class="empty-title">还没有安排，从今天的第一件事开始</p>
+            <button class="empty-btn" type="button" data-empty-add>新建第一条</button>
+          </div>
+          <p class="cal-tip" id="calTip">点任意日期，查看当天按小时排列的安排。</p>
+        </section>
+
+        <section class="view" id="viewAgenda" hidden>
+          <div class="filter-bar" id="agendaFilterBar" hidden></div>
+          <div class="empty-state" id="agendaEmpty" hidden>
+            <span class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <rect x="3.5" y="4.5" width="17" height="16" rx="4"/>
+                <path d="M8 2.8v3.4M16 2.8v3.4M7.4 10.6h9.2M8.4 14.6h4.2"/>
+              </svg>
+            </span>
+            <p class="empty-title">今天还没有安排</p>
+            <p class="empty-sub">想到什么就先记下来，之后再调整。</p>
+            <button class="empty-btn" type="button" data-empty-add>新建一条</button>
+          </div>
+          <div id="agendaList"></div>
+        </section>
+
+        <section class="view" id="viewPlan" hidden>
+          <div id="planContent"></div>
+        </section>
+      </main>
+
+      <nav class="tabbar" aria-label="主导航">
+        <button class="tab active" type="button" data-view="calendar">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3.5" y="5" width="17" height="15.5" rx="3.5"/>
+            <path d="M8 3.4v3.2M16 3.4v3.2M7.6 10.4h8.8"/>
+          </svg>
+          <span>日历</span>
+        </button>
+        <button class="tab" type="button" data-view="agenda">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6" cy="7" r="1.4"/>
+            <path d="M10 7h10M6 12.5h1.4M10 12.5h10M6 18h1.4M10 18h8"/>
+          </svg>
+          <span>议程</span>
+        </button>
+        <button class="tab" type="button" data-view="plan">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="8"/>
+            <path d="M12 12V7.4M12 12l3.4 2.6"/>
+          </svg>
+          <span>计划</span>
+        </button>
+      </nav>
+
+      <button class="fab" id="fab" type="button" aria-label="新建条目">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"/></svg>
+      </button>
+
+      <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+      <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+        <div class="sheet-grabber"></div>
+        <div class="sheet-head">
+          <h2 id="sheetTitle">新建条目</h2>
+          <button class="icon-btn" id="sheetClose" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+          </button>
+        </div>
+
+        <div class="type-chips" id="typeChips" role="tablist" aria-label="条目类型">
+          <button class="type-chip active" type="button" data-type="event" role="tab" aria-selected="true">
+            <i class="chip-dot" style="--dot-color:var(--event)"></i>日程
+          </button>
+          <button class="type-chip" type="button" data-type="todo" role="tab" aria-selected="false">
+            <i class="chip-dot" style="--dot-color:var(--todo)"></i>待办
+          </button>
+        </div>
+
+        <input class="title-input" id="itemTitle" type="text" maxlength="80" placeholder="要做什么？" autocomplete="off" enterkeyhint="done">
+
+        <div class="field field-cat">
+          <label class="field-label">分类</label>
+          <div class="cat-chips" id="categoryChips"></div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label class="field-label">日期</label>
+            <div class="date-chips" id="dateChips">
+              <button class="date-chip active" type="button" data-quick="today">今天</button>
+              <button class="date-chip" type="button" data-quick="tomorrow">明天</button>
+              <button class="date-chip" type="button" data-quick="pick">某天</button>
+            </div>
+            <input class="date-input" id="dateInput" type="date" min="1900-01-01" max="2100-12-31" hidden>
+          </div>
+          <div class="field field-time">
+            <label class="field-label" for="timeInput">时间（可留空）</label>
+            <input class="time-input" id="timeInput" type="time" step="300">
+          </div>
+        </div>
+
+        <div class="field field-remind">
+          <label class="field-label">提醒</label>
+          <div class="remind-chips" id="remindChips">
+            <button class="remind-chip active" type="button" data-remind="0">不提醒</button>
+            <button class="remind-chip" type="button" data-remind="5">提前 5 分钟</button>
+            <button class="remind-chip" type="button" data-remind="10">提前 10 分钟</button>
+            <button class="remind-chip" type="button" data-remind="20">提前 20 分钟</button>
+            <button class="remind-chip" type="button" data-remind="30">提前 30 分钟</button>
+            <button class="remind-chip" type="button" data-remind="custom">自定义</button>
+          </div>
+          <div class="remind-custom" id="remindCustomWrap" hidden>
+            <input class="remind-input" id="remindCustomInput" type="number" min="1" max="1440" step="1" inputmode="numeric" placeholder="1–1440">
+            <span>分钟前</span>
+          </div>
+          <p class="cat-hint" id="remindHint"></p>
+        </div>
+
+        <button class="repeat-row" id="repeatBtn" type="button">
+          <span class="rep-name">重复</span>
+          <span class="rep-current" id="repeatValue">不重复</span>
+          <span class="row-arrow">›</span>
+        </button>
+
+        <button class="repeat-row note-toggle" id="noteToggle" type="button" aria-expanded="false">
+          <span class="rep-name">备注</span>
+          <span class="rep-current note-current" id="noteValue">未填写</span>
+          <span class="row-arrow note-arrow">›</span>
+        </button>
+        <div class="note-wrap" id="noteWrap" hidden>
+          <textarea class="note-input" id="noteInput" rows="3" maxlength="500" placeholder="补充说明，最多 500 字"></textarea>
+          <div class="note-count" id="noteCount">0 / 500</div>
+        </div>
+
+        <label class="switch-row">
+          <span class="switch-label">
+            <span>标记为高优先级</span>
+            <span class="switch-sub">左侧会显示琥珀色竖条</span>
+          </span>
+          <input type="checkbox" id="priorityInput">
+          <span class="toggle" aria-hidden="true"></span>
+        </label>
+
+        <div class="sheet-actions">
+          <button class="primary-btn" id="saveBtn" type="button" disabled>保存</button>
+        </div>
+      </div>
+
+      <div class="sheet-backdrop" id="planBackdrop" hidden></div>
+      <div class="sheet plan-sheet" id="planSheet" role="dialog" aria-modal="true" aria-labelledby="planSheetTitle" hidden>
+        <div class="sheet-grabber"></div>
+        <div class="sheet-head">
+          <h2 id="planSheetTitle">新建计划</h2>
+          <button class="icon-btn" id="planClose" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+          </button>
+        </div>
+
+        <div class="type-chips" id="planKindChips" role="tablist" aria-label="计划类型">
+          <button class="type-chip active" type="button" data-plan-kind="week" role="tab" aria-selected="true">周计划</button>
+          <button class="type-chip" type="button" data-plan-kind="month" role="tab" aria-selected="false">月计划</button>
+          <button class="type-chip" type="button" data-plan-kind="year" role="tab" aria-selected="false">年计划</button>
+        </div>
+
+        <input class="title-input" id="planTitle" type="text" maxlength="80" placeholder="想完成什么？" autocomplete="off" enterkeyhint="done">
+
+        <div class="field-grid">
+          <div class="field">
+            <label class="field-label">周期内任一天</label>
+            <input class="date-input" id="planDate" type="date" min="1900-01-01" max="2100-12-31">
+          </div>
+          <div class="field field-time">
+            <label class="field-label" for="planTime">时间（可留空）</label>
+            <input class="time-input" id="planTime" type="time" step="300">
+          </div>
+        </div>
+        <p class="cat-hint" id="planPeriodHint"></p>
+
+        <div class="field field-cat">
+          <label class="field-label">分类</label>
+          <div class="cat-chips" id="planCategoryChips"></div>
+        </div>
+
+        <div class="field field-remind">
+          <label class="field-label">提醒</label>
+          <div class="remind-chips" id="planRemindChips">
+            <button class="remind-chip active" type="button" data-remind="0">不提醒</button>
+            <button class="remind-chip" type="button" data-remind="5">提前 5 分钟</button>
+            <button class="remind-chip" type="button" data-remind="10">提前 10 分钟</button>
+            <button class="remind-chip" type="button" data-remind="20">提前 20 分钟</button>
+            <button class="remind-chip" type="button" data-remind="30">提前 30 分钟</button>
+            <button class="remind-chip" type="button" data-remind="custom">自定义</button>
+          </div>
+          <div class="remind-custom" id="planRemindCustomWrap" hidden>
+            <input class="remind-input" id="planRemindInput" type="number" min="1" max="1440" step="1" inputmode="numeric" placeholder="1–1440">
+            <span>分钟前</span>
+          </div>
+          <p class="cat-hint" id="planRemindHint"></p>
+        </div>
+
+        <button class="repeat-row note-toggle" id="planNoteToggle" type="button" aria-expanded="false">
+          <span class="rep-name">备注</span>
+          <span class="rep-current note-current" id="planNoteValue">未填写</span>
+          <span class="row-arrow note-arrow">›</span>
+        </button>
+        <div class="note-wrap" id="planNoteWrap" hidden>
+          <textarea class="note-input" id="planNote" rows="3" maxlength="500" placeholder="补充说明，最多 500 字"></textarea>
+        </div>
+
+        <label class="switch-row">
+          <span class="switch-label">
+            <span>标记为高优先级</span>
+            <span class="switch-sub">左侧会显示琥珀色竖条</span>
+          </span>
+          <input type="checkbox" id="planPriority">
+          <span class="toggle" aria-hidden="true"></span>
+        </label>
+
+        <div class="sheet-actions">
+          <button class="primary-btn" id="planSave" type="button" disabled>保存</button>
+        </div>
+      </div>
+
+      <div class="rep-backdrop" id="repBackdrop" hidden></div>
+      <div class="rep-sheet" id="repSheet" role="dialog" aria-modal="true" aria-labelledby="repTitle" hidden>
+        <div class="sheet-grabber"></div>
+        <div class="sheet-head">
+          <h2 id="repTitle">重复</h2>
+          <button class="icon-btn" id="repClose" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+          </button>
+        </div>
+
+        <div class="rep-types" id="repTypeChips">
+          <button class="rep-type-chip active" type="button" data-rep-type="none">不重复</button>
+          <button class="rep-type-chip" type="button" data-rep-type="daily">每天</button>
+          <button class="rep-type-chip" type="button" data-rep-type="weekly">每周</button>
+          <button class="rep-type-chip" type="button" data-rep-type="monthly">每月</button>
+          <button class="rep-type-chip" type="button" data-rep-type="yearly">每年</button>
+          <button class="rep-type-chip" type="button" data-rep-type="lunarMonthly">每月（农历）</button>
+          <button class="rep-type-chip" type="button" data-rep-type="lunarYearly">每年（农历）</button>
+        </div>
+
+        <div class="rep-body" id="repBody"></div>
+
+        <div class="rep-until">
+          <label class="field-label">结束</label>
+          <div class="date-chips rep-until-chips" id="repUntilChips">
+            <button class="date-chip active" type="button" data-until="forever">一直重复</button>
+            <button class="date-chip" type="button" data-until="date">到某天为止</button>
+          </div>
+          <input class="date-input" id="repUntilInput" type="date" min="1900-01-01" max="2100-12-31" hidden>
+        </div>
+
+        <div class="sheet-actions">
+          <button class="primary-btn" id="repDone" type="button">完成</button>
+        </div>
+      </div>
+
+      <div class="year-backdrop" id="yearBackdrop" hidden></div>
+      <div class="year-sheet" id="yearSheet" role="dialog" aria-modal="true" aria-labelledby="yearTitle" hidden>
+        <div class="sheet-grabber"></div>
+        <div class="sheet-head">
+          <h2 id="yearTitle">跳转到</h2>
+          <button class="icon-btn" id="yearClose" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+          </button>
+        </div>
+        <div class="jump-wheels">
+          <div class="wheel-caption" aria-hidden="true"><span>年</span><span>月</span><span>日</span></div>
+          <div class="wheel-row" id="wheelRow">
+            <div class="wheel" id="wheelYear" role="listbox" aria-label="年份"></div>
+            <div class="wheel" id="wheelMonth" role="listbox" aria-label="月份"></div>
+            <div class="wheel" id="wheelDay" role="listbox" aria-label="日期"></div>
+            <div class="wheel-band" aria-hidden="true"></div>
+          </div>
+        </div>
+        <div class="sheet-actions">
+          <button class="primary-btn" id="yearGo" type="button">跳转</button>
+        </div>
+      </div>
+
+      <div class="detail-backdrop" id="detailBackdrop" hidden></div>
+      <div class="detail-sheet" id="detailSheet" role="dialog" aria-modal="true" aria-labelledby="detailTitle" hidden>
+        <div class="sheet-grabber"></div>
+        <div class="sheet-head">
+          <h2 id="detailTitle">条目详情</h2>
+          <button class="icon-btn" id="detailClose" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+          </button>
+        </div>
+        <div class="detail-body" id="detailBody"></div>
+        <div class="detail-note">
+          <label class="field-label" for="detailNote">备注</label>
+          <textarea class="note-input" id="detailNote" rows="4" maxlength="500" placeholder="补充说明，最多 500 字"></textarea>
+          <div class="note-count" id="detailNoteCount">0 / 500</div>
+        </div>
+        <div class="sheet-actions">
+          <button class="primary-btn" id="detailSave" type="button">保存备注</button>
+          <button class="text-btn" id="detailCloseBtn" type="button">关闭</button>
+        </div>
+      </div>
+
+      <div class="modal-backdrop" id="modalBackdrop" hidden></div>
+      <div class="modal" id="modalCard" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden>
+        <h3 class="modal-title" id="modalTitle">标题</h3>
+        <p class="modal-text" id="modalText" hidden></p>
+        <div class="modal-field" id="modalField" hidden>
+          <input class="cat-name-input" id="modalInput" type="text" maxlength="8" placeholder="分类名称（最多 8 字）" autocomplete="off">
+          <div class="swatches" id="modalSwatches"></div>
+          <div class="cat-custom">
+            <span>自定义颜色</span>
+            <input type="color" id="modalCustom" value="#4C6FFF">
+          </div>
+        </div>
+        <p class="cat-hint" id="modalHint"></p>
+        <div class="modal-actions">
+          <button class="text-btn" id="modalCancel" type="button">取消</button>
+          <button class="primary-btn" id="modalConfirm" type="button">确定</button>
+        </div>
+      </div>
+
+      <div class="cat-pop" id="catPop" hidden>
+        <button type="button" data-cat-pop="edit">编辑</button>
+        <button type="button" class="danger" data-cat-pop="del">删除</button>
+      </div>
+
+      <div class="reminder-alert" id="reminderAlert" hidden>
+        <i class="ra-dot" aria-hidden="true"></i>
+        <div class="ra-main"><b id="raTitle"></b><span id="raTime"></span></div>
+        <button class="ra-ok" id="raOk" type="button">知道了</button>
+      </div>
+
+      <div class="snackbar" id="snackbar" hidden>
+        <span class="snackbar-text" id="snackbarText">已完成</span>
+        <button class="snackbar-action" id="snackbarAction" type="button">撤销</button>
+        <span class="snackbar-timer" aria-hidden="true"></span>
+      </div>
+
+      <div class="toast" id="toast" hidden></div>
+
+      <div class="settings-page" id="settingsPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="settingsClose" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5.5 8.5 12 15 18.5"/></svg>
+          </button>
+          <h2>设置</h2>
+        </header>
+
+        <div class="settings-body">
+          <section class="setting-group">
+            <h3>数据</h3>
+            <div class="storage-summary" id="storageSummary">正在读取本机数据…</div>
+            <p class="storage-sub" id="storagePersistHint">正在检查…</p>
+            <button class="row-btn" id="exportBtn" type="button">
+              <span>备份数据</span>
+              <span class="row-arrow">↓</span>
+            </button>
+            <button class="row-btn" id="importBtn" type="button">
+              <span>恢复数据</span>
+              <span class="row-arrow">↑</span>
+            </button>
+            <input id="importFile" type="file" accept="application/json,.json" hidden>
+            <div class="import-preview" id="importPreview" hidden>
+              <div class="import-summary" id="importSummary"></div>
+              <div class="import-actions">
+                <button class="primary-btn" id="mergeBtn" type="button">合并导入</button>
+                <button class="danger-btn" id="replaceBtn" type="button">替换全部</button>
+                <button class="text-btn" id="cancelImportBtn" type="button">取消</button>
+              </div>
+            </div>
+            <p class="hint">换手机或清理浏览器数据前，先备份。</p>
+          </section>
+
+          <section class="setting-group">
+            <h3>分类管理</h3>
+            <div class="cat-bubbles" id="categoryList"></div>
+            <p class="hint">点标签可编辑或删除。</p>
+          </section>
+
+          <section class="setting-group">
+            <h3>清空数据</h3>
+            <button class="row-btn danger-row" id="clearAllBtn" type="button">
+              <span>清空所有数据</span>
+              <span class="row-arrow">›</span>
+            </button>
+            <p class="hint">删除后不可恢复，建议先备份。</p>
+          </section>
+
+          <section class="setting-group">
+            <h3>外观</h3>
+            <label class="setting-row toggle-row">
+              <span>深色模式</span>
+              <input type="checkbox" id="themeToggle">
+              <span class="toggle" aria-hidden="true"></span>
+            </label>
+          </section>
+
+          <section class="setting-group">
+            <h3>提醒</h3>
+            <div class="setting-row"><span>浏览器通知</span><b id="notifyState">检测中…</b></div>
+            <button class="secondary-btn" id="notifyBtn" type="button">允许浏览器通知</button>
+            <p class="hint">提醒需要页面开着，重要的事请同时设手机闹钟。</p>
+          </section>
+
+          <section class="setting-group">
+            <h3>关于</h3>
+            <div class="about-lines">
+              <p>轻日程 · 数据只在本机</p>
+              <p>没有账号，也不上传任何内容。</p>
+              <p>换机或清理前，记得先备份。</p>
+            </div>
+            <div class="setting-row"><span>断网打开</span><b id="swState">检测中…</b></div>
+            <div class="setting-row"><span>版本</span><b>v0.3.1</b></div>
+            <p class="hint">数据只在你的手机里，卸载或清理会一并删除。</p>
+          </section>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <script src="./app.js?v=13"></script>
+</body>
+</html>

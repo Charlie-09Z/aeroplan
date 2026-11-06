@@ -1,0 +1,11 @@
+{
+  "appId": "com.qingricheng.app",
+  "appName": "轻日程",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
