@@ -1,0 +1,68 @@
+name: 打包安卓 APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: 取回仓库文件
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 准备 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装打包依赖
+        run: npm install --no-audit --no-fund
+        env:
+          CI: true
+
+      - name: 复制网页文件到 www
+        run: node scripts/copy-web.mjs
+
+      - name: 生成 Android 工程
+        run: npx cap add android
+        env:
+          CI: true
+
+      - name: 写入签名、版本号和图标
+        run: node scripts/prepare-android.mjs
+
+      - name: 同步网页资源
+        run: npx cap sync android
+        env:
+          CI: true
+
+      - name: 构建 release APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: 整理产物
+        run: |
+          mkdir -p dist
+          VERSION=$(node -p "require('./package.json').version")
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/light-schedule-${VERSION}.apk"
+
+      - name: 上传 APK（在运行页面底部下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: light-schedule-apk
+          path: dist/*.apk
+          if-no-files-found: error
