@@ -13,9 +13,6 @@
     "LocalNotifications": {
       "smallIcon": "ic_stat_icon",
       "iconColor": "#4C6FFF"
-    },
-    "Filesystem": {
-      "androidPermissions": ["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
     }
   }
 }

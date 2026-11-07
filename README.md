@@ -12,14 +12,14 @@
 | `package.json` | 版本号在这里（`version`），打包时会自动换算成安卓的版本号 |
 | `capacitor.config.json` | 应用名、包名、网页目录，关闭 WebView 调试、禁止明文混合内容 |
 | `scripts/copy-web.mjs` | 把网页文件复制到 `www/`，同时压缩 HTML / CSS / JS（去注释与空白、混淆变量名、不产出 source map） |
-| `scripts/prepare-android.mjs` | 写入签名、版本号、应用显示名「氢计划」、联网 / 通知 / 存储权限、图标和启动图；开启 R8 混淆与资源压缩 |
+| `scripts/prepare-android.mjs` | 写入签名、版本号、应用显示名「氢计划」、联网 / 通知 / 精确闹钟权限（不含存储与定位）、图标和启动图；开启 R8 混淆与资源压缩 |
 | `.github/workflows/build-apk.yml` | GitHub 上的自动打包流程（签名材料从 Secrets 还原） |
 | `.github/workflows/_generate-keystore.yml` | 一次性任务：生成新的签名密钥并把 base64 与口令打印到日志 |
 | `打包说明.md` | 从建仓库到装到手机的中文分步说明 |
 
 `www/`、`android/`、`node_modules/`、`dist/` 都是打包过程中自动生成的，不需要上传，也不要手动创建。
 
-## 本次（v0.7.0）依赖与权限变化
+## 本次（v0.8.0）依赖与权限变化
 
 依赖仍是 Capacitor 官方插件，`npm install` 会自动装好，不需要额外密钥：
 
@@ -35,12 +35,14 @@
 
 - `INTERNET`（安装时授予；天气与地点搜索需要联网）
 - `POST_NOTIFICATIONS`（Android 13+ 运行时申请）
-- `READ_EXTERNAL_STORAGE`（仅 Android 12 及以下）、`WRITE_EXTERNAL_STORAGE`（仅 Android 9 及以下）
-- `SCHEDULE_EXACT_ALARM`（精确闹钟；Android 12+ 可在应用内引导你允许）
+- `SCHEDULE_EXACT_ALARM`（仅 Android 12/12L，`maxSdkVersion=32`；用户可在「闹钟和提醒」里撤销）
+- `USE_EXACT_ALARM`（Android 13+ 精确闹钟，系统自动授予、没有单独开关）
 - `RECEIVE_BOOT_COMPLETED`（重启后由本地通知插件恢复已排程的提醒）
 - `VIBRATE`（滚轮触觉反馈）
 
-插件自身可能还会合并进 `WAKE_LOCK` / `FOREGROUND_SERVICE` 之类的系统权限；`build-apk.yml` 在构建后会打印合并清单里的全部权限，并在检测到 `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` 时直接让构建失败。
+**本版本不再声明 `READ_EXTERNAL_STORAGE` / `WRITE_EXTERNAL_STORAGE`**：备份经系统保存或分享面板写出，导入由用户手动选择文件，全部走应用缓存目录，不需要任何存储权限。
+
+插件自身可能还会合并进 `WAKE_LOCK` / `FOREGROUND_SERVICE` 之类的系统权限；`build-apk.yml` 在构建后会打印合并清单里的全部权限与 `targetSdkVersion`，并在发现定位或存储权限、缺少 `POST_NOTIFICATIONS` / `USE_EXACT_ALARM` / `SCHEDULE_EXACT_ALARM`、或 APK 内缺少 `ic_stat_icon` 时直接让构建失败。
 
 同时会生成通知栏小图标 `ic_stat_icon`（纯白剪影），避免部分机型通知不显示。
 
@@ -52,16 +54,28 @@
 - `0.4.2` → `versionCode 402`
 - `0.6.0` → `versionCode 600`
 - `0.7.0` → `versionCode 700`
+- `0.8.0` → `versionCode 800`
+- `0.9.0` → `versionCode 900`
 
-APK 文件名也会自动变成 `qingjihua-0.7.0.apk`，不需要手改任何地方。
+APK 文件名也会自动变成 `qingjihua-0.9.0.apk`，不需要手改任何地方。
 
 ## 签名密钥（已迁出仓库）
 
 仓库里**不再存放任何 keystore 文件，也没有明文口令**。签名材料只存在 GitHub 仓库的 Secrets 里，打包时临时还原，任务结束即丢弃。
 
-### 需要配置的三项 Secrets
+### 推荐的单 Secret 方案：`KEYSTORE_BUNDLE`
 
-在仓库 → Settings → Secrets and variables → Actions → New repository secret，添加：
+如果新建短值 Secret 时反复报 `Failed to add secret`，改用这一个 Secret：
+
+| Secret | 内容 |
+| --- | --- |
+| `KEYSTORE_BUNDLE` | 一个 base64 字符串，解码后是 `{"keystore":"<keystore 的 base64>","password":"...","alias":"..."}` |
+
+构建时会解出 keystore、口令、别名，再通过 `GITHUB_ENV` 传给后续步骤；`prepare-android.mjs` 不需要改动。
+
+`KEYSTORE_BUNDLE` 优先。旧的三项（`KEYSTORE_BASE64` + `KEYSTORE_PASSWORD` + `KEY_ALIAS`）仍然兼容；两者都没有时，构建会明确失败并打印提示，不会产出未签名包。
+
+### 兼容的三 Secret 方案
 
 | Secret | 内容 |
 | --- | --- |
@@ -74,8 +88,9 @@ APK 文件名也会自动变成 `qingjihua-0.7.0.apk`，不需要手改任何地
 ### 生成新密钥（一次性）
 
 1. 打开仓库 → Actions →「生成签名密钥（一次性）」→ Run workflow。
-2. 任务结束后打开这次运行的日志，里面有 `KEYSTORE_BASE64`、`KEYSTORE_PASSWORD`、`KEY_ALIAS` 三段，照上面表格填进 Secrets。
-3. 复制完成后，删除这次运行的记录（Actions 里可以删除单次运行），再删除 `.github/workflows/_generate-keystore.yml`，避免以后被误触发。
+2. 任务结束后打开这次运行的日志，复制 `KEYSTORE_BUNDLE` 这一整行（放在推荐区块里）。
+3. 到 Secrets 新建一个 `KEYSTORE_BUNDLE`，粘贴整行 base64，保存。
+4. 复制完成后，删除这次运行的记录（Actions 里可以删除单次运行），再删除 `.github/workflows/_generate-keystore.yml`，避免以后被误触发。
 
 生成任务不会把 keystore 上传成 artifact（公开仓库的 artifact 谁都能下载），只在日志里输出；日志会随运行记录一起删除。
 

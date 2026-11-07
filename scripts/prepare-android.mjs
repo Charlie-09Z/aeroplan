@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readNotifyConfig, validateNotifyConfig, printNotifyConfig } from './notify-config.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const androidDir = path.join(root, 'android');
@@ -29,6 +30,17 @@ const KEYSTORE_PASSWORD = process.env.KEYSTORE_PASSWORD || '';
 const KEY_ALIAS = process.env.KEY_ALIAS || 'qingjihua';
 const KEY_PASSWORD = process.env.KEY_PASSWORD || KEYSTORE_PASSWORD;
 const HAS_SIGNING = !!KEYSTORE_PASSWORD;
+
+// ---------- 1.1 通知渠道参数校验 ----------
+// 渠道参数写在 app.js 里，构建日志回显一份并校验关键值：
+// 重要性必须是 5（否则不弹横幅）、图标与提示音必须和 res 里的资源同名。
+const notifyConfig = readNotifyConfig(root);
+printNotifyConfig(notifyConfig);
+const notifyProblems = validateNotifyConfig(notifyConfig);
+if (notifyProblems.length) {
+  console.error('通知渠道参数校验失败：' + notifyProblems.join('；'));
+  process.exit(1);
+}
 
 // ---------- 2. 改 build.gradle ----------
 const gradlePath = path.join(androidDir, 'app', 'build.gradle');
@@ -109,15 +121,58 @@ fs.writeFileSync(proguardPath, [
 ].join('\n'));
 console.log('已开启 R8 压缩与混淆，并写入 Capacitor 的 keep 规则');
 
-// shrinkResources 会误删「只在字符串里按名字引用」的资源（通知小图标、启动图）
+// shrinkResources 会误删「只在字符串里按名字引用」的资源（通知小图标、提示音、启动图、启动器图标）
 const rawResDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'raw');
 fs.mkdirSync(rawResDir, { recursive: true });
+const KEEP_RESOURCES = [
+  '@drawable/ic_stat_icon',
+  '@drawable/splash',
+  '@mipmap/ic_launcher',
+  '@mipmap/ic_launcher_round',
+  '@raw/qingjihua_notify'
+];
 fs.writeFileSync(path.join(rawResDir, 'keep.xml'), [
   '<?xml version="1.0" encoding="utf-8"?>',
   '<resources xmlns:tools="http://schemas.android.com/tools"',
-  '    tools:keep="@drawable/ic_stat_icon,@drawable/splash" />',
+  '    tools:keep="' + KEEP_RESOURCES.join(',') + '" />',
   ''
 ].join('\n'));
+console.log('已写入 keep.xml，防止压缩误删：' + KEEP_RESOURCES.join('、'));
+
+// Android 8+ 的通知声音由「渠道」决定，且渠道只能引用 res/raw 里的音频。
+// 这里用固定算法生成 0.6 秒的双音提示，避免引入外部音频与网络资源。
+const noticeSoundPath = path.join(rawResDir, 'qingjihua_notify.wav');
+const SAMPLE_RATE = 44100;
+const SECONDS = 0.6;
+const totalSamples = Math.floor(SAMPLE_RATE * SECONDS);
+const pcm = Buffer.alloc(totalSamples * 2);
+for (let i = 0; i < totalSamples; i += 1) {
+  const t = i / SAMPLE_RATE;
+  let v = 0;
+  if (t < 0.30) v += 0.62 * Math.sin(2 * Math.PI * 880 * t) * Math.exp(-9.5 * t);
+  if (t > 0.16) {
+    const u = t - 0.16;
+    v += 0.50 * Math.sin(2 * Math.PI * 1318.5 * u) * Math.exp(-6.2 * u);
+  }
+  const clamped = Math.max(-1, Math.min(1, v));
+  pcm.writeInt16LE(Math.round(clamped * 32767), i * 2);
+}
+const wavHeader = Buffer.alloc(44);
+wavHeader.write('RIFF', 0, 4, 'ascii');
+wavHeader.writeUInt32LE(36 + pcm.length, 4);
+wavHeader.write('WAVE', 8, 4, 'ascii');
+wavHeader.write('fmt ', 12, 4, 'ascii');
+wavHeader.writeUInt32LE(16, 16);
+wavHeader.writeUInt16LE(1, 20);
+wavHeader.writeUInt16LE(1, 22);
+wavHeader.writeUInt32LE(SAMPLE_RATE, 24);
+wavHeader.writeUInt32LE(SAMPLE_RATE * 2, 28);
+wavHeader.writeUInt16LE(2, 32);
+wavHeader.writeUInt16LE(16, 34);
+wavHeader.write('data', 36, 4, 'ascii');
+wavHeader.writeUInt32LE(pcm.length, 40);
+fs.writeFileSync(noticeSoundPath, Buffer.concat([wavHeader, pcm]));
+console.log('已生成通知提示音：res/raw/qingjihua_notify.wav');
 
 fs.writeFileSync(gradlePath, gradle);
 console.log('已写入' + (HAS_SIGNING ? '签名配置' : '（无签名）') + '与版本号：versionName ' + VERSION_NAME +
@@ -158,8 +213,13 @@ if (fs.existsSync(manifestPath)) {
     },
     {
       name: 'android.permission.SCHEDULE_EXACT_ALARM',
+      attrs: ' android:maxSdkVersion="32"',
+      note: '精确闹钟：Android 12 / 12L 用它，装机默认允许，用户可在「闹钟和提醒」里撤销'
+    },
+    {
+      name: 'android.permission.USE_EXACT_ALARM',
       attrs: '',
-      note: '精确闹钟：让到点提醒尽量准时（Android 12 起可能要求用户手动允许）'
+      note: '精确闹钟（Android 13+）：系统自动授予，不出现用户开关，避免到点提醒被拦'
     },
     {
       name: 'android.permission.RECEIVE_BOOT_COMPLETED',
@@ -169,23 +229,15 @@ if (fs.existsSync(manifestPath)) {
     {
       name: 'android.permission.VIBRATE',
       attrs: '',
-      note: '振动：日期/时间滚轮吸附时的触觉反馈'
-    },
-    {
-      name: 'android.permission.READ_EXTERNAL_STORAGE',
-      attrs: ' android:maxSdkVersion="32"',
-      note: '存储权限：Android 12 及以下用于读取用户选择的备份文件；Android 13+ 无需授权'
-    },
-    {
-      name: 'android.permission.WRITE_EXTERNAL_STORAGE',
-      attrs: ' android:maxSdkVersion="28"',
-      note: '存储权限：Android 9 及以下用于选择备份文件的保存位置；Android 10+ 由系统面板处理'
+      note: '振动：通知振动与滚轮吸附的触觉反馈'
     }
   ];
-  // 本版本没有定位能力：模板或插件的清单合并若带进定位权限，这里一并删掉。
+  // 本版本没有定位与存储能力：模板、插件或旧配置带进这些权限时一律删掉。
   manifest = manifest.replace(/\s*<!--[^>]*定位[^>]*-->/g, '');
+  manifest = manifest.replace(/\s*<!--[^>]*存储[^>]*-->/g, '');
   manifest = manifest.replace(
-    /\s*<uses-permission[^>]*android:name="android\.permission\.ACCESS_(FINE|COARSE)_LOCATION"[^>]*\/>/g, ''
+    /\s*<uses-permission[^>]*android:name="android\.permission\.(ACCESS_(FINE|COARSE)_LOCATION|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|SCHEDULE_EXACT_ALARM|USE_EXACT_ALARM)"[^>]*\/>/g,
+    ''
   );
   for (const perm of needs) {
     if (manifest.includes('android:name="' + perm.name + '"')) continue;
@@ -194,7 +246,21 @@ if (fs.existsSync(manifestPath)) {
       '    <uses-permission android:name="' + perm.name + '"' + perm.attrs + ' />\n\n    <application');
   }
   fs.writeFileSync(manifestPath, manifest);
-  console.log('已确认联网、通知、精确闹钟与存储权限（未申请任何定位权限）');
+
+  // 写回后再读一遍做校验：合并清单由这里注入的权限派生，源头缺一项就提前失败
+  const written = fs.readFileSync(manifestPath, 'utf8');
+  const missing = needs.filter(function (perm) {
+    return !written.includes('android:name="' + perm.name + '"');
+  });
+  if (missing.length) {
+    console.error('清单权限校验失败，缺少：' + missing.map(function (p) { return p.name; }).join('、'));
+    process.exit(1);
+  }
+  console.log('清单权限校验通过：');
+  needs.forEach(function (perm) {
+    console.log('  ' + perm.name + (perm.attrs ? '（' + perm.attrs.trim() + '）' : ''));
+  });
+  console.log('已写入联网、通知、精确闹钟（USE_EXACT_ALARM + SCHEDULE_EXACT_ALARM）、开机广播与振动权限；未申请定位与存储权限');
 } else {
   console.log('没有找到 AndroidManifest.xml，跳过权限写入');
 }

@@ -28,9 +28,15 @@
   --bg-deep: #E6EAF4;
   --card: #FFFFFF;
   --card-soft: #F7F9FE;
+  /* 批量选中态的卡片底色：必须不透明，否则会透出下方堆叠层 */
+  --card-batch: #EDF1FF;
   --text: #171A2B;
   --text-2: #4B5170;
-  --muted: #6E7590;
+  /* 文字只有两档：正文 --text / 次要 --text-2。
+     --muted 保留为次要色别名，避免说明文字、空态提示出现第三种灰；
+     只有真正不可点击的控件才用 --text-disabled。 */
+  --muted: var(--text-2);
+  --text-disabled: #A8AEC0;
   --line: rgba(23, 26, 43, .08);
   --line-strong: rgba(23, 26, 43, .17);
   --event: #4C6FFF;
@@ -48,6 +54,14 @@
   --shadow-soft: 0 1px 2px rgba(29, 40, 76, .04);
   --sch-hatch: rgba(110, 117, 144, .07);
 
+  /* 折叠卡片层次：比卡片略深一档的填充 + 1px 极浅描边，
+     只有最底层投一层向下扩散的柔和阴影 */
+  --deck-fill-1: #FCFDFF;
+  --deck-fill-2: #F6F8FD;
+  --deck-line: rgba(23, 26, 43, .07);
+  --deck-head-shadow: 0 1px 2px rgba(29, 40, 76, .06), 0 5px 12px -8px rgba(29, 40, 76, .22);
+  --deck-shadow: 0 6px 14px -8px rgba(29, 40, 76, .18);
+
   /* 层级常量：遮罩 < 面板 < 设置页 < 浮层 < 提示条 < 弹窗 < 权限引导 < 开屏。
      所有弹层只引用这些变量，不再各自写魔法数字，避免出现压层或裁切。 */
   --z-sheet-bg: 40;
@@ -63,11 +77,13 @@
   --z-settings: 50;
   --z-about: 51;
   --z-catpop: 52;
+  --z-diary: 53;
   --z-snackbar: 54;
   --z-toast: 55;
   --z-alert: 56;
   --z-city-bg: 57;
   --z-city: 58;
+  --z-diary-viewer: 59;
   --z-modal-bg: 60;
   --z-modal: 61;
   --z-perm-bg: 70;
@@ -86,9 +102,11 @@ html.dark {
   --bg-deep: #090B10;
   --card: #181B24;
   --card-soft: #202433;
+  --card-batch: #232A3F;
   --text: #E9ECF5;
   --text-2: #B7BED3;
-  --muted: #9AA1B8;
+  --muted: var(--text-2);
+  --text-disabled: #626879;
   --line: rgba(255, 255, 255, .09);
   --line-strong: rgba(255, 255, 255, .20);
   --event: #8CA2FF;
@@ -105,6 +123,13 @@ html.dark {
   --sheet-bg: #12151D;
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, .22);
   --sch-hatch: rgba(255, 255, 255, .05);
+
+  /* 深色下层次只比卡片（#1E222C）深一点点，靠细描边分离，避免糊成黑块 */
+  --deck-fill-1: #1B1F28;
+  --deck-fill-2: #171A21;
+  --deck-line: rgba(255, 255, 255, .07);
+  --deck-head-shadow: 0 1px 2px rgba(0, 0, 0, .30), 0 6px 14px -9px rgba(0, 0, 0, .55);
+  --deck-shadow: 0 6px 16px -9px rgba(0, 0, 0, .55);
 }
 
 * { box-sizing: border-box; }
@@ -274,6 +299,8 @@ svg { display: block; }
 
 /* ---------- 汇总横幅 ---------- */
 .summary {
+  position: relative;
+  z-index: 2;
   flex: 0 0 auto;
   margin: 4px 16px 2px;
   padding: 9px 12px;
@@ -305,6 +332,168 @@ svg { display: block; }
   font-weight: 600;
   color: var(--primary);
   padding: 3px 2px;
+}
+
+/* ---------- 批量选择 ---------- */
+/* 操作栏在滚动区之外，随 flex 列占位，不会与内容重叠 */
+.batch-bar {
+  flex: 0 0 auto;
+  margin: 4px 16px 2px;
+  padding: 8px 10px 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--card);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+}
+
+.batch-bar[hidden] { display: none; }
+
+.batch-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-btn {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: 15px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.batch-btn:active { transform: scale(.96); }
+
+.batch-btn.danger {
+  border-color: transparent;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.batch-btn.danger[disabled] { opacity: .45; }
+
+/* 组头「全选本组」：批量模式下唯一的整组选择入口 */
+.batch-group-count {
+  flex: 0 0 auto;
+  appearance: none;
+  border: 0;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 999px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+
+.batch-group-count:active { transform: scale(.96); }
+
+.batch-group-count.is-all {
+  color: #fff;
+  background: var(--primary);
+}
+
+/* 组内只选中一部分：描边态，收起后也不会被误看成「整组全选」 */
+.batch-group-count.is-partial {
+  color: var(--primary);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+/* 批量模式下给卡片左侧腾出勾选框的位置；卡片本体不再左滑 */
+#dayDetailInner .swipe,
+#agendaList .swipe {
+  /* 长按进入批量模式时，不弹出文字选择 / 系统长按菜单 */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#dayDetailInner.batch-mode .swipe-inner,
+#agendaList.batch-mode .swipe-inner { padding-left: 34px; }
+
+#dayDetailInner.batch-mode .swipe-del,
+#dayDetailInner.batch-mode .swipe-edit,
+#agendaList.batch-mode .swipe-del,
+#agendaList.batch-mode .swipe-edit { display: none; }
+
+#dayDetailInner.batch-mode .swipe::before,
+#agendaList.batch-mode .swipe::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  background: var(--bg);
+  z-index: 2;
+  pointer-events: none;
+  transition: background .16s ease, border-color .16s ease;
+}
+
+#dayDetailInner.batch-mode .swipe.batch-on::before,
+#agendaList.batch-mode .swipe.batch-on::before {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+#dayDetailInner.batch-mode .swipe.batch-on::after,
+#agendaList.batch-mode .swipe.batch-on::after {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  width: 7px;
+  height: 4px;
+  margin-top: -3px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg);
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* 折叠组头卡下方多了 14px 层次空间，勾选框与对勾整体上移，对齐头卡中心
+   （时间列与卡片内容都在头卡里，勾选框不再飘在轨道上） */
+#dayDetailInner.batch-mode .swipe.swipe-stack::before,
+#agendaList.batch-mode .swipe.swipe-stack::before,
+#dayDetailInner.batch-mode .swipe.swipe-stack.batch-on::after,
+#agendaList.batch-mode .swipe.swipe-stack.batch-on::after {
+  top: calc(50% - 7px);
+}
+
+#dayDetailInner.batch-mode .swipe.batch-on .row-card,
+#agendaList.batch-mode .swipe.batch-on .row-card {
+  /* 不透明底色：避免半透明把下方露出的层次透出来，看着像第二道框 */
+  background: var(--card-batch);
+  box-shadow: inset 0 0 0 1.5px var(--primary);
+}
+
+/* 折叠组头卡保留原有的向上投影，再叠加选中描边（只有这一道框） */
+#dayDetailInner.batch-mode .swipe.swipe-stack.batch-on .row-card,
+#agendaList.batch-mode .swipe.swipe-stack.batch-on .row-card {
+  box-shadow: inset 0 0 0 1.5px var(--primary), var(--deck-head-shadow);
+}
+
+/* 下方露出的层次不再套同色描边：第一层用极浅的同色底，第二层保持原样 */
+#dayDetailInner.batch-mode .swipe.batch-on .stack-layers .l1,
+#agendaList.batch-mode .swipe.batch-on .stack-layers .l1 {
+  background: var(--card-batch);
 }
 
 /* ---------- 内容区 ---------- */
@@ -345,6 +534,104 @@ svg { display: block; }
 }
 
 /* ---------- 日历 ---------- */
+/* 整月日历在正常文档流里，随内容一起滚出视口（不 sticky、不压缩高度）；
+   只有收起后的「当前周」横条粘顶。sticky 的滚动容器是 #content，
+   top: 0 落在内容区顶边（顶栏与安全区之外），不会与顶栏叠加。 */
+.cal-month {
+  flex: 0 0 auto;
+  /* 裁剪容器：无论内部行怎么排、滑动手势怎么位移，都不允许画到月历框外 */
+  overflow: hidden;
+}
+
+.cal-month-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 日历的所有直接子项都不参与 flex 收缩，避免任何情况下把月历压扁 */
+#viewCalendar > * {
+  flex-shrink: 0;
+}
+
+/* 展开态高度 0、不占位；收起态固定 52px 并粘顶，
+   高度写死避免农历文字长短不同导致抖动 */
+.week-strip {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  flex: 0 0 auto;
+  height: 0;
+  margin: 0 -16px;
+  padding: 0 16px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--bg);
+  transition: height .26s cubic-bezier(.2, .8, .2, 1), opacity .18s ease;
+}
+
+.cal-collapsed .week-strip {
+  height: 52px;
+  opacity: 1;
+  pointer-events: auto;
+  box-shadow: 0 8px 14px -10px rgba(0, 0, 0, .28);
+}
+
+.ws-track {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  height: 52px;
+  touch-action: pan-y;
+  will-change: transform;
+}
+
+.ws-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  height: 52px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font-family: inherit;
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ws-wday {
+  font-size: 9.5px;
+  line-height: 1.1;
+  color: var(--muted);
+}
+
+.ws-num {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.ws-sub {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 8.5px;
+  line-height: 1.1;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-cell.today .ws-num { color: var(--today-red); }
+
+.ws-cell.selected {
+  background: var(--primary-soft);
+}
+
+.ws-cell.selected .ws-num { color: var(--primary); }
+
 .weekdays {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
@@ -360,6 +647,9 @@ svg { display: block; }
 .cal-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: auto;
+  /* 行高由日期格自身决定，不参与拉伸/压缩，避免相邻两行叠在一起 */
+  align-content: start;
   gap: 4px;
   /* 纵向滚动优先；横向手势交给 pointer 事件做切月 */
   touch-action: pan-y;
@@ -368,6 +658,7 @@ svg { display: block; }
 
 .cal-cell {
   position: relative;
+  align-self: start;
   aspect-ratio: 1 / 1;
   border-radius: 13px;
   display: flex;
@@ -420,17 +711,36 @@ svg { display: block; }
 
 .cal-cell.all-done .dots { opacity: .32; }
 
+/* 图例行与单日详情共用一个网格：左列自上而下是图例、日期、农历，
+   右列天气块跨这两行并从第一行顶部开始，天然与图例齐平、不会高过它 */
+.cal-head-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto;
+  align-items: start;
+  column-gap: 10px;
+  margin-top: 16px;
+}
+
+/* 天气关闭：右侧列不存在，左侧日期块占满整行 */
+.cal-head-block.weather-off {
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 0;
+}
+
 .cal-foot {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 16px;
+  min-width: 0;
   font-size: 11.5px;
   color: var(--muted);
 }
 
-.legend { display: flex; align-items: center; gap: 13px; }
+.legend { display: flex; align-items: center; gap: 13px; flex: 0 0 auto; }
 
 .legend-item {
   display: inline-flex;
@@ -445,7 +755,13 @@ svg { display: block; }
   border-radius: 50%;
 }
 
-.month-stat { text-align: right; white-space: nowrap; }
+.month-stat {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .cal-tip {
   margin: 14px 0 0;
@@ -528,6 +844,122 @@ svg { display: block; }
 
 /* ---------- 议程 ---------- */
 .day-group { margin-bottom: 20px; }
+
+/* 流式日程的上下端点：左右细线 + 居中方向标签，看起来像时间轴的端点而不是按钮 */
+.agenda-more {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 10px 0 12px;
+  text-align: center;
+}
+
+.agenda-more.top { padding: 10px 0 12px; }
+
+.agenda-more.bottom { padding: 12px 0 10px; }
+
+.agenda-more-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 550;
+  font-family: inherit;
+  transition: transform .14s ease, color .16s ease, opacity .16s ease;
+}
+
+/* 两侧 1px 细线延伸到页面边缘，中间文字自然居中 */
+.agenda-more-btn::before,
+.agenda-more-btn::after,
+.agenda-more-end::before,
+.agenda-more-end::after {
+  content: "";
+  flex: 1 1 0;
+  height: 1px;
+  min-width: 24px;
+  background: var(--line);
+}
+
+.agenda-more-btn > * { pointer-events: none; }
+
+.agenda-more-btn:active {
+  transform: scale(.98);
+  color: var(--text);
+}
+
+.agenda-more-btn.is-loading {
+  color: var(--muted);
+  transform: none;
+}
+
+.agenda-more-btn[disabled] { pointer-events: none; }
+
+.am-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.am-ico,
+.am-spin {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+}
+
+.am-ico {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.am-spin {
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  border-top-color: var(--primary);
+  animation: am-spin .7s linear infinite;
+}
+
+@keyframes am-spin { to { transform: rotate(360deg); } }
+
+/* 没有更多数据时的结束语：同样有分隔线，但不可点击、颜色更淡 */
+.agenda-more-end {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 30px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agenda-more-note {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--muted);
+  opacity: .78;
+}
+
+/* 深色下把线条压到几乎不可见，避免亮线割裂 */
+html.dark .agenda-more-btn::before,
+html.dark .agenda-more-btn::after,
+html.dark .agenda-more-end::before,
+html.dark .agenda-more-end::after {
+  background: rgba(255, 255, 255, .07);
+}
+
+html.dark .agenda-more-note { opacity: .72; }
+
 
 .day-head {
   display: flex;
@@ -667,7 +1099,8 @@ svg { display: block; }
 }
 
 .row.overdue .row-card {
-  background: var(--danger-soft);
+  /* 不透明底色：逾期卡片也可能出现在折叠组里，避免透出下方层次 */
+  background: color-mix(in srgb, var(--card) 91%, var(--danger) 9%);
   box-shadow: inset 0 0 0 1px rgba(217, 105, 76, .16);
 }
 
@@ -716,6 +1149,106 @@ svg { display: block; }
   height: 4px;
   border-radius: 50%;
   background: currentColor;
+}
+
+/* 分类自定义图标：内联 SVG，线性细笔画，颜色由分类色决定 */
+.cat-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
+.cat-glyph svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cat-chip .cat-glyph svg,
+.filter-chip .cat-glyph svg { width: 13px; height: 13px; }
+
+.cat-bubble .cat-glyph svg { width: 15px; height: 15px; }
+
+/* 深色主题下，偏黑的分类色也要能看出图标轮廓 */
+html.dark .cat-glyph svg,
+html.dark .cat-icon-btn svg {
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, .35));
+}
+
+/* 分类编辑弹层里的图标选择器 */
+.cat-icons-wrap {
+  margin-top: 10px;
+}
+
+.cat-icons-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cat-icons {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.cat-icon-btn {
+  position: relative;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  padding: 0;
+}
+
+.cat-icon-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cat-icon-btn .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+/* 选中态不只靠颜色：边框高亮 + 右上角对勾 */
+.cat-icon-btn.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+
+.cat-icon-btn.active::after {
+  content: '✓';
+  position: absolute;
+  top: -4px;
+  right: -3px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
 }
 
 .tag-event { color: var(--event); background: var(--primary-soft); }
@@ -870,6 +1403,18 @@ html.dark .tag-high { background: rgba(240, 182, 88, .15); }
 
 .plan-list { display: flex; flex-direction: column; gap: 8px; }
 
+.plan-list.dragging { touch-action: none; }
+
+.plan-swipe.pressing { transform: scale(.985); }
+
+.plan-swipe.dragging {
+  z-index: 2;
+  touch-action: none;
+  transform: scale(1.02);
+  opacity: .96;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .16);
+}
+
 .plan-swipe .row { margin-bottom: 0; }
 
 .plan-item .row-card { padding-left: 15px; }
@@ -998,52 +1543,77 @@ html.dark .tag-high { background: rgba(240, 182, 88, .15); }
 
 .plan-sheet .type-row { margin: 0 0 2px; }
 
-/* 折叠时的卡片层次：层次贴在卡片底边，只露出很薄的厚度 */
+/* 折叠时的卡片层次：头卡下方固定露出 2 层，每层一条 4px 窄边。
+   每层用完整的圆角矩形垫在头卡后面（上沿被不透明的头卡盖住），
+   所以看到的只是卡片底边的自然轮廓，不会出现忽宽忽窄的碎边。 */
 .card-deck {
   position: relative;
   flex: 1;
   min-width: 0;
 }
 
-.row.has-deck { margin-bottom: 3px; }
-.row.has-deck .card-deck { padding-bottom: 5px; }
-.row.has-deck .card-deck > .row-card { z-index: 3; }
+/* 6px 内边距给最底层留出投影空间（.row 会裁剪溢出），
+   与 2px 外边距合计仍是普通卡片的 8px 间距 */
+.row.has-deck { margin-bottom: 2px; padding-bottom: 6px; }
+/* 头卡 + 2 层 × 4px */
+.row.has-deck .card-deck { padding-bottom: 8px; }
+.row.has-deck .card-deck > .row-card {
+  z-index: 3;
+  /* 头卡比下层略高：稍强的一层柔和投影，不做位移以免被 .row 裁掉顶边 */
+  box-shadow: var(--deck-head-shadow);
+  transition: background .18s ease, opacity .18s ease, box-shadow .18s ease;
+}
 
 .stack-layers {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 5px;
+  height: 8px;
   pointer-events: none;
+  opacity: 1;
+  transform: translateY(0);
+  /* 展开时整组层次向下淡出，和 extra 区域一起收，不会动画一半就分离 */
+  transition: opacity .18s ease, transform .18s ease;
 }
+
+.stack-layers.is-open { opacity: 0; transform: translateY(4px); }
 
 .stack-layers i {
   position: absolute;
-  bottom: 0;
-  height: 10px;
-  border-radius: 0 0 16px 16px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-top: 0;
+  height: 26px;
   box-sizing: border-box;
+  border-radius: 16px;
+  border: 1px solid var(--deck-line);
+  box-shadow: none;
+  transition: background .16s ease, border-color .16s ease, opacity .16s ease;
 }
 
-.stack-layers i:first-child {
-  left: 2px;
-  right: 2px;
-  bottom: 2px;
+/* 第一层：左右各内缩 3px，露出 4px */
+.stack-layers .l1 {
+  left: 3px;
+  right: 3px;
+  bottom: 4px;
   z-index: 2;
-  opacity: .96;
+  background: var(--deck-fill-1);
 }
 
-.stack-layers i:last-child {
-  left: 5px;
-  right: 5px;
+/* 第二层：再内缩 4px（合计 7px）；只有它带一层向下扩散的柔和投影 */
+.stack-layers .l2 {
+  left: 7px;
+  right: 7px;
   bottom: 0;
   z-index: 1;
-  opacity: .84;
-  box-shadow: var(--shadow-soft);
+  background: var(--deck-fill-2);
+  box-shadow: var(--deck-shadow);
+}
+
+/* 超过 3 项：最外层再收 2px 并淡一档，表示「还有更多」，
+   层数不随条目增长，卡片高度恒定 */
+.stack-layers.is-more .l2 {
+  left: 9px;
+  right: 9px;
+  opacity: .88;
 }
 
 /* ---------- 底部 Tab ---------- */
@@ -1069,13 +1639,21 @@ html.dark .tag-high { background: rgba(240, 182, 88, .15); }
   align-items: center;
   justify-content: center;
   gap: 3px;
-  min-width: 64px;
-  padding: 6px 12px;
+  /* 五个 tab 等宽，行程表固定在正中（第三位），日记在最右 */
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 2px;
   border-radius: 12px;
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 500;
   transition: color .18s ease, transform .12s ease;
+}
+
+.tab span {
+  /* 英文文案不截断：Schedule / Journal 也要完整显示 */
+  white-space: nowrap;
+  letter-spacing: -.1px;
 }
 
 .tab svg {
@@ -2390,6 +2968,18 @@ html.dark .setting-group {
 .danger-row span:first-child { color: var(--danger); }
 .danger-text { color: var(--danger); font-weight: 600; }
 
+/* 只有真正不可点击的控件才降到禁用色，说明文字不参与 */
+.danger-btn:disabled {
+  background: var(--card-soft);
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.text-btn:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
 .text-btn {
   flex: 1 1 100%;
   height: 30px;
@@ -2674,51 +3264,156 @@ html.dark .setting-group {
 
 .cat-add-btn:active { transform: scale(.97); }
 
+/* 14 色经典预设：2 行 × 7 列，可点区域高 44、圆点本体 24，横向随容器均分 */
 .swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
-  margin-top: 12px;
-  padding: 4px 2px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0;
+  margin: 8px -2px 0;
+  padding: 0;
 }
 
 .swatch {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.swatch::before {
+  content: "";
   width: 24px;
   height: 24px;
   border-radius: 50%;
   background: var(--sw, var(--primary));
-  transition: transform .12s ease;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08);
+  transition: transform .14s ease, box-shadow .16s ease;
 }
 
-.swatch:active { transform: scale(.9); }
+/* 深色背景下黑/灰也要有轮廓，否则看起来像空格子 */
+html.dark .swatch::before {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
+}
 
-.swatch.active::after {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
+.swatch:active::before { transform: scale(.9); }
+
+/* 选中态：细环 + 轻微放大，深浅色都靠 --card 留出间隔 */
+.swatch.active::before {
+  transform: scale(1.12);
   box-shadow: 0 0 0 2px var(--card), 0 0 0 3.5px var(--sw, var(--primary));
 }
 
 .cat-custom {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 10px;
+  margin-top: 6px;
+}
+
+.cat-custom-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--card-soft, var(--card));
+  box-shadow: inset 0 0 0 1px var(--line);
   font-size: 11.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: box-shadow .16s ease, color .16s ease;
+}
+
+.cat-custom-btn.active {
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1.5px var(--primary);
+}
+
+.custom-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--custom, #4C6FFF);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1);
+}
+
+/* 应用内自绘取色器：色相条 + 饱和度/明度块，无原生控件 */
+.color-picker {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 14px;
+  background: var(--card-soft, var(--card));
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.cp-sv {
+  position: relative;
+  height: 112px;
+  border-radius: 10px;
+  background:
+    linear-gradient(to top, #000, rgba(0, 0, 0, 0)),
+    linear-gradient(to right, #fff, var(--cp-hue, #f00));
+  touch-action: none;
+  overflow: hidden;
+}
+
+.cp-hue {
+  position: relative;
+  height: 14px;
+  margin-top: 12px;
+  border-radius: 7px;
+  background: linear-gradient(to right,
+    #f00 0%, #ff0 16.66%, #0f0 33.33%, #0ff 50%, #00f 66.66%, #f0f 83.33%, #f00 100%);
+  touch-action: none;
+}
+
+.cp-knob {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 2px #fff, 0 1px 5px rgba(0, 0, 0, .32);
+  pointer-events: none;
+}
+
+#cpHueKnob {
+  top: 50%;
+}
+
+.cp-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11px;
   color: var(--muted);
 }
 
-.cat-custom input[type="color"] {
-  width: 46px;
+.cp-hex {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+.cp-back {
   height: 30px;
-  padding: 2px;
+  padding: 0 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   background: var(--card);
   box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 11px;
+  color: var(--text-2);
   cursor: pointer;
 }
 
@@ -2775,14 +3470,17 @@ html.dark { --festival: #F0A48F; --today-red: #E8897F; }
 
 .cal-cell.selected {
   background: var(--primary-soft-2);
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1.5px var(--primary);
 }
 
 .cal-cell.selected .dnum { color: var(--primary); font-weight: 700; }
 
-.cal-cell.selected.today .dnum { color: var(--today-red); }
+.cal-cell.selected.today .dnum { color: var(--primary); }
 
 .day-detail {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  min-width: 0;
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
@@ -2792,7 +3490,7 @@ html.dark { --festival: #F0A48F; --today-red: #E8897F; }
 .day-detail.open {
   grid-template-rows: 1fr;
   opacity: 1;
-  margin-top: 14px;
+  margin-top: 8px;
 }
 
 .day-detail-inner {
@@ -2801,20 +3499,22 @@ html.dark { --festival: #F0A48F; --today-red: #E8897F; }
 }
 
 .dd-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 2px 2px 8px;
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  padding: 8px 2px 0;
 }
 
-.dd-head-main { min-width: 0; }
+.dd-head[hidden] { display: none; }
 
 .dd-date {
+  display: flex;
+  align-items: baseline;
+  min-height: 26px;
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -.2px;
-  line-height: 1.25;
+  line-height: 26px;
 }
 
 .dd-date span {
@@ -2825,7 +3525,7 @@ html.dark { --festival: #F0A48F; --today-red: #E8897F; }
 }
 
 .dd-sub {
-  margin-top: 3px;
+  margin-top: 0;
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--muted);
@@ -3224,6 +3924,21 @@ html.dark .modal { box-shadow: 0 0 0 1px rgba(255, 255, 255, .06); }
   background: var(--primary-soft);
 }
 
+/* 拖动排序：进入拖动后才锁滚动，未拖动时页面照常滚动 */
+.cat-bubbles.dragging {
+  touch-action: none;
+}
+
+.cat-bubble.dragging {
+  position: relative;
+  z-index: 2;
+  transform: scale(1.04);
+  background: var(--primary-soft);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .16), inset 0 0 0 1px var(--primary);
+  transition: none;
+  cursor: grabbing;
+}
+
 .cat-bubble-add {
   border: 1px dashed var(--line);
   background: transparent;
@@ -3607,7 +4322,7 @@ html[lang="en"] .splash-sub {
 .about-group h3 {
   margin: 0 0 6px;
   padding: 0 2px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: .2px;
   color: var(--text);
@@ -3627,7 +4342,6 @@ html[lang="en"] .splash-sub {
   font-weight: 500;
   letter-spacing: .04em;
   color: var(--muted);
-  opacity: .8;
 }
 
 /* 协议条款与说明性内容在视觉上分开：条款用独立卡片承载 */
@@ -3703,7 +4417,6 @@ html.dark .danger-pill {
   font-weight: 500;
   letter-spacing: .04em;
   color: var(--muted);
-  opacity: .85;
 }
 
 /* ---------- 行程表 ---------- */
@@ -3966,56 +4679,188 @@ html.dark .row-time { color: #A9B1C4; }
 }
 
 /* ---------- 天气（只显示选中日期当天） ---------- */
-.dd-head { align-items: flex-start; }
-
+/* 与图例行同一网格的右列：从第 1 行顶部开始，跨两行，因此与图例齐平且不会高过它 */
 .dd-weather {
-  flex: 0 0 auto;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
+  justify-self: end;
   display: flex;
-  align-items: flex-start;
-  margin-left: 8px;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: 56%;
+  text-align: right;
 }
 
-/* 单日天气：图标放大，整体高度约等于此前三行文本，单独成为一个视觉元素 */
+.dd-weather[hidden] { display: none; }
+
+/* ---------- 黄历小卡片（紧贴「日期 + 天气」下方，一屏内） ---------- */
+.dd-almanac {
+  margin: 2px 0 10px;
+  padding: 10px 12px 9px;
+  border-radius: 14px;
+  background: var(--card-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.alm-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.alm-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .4px;
+  color: var(--text);
+}
+
+.alm-ganzhi {
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: right;
+  color: var(--muted);
+}
+
+.alm-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.alm-tag {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 17px;
+  border-radius: 5px;
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 17px;
+}
+
+.alm-tag.ok { background: var(--green-soft); color: var(--green); }
+.alm-tag.no { background: var(--danger-soft); color: var(--danger); }
+
+.alm-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  font-size: 10.8px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* ---------- 通知状态自查（权限弹层内） ---------- */
+.notify-diag {
+  margin: 10px 2px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--card-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.diag-title {
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  color: var(--text-2);
+}
+
+.diag-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.diag-key { flex: 0 0 auto; color: var(--muted); }
+.diag-value { text-align: right; color: var(--text); word-break: break-word; }
+
+.diag-hint {
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.notify-diag-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 2px 0;
+}
+
+/* 四行竖排：图标+气温 / 天气文字 / 位置 / 更新时间，整体右对齐 */
 .wx-now {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
-  min-height: 46px;
-  padding: 2px 0;
+  gap: 0;
+  min-height: 0;
+  padding: 0;
   color: var(--text-2);
 }
 
 .wx-now-main {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  min-height: 26px;
 }
 
-/* 城市 · 区/县（可选街道）：最小字号、低对比，不抢主视觉 */
+/* 城市 · 区/县（可选街道）：次要信息，允许换行但不撑出容器 */
 .wx-place {
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 9px;
-  line-height: 1.2;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 10.5px;
+  line-height: 1.5;
   letter-spacing: .01em;
   color: var(--muted);
-  opacity: .72;
+}
+
+/* 缓存新鲜度：次一级但仍可读，超过 6 小时再降一档并标注「可能已过期」 */
+.wx-fresh {
+  max-width: 100%;
+  margin-top: -2px;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  line-height: 1.35;
+  /* 次要但必须可读：比正文弱一档，不再淡到看不见 */
+  color: var(--text-2);
+  opacity: .88;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 超过 6 小时才再降一档，仍保持可读 */
+.wx-fresh.stale {
+  color: var(--muted);
+  opacity: 1;
 }
 
 .wx-big {
   display: inline-flex;
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   color: var(--muted);
 }
 
 .wx-big svg {
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.6;
@@ -4031,17 +4876,11 @@ html.dark .row-time { color: #A9B1C4; }
 html.dark .wx-rain { color: #8EAECB; }
 html.dark .wx-snow { color: #A9BDD3; }
 
-.wx-now-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
+/* 第一行是主体：温度与图标同级最大 */
 .wx-temp {
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 1.15;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
   color: var(--text);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -4050,18 +4889,18 @@ html.dark .wx-snow { color: #A9BDD3; }
 .wx-temp i {
   margin-left: 1px;
   font-style: normal;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 500;
+  opacity: .55;
   color: var(--muted);
 }
 
+/* 第二行：天气文字 */
 .wx-text {
-  max-width: 72px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10.5px;
-  line-height: 1.3;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 11.5px;
+  line-height: 1.5;
   color: var(--muted);
 }
 
@@ -4253,3 +5092,993 @@ html.dark .wx-snow { color: #A9BDD3; }
 }
 
 .detail-map-link:active { opacity: .6; }
+
+/* =========================================================
+   日记：时间线 / 网格 / 写作页 / 附件
+   ========================================================= */
+
+/* 日记页有自己的「写今天」，隐藏全局加号 */
+.diary-view #fab { display: none; }
+
+#viewDiary { padding-bottom: 10px; }
+
+.cal-cell .diary-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: .5;
+  flex: 0 0 auto;
+}
+
+/* ---------- 顶部固定区 ---------- */
+
+.diary-top {
+  position: sticky;
+  top: -6px;
+  z-index: 3;
+  margin: -6px -16px 10px;
+  padding: 8px 16px 8px;
+  background: var(--bg);
+}
+
+.diary-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diary-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 8px 0 31px;
+  border-radius: 11px;
+  background: var(--card-soft);
+  border: 1px solid var(--line);
+}
+
+.diary-search > svg {
+  position: absolute;
+  left: 10px;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+
+.diary-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.diary-search input::placeholder { color: var(--muted); }
+.diary-search input::-webkit-search-cancel-button { display: none; }
+
+.diary-search-clear {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--line);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.diary-search-clear svg {
+  position: static;
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.diary-modes {
+  display: flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--card-soft);
+  border: 1px solid var(--line);
+}
+
+.diary-mode {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.diary-mode.active {
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-soft);
+}
+
+.diary-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-bottom: 1px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.diary-chips::-webkit-scrollbar { display: none; }
+
+.diary-chip {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.diary-chip.active {
+  background: var(--primary-soft);
+  border-color: transparent;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.diary-month-wrap { flex: 0 0 auto; }
+
+.diary-month {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 11.5px;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.diary-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.diary-write {
+  flex: 1;
+  height: 36px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.diary-write:active { transform: scale(.985); }
+
+.diary-manage {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.diary-manage-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--card-batch);
+}
+
+.dmb-count {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.dmb-actions { display: flex; gap: 6px; }
+
+/* ---------- 时间线卡片 ---------- */
+
+.diary-group { margin-bottom: 12px; }
+.diary-group .day-head { padding-top: 2px; }
+
+.diary-card {
+  position: relative;
+  padding: 11px 13px 12px;
+  border-radius: 15px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: var(--shadow-soft);
+  transition: background .16s ease, border-color .16s ease, transform .1s ease;
+}
+
+.diary-card:active { transform: scale(.995); }
+
+.dc-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+}
+
+.dc-mood {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 5px;
+  border-radius: 9px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dc-face { width: 16px; height: 16px; }
+
+/* 心情面孔统一线性描边，和底部导航同一套语言 */
+.dc-face,
+.de-mood-face,
+.dd-diary-face,
+.dcard-face,
+.mood-ico {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dc-counts {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dc-files {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dc-files svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+
+.dc-text {
+  margin: 7px 0 0;
+  font-size: 13.5px;
+  line-height: 1.62;
+  color: var(--text);
+  white-space: pre-line;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.dc-text-empty { color: var(--muted); font-size: 12.5px; }
+
+.dc-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.dc-tag {
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--card-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px 7px;
+}
+
+#viewDiary mark {
+  background: rgba(227, 163, 60, .26);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
+
+/* ---------- 管理态 ---------- */
+
+#viewDiary .dc-check { display: none; }
+
+#viewDiary.managing .dc-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  background: var(--card);
+}
+
+#viewDiary.managing .dc-check::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translate(1px, -1px);
+  opacity: 0;
+}
+
+#viewDiary.managing .selected { border-color: var(--primary); }
+
+#viewDiary.managing .diary-card.selected { background: var(--card-batch); }
+
+#viewDiary.managing .selected .dc-check {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+#viewDiary.managing .selected .dc-check::after { opacity: 1; }
+
+#viewDiary.managing .diary-card .dc-top { padding-right: 24px; }
+
+/* ---------- 网格 ---------- */
+
+.diary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(102px, 1fr));
+  gap: 8px;
+}
+
+.dcard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 106px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+
+.dcard.has-cover {
+  aspect-ratio: 3 / 4;
+  justify-content: flex-end;
+}
+
+.dcard-cover {
+  position: absolute;
+  inset: 0;
+}
+
+.dcard-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: var(--card-soft);
+}
+
+.dcard-cover img.missing { opacity: 0; }
+
+.dcard-shade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 54%;
+  background: linear-gradient(transparent, rgba(12, 15, 26, .64));
+}
+
+.dcard-text {
+  flex: 1;
+  margin: 10px 10px 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dcard-foot {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px 9px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.dcard.has-cover .dcard-foot {
+  position: relative;
+  color: #F4F6FF;
+}
+
+.dcard-date { font-weight: 600; }
+
+.dcard-face { width: 14px; height: 14px; }
+
+.dcard-files {
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 7px;
+  background: rgba(120, 128, 150, .18);
+  font-size: 10px;
+}
+
+#viewDiary .empty-state { padding-top: 54px; }
+
+/* ---------- 写作页 ---------- */
+
+.diary-editor {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-diary);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity .2s ease, transform .24s cubic-bezier(.2, .8, .2, 1);
+}
+
+.diary-editor.open {
+  opacity: 1;
+  transform: none;
+}
+
+.de-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top)) 16px 10px;
+  background: var(--bg);
+}
+
+.de-head-main { min-width: 0; }
+
+.de-head-main h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.de-sub {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.de-head-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.de-saved {
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+
+.de-saved.show { opacity: 1; }
+
+.de-done {
+  height: 30px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.de-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 16px calc(28px + env(safe-area-inset-bottom));
+}
+
+.de-text {
+  display: block;
+  width: 100%;
+  min-height: 38vh;
+  padding: 6px 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15.5px;
+  line-height: 1.7;
+  outline: none;
+  resize: none;
+  white-space: pre-wrap;
+}
+
+.de-text::placeholder { color: var(--muted); }
+
+.de-moods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--line);
+}
+
+.de-mood {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 10px 0 6px;
+  border-radius: 15px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.de-mood.active {
+  border-color: transparent;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.de-mood-face { width: 18px; height: 18px; }
+
+.de-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 12px;
+}
+
+.de-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 25px;
+  padding: 0 4px 0 9px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.de-tag-del {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.de-tag-del svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.de-tag-input {
+  flex: 1;
+  min-width: 104px;
+  height: 25px;
+  border: 0;
+  border-bottom: 1px dashed var(--line-strong);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+/* ---------- 附件 ---------- */
+
+.de-attach {
+  padding: 12px 0 6px;
+  border-top: 1px solid var(--line);
+}
+
+.de-attach-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.de-attach-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.de-attach-add {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.de-attach-add.busy { opacity: .6; }
+.de-attach-add:disabled { opacity: .45; }
+
+.de-attach-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.de-attach-grid:empty { display: none; }
+
+.de-file {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--card-soft);
+}
+
+.de-image { aspect-ratio: 1; }
+
+.de-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.de-image.missing::after {
+  content: "文件不在本机";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.de-doc {
+  grid-column: span 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+}
+
+.de-doc-ico { flex: 0 0 auto; color: var(--muted); }
+
+.de-doc-ico svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.de-doc-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.de-doc-name {
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.de-doc-size { font-size: 10px; color: var(--muted); }
+
+.de-file-del {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(20, 24, 36, .62);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.de-file-del svg {
+  width: 9px;
+  height: 9px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+
+.de-doc .de-file-del {
+  position: static;
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--muted);
+}
+
+.de-doc .de-file-del svg { width: 11px; height: 11px; }
+
+.de-attach-hint {
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.de-foot { padding: 12px 0 0; }
+
+.de-delete {
+  width: 100%;
+  height: 38px;
+  border: 1px solid var(--danger-soft);
+  border-radius: 11px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* ---------- 图片全屏预览 ---------- */
+
+.diary-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-diary-viewer);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(8, 10, 16, .94);
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+
+.diary-viewer.open { opacity: 1; }
+
+.diary-viewer img {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+  display: block;
+}
+
+.dv-name {
+  margin: 0;
+  padding: 0 24px;
+  text-align: center;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, .72);
+}
+
+.dv-close {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dv-close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+/* ---------- 日历黄历卡片下方的日记入口 ---------- */
+
+.dd-diary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  text-align: left;
+}
+
+.dd-diary:active { opacity: .72; }
+
+.dd-diary-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dd-diary-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.dd-diary-text {
+  font-size: 12.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dd-diary-mood {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dd-diary-face { width: 15px; height: 15px; }
+
+.dd-diary-arrow {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- 备份：是否包含附件 ---------- */
+
+.export-sheet {
+  max-width: 340px;
+  padding: 18px 16px 12px;
+}
+
+.export-sheet-desc {
+  margin: 6px 0 12px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  text-align: center;
+}
+
+.export-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  text-align: left;
+}
+
+.export-option:active { transform: scale(.99); }
+
+.export-option.is-default {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.eo-main {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.export-option.is-default .eo-main { color: var(--primary); }
+
+.eo-sub {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.export-sheet-note {
+  margin: 2px 0 8px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.export-sheet .text-btn { width: 100%; }
+
+.attach-sheet { padding: 16px 14px 12px; }
+
+.attach-sheet .row-btn {
+  margin-bottom: 6px;
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.attach-sheet .text-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+html.dark .export-option.is-default { background: var(--primary-soft); }

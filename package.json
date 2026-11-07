@@ -1,6 +1,6 @@
 {
   "name": "qingjihua-android",
-  "version": "0.7.0",
+  "version": "0.9.0",
   "private": true,
   "description": "氢计划（AeroPlan）PWA 的 Android 打包工程（Capacitor + GitHub Actions）",
   "scripts": {

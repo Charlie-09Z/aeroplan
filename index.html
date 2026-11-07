@@ -9,7 +9,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=28">
+  <link rel="stylesheet" href="./styles.css?v=39">
 </head>
 <body>
   <div class="phone">
@@ -54,21 +54,39 @@
         <button class="summary-btn" id="summaryBtn" type="button">查看</button>
       </div>
 
+      <div class="batch-bar" id="batchBar" hidden>
+        <span class="batch-count" id="batchCount">已选 0 项</span>
+        <button class="batch-btn" id="batchCancel" type="button">取消</button>
+        <button class="batch-btn danger" id="batchDelete" type="button" disabled>删除</button>
+      </div>
+
       <main class="content" id="content">
         <section class="view" id="viewCalendar">
-          <div class="weekdays">
-            <span data-wday="1">一</span><span data-wday="2">二</span><span data-wday="3">三</span><span data-wday="4">四</span><span data-wday="5">五</span><span data-wday="6">六</span><span data-wday="0">日</span>
-          </div>
-          <div class="cal-grid" id="calGrid"></div>
-          <div class="cal-foot">
-            <div class="legend">
-              <span class="legend-item"><i style="background:var(--event)"></i>日程</span>
-              <span class="legend-item"><i style="background:var(--todo)"></i>待办</span>
+          <!-- 整月日历留在正常文档流里，随内容滚出视口；只有下面的周条粘顶 -->
+          <div class="cal-month" id="calMonth">
+            <div class="cal-month-inner">
+              <div class="weekdays">
+                <span data-wday="1">一</span><span data-wday="2">二</span><span data-wday="3">三</span><span data-wday="4">四</span><span data-wday="5">五</span><span data-wday="6">六</span><span data-wday="0">日</span>
+              </div>
+              <div class="cal-grid" id="calGrid"></div>
             </div>
-            <div class="month-stat" id="monthStat"></div>
           </div>
-          <div class="day-detail" id="dayDetail">
-            <div class="day-detail-inner" id="dayDetailInner"></div>
+          <div class="week-strip" id="weekStrip" aria-hidden="true">
+            <div class="ws-track" id="wsTrack"></div>
+          </div>
+          <div class="cal-head-block">
+            <div class="cal-foot">
+              <div class="legend">
+                <span class="legend-item"><i style="background:var(--event)"></i>日程</span>
+                <span class="legend-item"><i style="background:var(--todo)"></i>待办</span>
+              </div>
+              <div class="month-stat" id="monthStat"></div>
+            </div>
+            <div class="dd-head" id="ddHead" hidden></div>
+            <div class="dd-weather" id="ddWeather" hidden></div>
+            <div class="day-detail" id="dayDetail">
+              <div class="day-detail-inner" id="dayDetailInner"></div>
+            </div>
           </div>
           <div class="empty-state compact" id="calendarEmpty" hidden>
             <p class="empty-title">新的一天，从计划开始</p>
@@ -101,6 +119,53 @@
           </div>
           <div class="sch-foot" id="scheduleFoot"></div>
         </section>
+
+        <section class="view" id="viewDiary" hidden>
+          <div class="diary-top">
+            <div class="diary-top-row">
+              <div class="diary-search">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="10.8" cy="10.8" r="6.2"/>
+                  <path d="M15.4 15.4 20 20"/>
+                </svg>
+                <input id="diarySearch" type="search" autocomplete="off" placeholder="搜索日记" aria-label="搜索日记">
+                <button class="diary-search-clear" id="diarySearchClear" type="button" aria-label="清空搜索" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+                </button>
+              </div>
+              <div class="diary-modes" id="diaryModes" role="group" aria-label="视图">
+                <button class="diary-mode active" type="button" data-diary-mode="timeline">时间线</button>
+                <button class="diary-mode" type="button" data-diary-mode="grid">网格</button>
+              </div>
+            </div>
+            <div class="diary-chips" id="diaryChips"></div>
+            <div class="diary-actions">
+              <button class="diary-write" id="diaryWriteBtn" type="button">写今天</button>
+              <button class="diary-manage" id="diaryManageBtn" type="button">管理</button>
+            </div>
+          </div>
+
+          <div class="diary-manage-bar" id="diaryManageBar" hidden>
+            <span class="dmb-count" id="diaryManageCount">已选 0 篇</span>
+            <div class="dmb-actions">
+              <button class="text-btn" id="diaryManageCancel" type="button">取消</button>
+              <button class="danger-btn" id="diaryManageDelete" type="button">删除</button>
+            </div>
+          </div>
+
+          <div class="diary-body" id="diaryBody"></div>
+          <div class="empty-state" id="diaryEmpty" hidden>
+            <span class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M5.2 4.8h9.1A2.5 2.5 0 0 1 16.8 7.3v12.4H7.7a2.5 2.5 0 0 1-2.5-2.5z"/>
+                <path d="M5.2 4.8v12.4a2.5 2.5 0 0 0 2.5 2.5h9.1"/>
+                <path d="M8.6 8.7h5M8.6 12.1h5"/>
+              </svg>
+            </span>
+            <p class="empty-title" id="diaryEmptyTitle">还没有写过日记</p>
+            <p class="empty-sub" id="diaryEmptySub">想到什么就写一句，不必等到有完整的一天。</p>
+          </div>
+        </section>
       </main>
 
       <nav class="tabbar" aria-label="主导航">
@@ -118,6 +183,13 @@
           </svg>
           <span>议程</span>
         </button>
+        <button class="tab" type="button" data-view="schedule">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3.4" y="4.6" width="17.2" height="15" rx="3"/>
+            <path d="M3.4 9.2h17.2M8.3 9.2v10.4M13.5 9.2v10.4M18.2 9.2v10.4"/>
+          </svg>
+          <span>行程表</span>
+        </button>
         <button class="tab" type="button" data-view="plan">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="12" cy="12" r="8"/>
@@ -125,12 +197,13 @@
           </svg>
           <span>计划</span>
         </button>
-        <button class="tab" type="button" data-view="schedule">
+        <button class="tab" type="button" data-view="diary">
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3.4" y="4.6" width="17.2" height="15" rx="3"/>
-            <path d="M3.4 9.2h17.2M8.3 9.2v10.4M13.5 9.2v10.4M18.2 9.2v10.4"/>
+            <path d="M5.2 4.8h9.1A2.5 2.5 0 0 1 16.8 7.3v12.4H7.7a2.5 2.5 0 0 1-2.5-2.5z"/>
+            <path d="M5.2 4.8v12.4a2.5 2.5 0 0 0 2.5 2.5h9.1"/>
+            <path d="M8.6 8.7h5M8.6 12.1h5"/>
           </svg>
-          <span>行程表</span>
+          <span>日记</span>
         </button>
       </nav>
 
@@ -413,6 +486,73 @@
         </div>
       </div>
 
+      <!-- 日记：全屏写作页 -->
+      <div class="diary-editor" id="diaryEditor" role="dialog" aria-modal="true" aria-labelledby="deDate" hidden>
+        <div class="de-head">
+          <div class="de-head-main">
+            <h2 id="deDate">10 月 1 日</h2>
+            <p class="de-sub" id="deSub">星期三 · 农历八月廿九</p>
+          </div>
+          <div class="de-head-actions">
+            <span class="de-saved" id="deSaved" hidden>已保存</span>
+            <button class="de-done" id="diaryDone" type="button">完成</button>
+          </div>
+        </div>
+        <div class="de-scroll">
+          <textarea class="de-text" id="diaryText" placeholder="今天发生了什么…" spellcheck="false"></textarea>
+          <div class="de-moods" id="deMoods" role="group" aria-label="心情"></div>
+          <div class="de-tags" id="deTags"></div>
+          <div class="de-attach">
+            <div class="de-attach-head">
+              <span class="de-attach-title">附件</span>
+              <button class="de-attach-add" id="diaryAttachBtn" type="button">添加</button>
+            </div>
+            <div class="de-attach-grid" id="diaryAttachGrid"></div>
+            <p class="de-attach-hint" id="diaryAttachHint"></p>
+          </div>
+          <div class="de-foot">
+            <button class="de-delete" id="diaryDeleteBtn" type="button">删除这篇日记</button>
+          </div>
+        </div>
+        <input id="diaryImageInput" type="file" accept="image/*" multiple hidden>
+        <input id="diaryFileInput" type="file" multiple hidden>
+      </div>
+
+      <!-- 日记：图片全屏预览 -->
+      <div class="diary-viewer" id="diaryViewer" hidden>
+        <button class="dv-close" id="diaryViewerClose" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+        <img id="diaryViewerImg" alt="">
+        <p class="dv-name" id="diaryViewerName"></p>
+      </div>
+
+      <!-- 备份：是否包含附件 -->
+      <div class="modal-backdrop" id="exportSheetBackdrop" hidden></div>
+      <div class="modal export-sheet" id="exportSheet" hidden role="dialog" aria-modal="true" aria-labelledby="exportSheetTitle">
+        <h3 class="modal-title" id="exportSheetTitle">备份数据</h3>
+        <p class="export-sheet-desc" id="exportSheetDesc">默认只导出日记文字与附件信息，不包含图片和文件本体。</p>
+        <button class="export-option is-default" id="exportNoFiles" type="button">
+          <span class="eo-main">不含附件（推荐，文件小）</span>
+          <span class="eo-sub">只含日记文字与附件信息，恢复后附件列表仍在、文件不在</span>
+        </button>
+        <button class="export-option" id="exportWithFiles" type="button">
+          <span class="eo-main">包含附件（体积大）</span>
+          <span class="eo-sub" id="exportSizeHint">附件约 0 MB</span>
+        </button>
+        <p class="export-sheet-note" id="exportSheetNote"></p>
+        <button class="text-btn" id="exportCancel" type="button">取消</button>
+      </div>
+
+      <!-- 附件来源选择 -->
+      <div class="modal-backdrop" id="attachSheetBackdrop" hidden></div>
+      <div class="modal attach-sheet" id="attachSheet" hidden>
+        <h3 class="modal-title" id="attachSheetTitle">添加附件</h3>
+        <button class="row-btn" id="attachPickImage" type="button"><span>添加图片</span><span class="row-arrow">›</span></button>
+        <button class="row-btn" id="attachPickFile" type="button"><span>添加文件</span><span class="row-arrow">›</span></button>
+        <button class="text-btn" id="attachCancel" type="button">取消</button>
+      </div>
+
       <div class="modal-backdrop" id="modalBackdrop" hidden></div>
       <div class="modal" id="modalCard" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden>
         <h3 class="modal-title" id="modalTitle">标题</h3>
@@ -421,8 +561,26 @@
           <input class="cat-name-input" id="modalInput" type="text" maxlength="8" placeholder="分类名称（最多 8 字）" autocomplete="off">
           <div class="swatches" id="modalSwatches"></div>
           <div class="cat-custom">
-            <span>自定义颜色</span>
-            <input type="color" id="modalCustom" value="#4C6FFF">
+            <button class="cat-custom-btn" id="modalCustomBtn" type="button" aria-expanded="false">
+              <span id="modalCustomLabel">自定义颜色</span>
+              <i class="custom-dot" id="modalCustomDot" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div class="color-picker" id="modalPicker" hidden>
+            <div class="cp-sv" id="cpSv">
+              <span class="cp-knob" id="cpSvKnob" aria-hidden="true"></span>
+            </div>
+            <div class="cp-hue" id="cpHue">
+              <span class="cp-knob" id="cpHueKnob" aria-hidden="true"></span>
+            </div>
+            <div class="cp-foot">
+              <span class="cp-hex" id="cpHex">#4C6FFF</span>
+              <button class="cp-back" id="cpBack" type="button">收起</button>
+            </div>
+          </div>
+          <div class="cat-icons-wrap" id="modalIconsWrap" hidden>
+            <span class="cat-icons-label" id="modalIconsLabel">图标</span>
+            <div class="cat-icons" id="modalIcons"></div>
           </div>
         </div>
         <p class="cat-hint" id="modalHint"></p>
@@ -470,6 +628,16 @@
             <label class="setting-row toggle-row">
               <span>农历</span>
               <input type="checkbox" id="lunarToggle">
+              <span class="toggle" aria-hidden="true"></span>
+            </label>
+            <label class="setting-row toggle-row">
+              <span>黄历卡片</span>
+              <input type="checkbox" id="almanacToggle">
+              <span class="toggle" aria-hidden="true"></span>
+            </label>
+            <label class="setting-row toggle-row">
+              <span>天气</span>
+              <input type="checkbox" id="weatherToggle">
               <span class="toggle" aria-hidden="true"></span>
             </label>
             <button class="row-btn" id="weatherCityBtn" type="button">
@@ -522,6 +690,11 @@
               <b id="notifyState">检测中…</b>
               <span class="row-arrow">›</span>
             </button>
+            <button class="row-btn" id="notifyTestRowBtn" type="button">
+              <span>测试通知</span>
+              <span class="loc-value">5 秒后 · 含状态自查</span>
+              <span class="row-arrow">›</span>
+            </button>
           </section>
 
           <section class="setting-group">
@@ -533,7 +706,7 @@
           </section>
 
           <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
-          <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.7.0</div>
+          <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.9.0</div>
         </div>
       </div>
 
@@ -549,47 +722,38 @@
 
           <section class="about-group">
             <h3>应用简介</h3>
-            <p>氢计划是一个纯本地的日程与行程工具：日历、条目、计划、行程表和天气。没有账号，也没有服务端。</p>
+            <p>纯本地的日程与行程工具：日历、议程、行程表、计划、日记、天气与黄历。没有账号，也没有服务端。</p>
             <p>提醒由系统本地通知调度，应用关闭或锁屏后仍会触发。</p>
           </section>
 
           <section class="about-group">
             <h3>数据存放</h3>
-            <p>条目、计划、分类、设置和同意记录保存在本机：优先 IndexedDB（light-schedule-db），不可用时退回 localStorage。</p>
-            <p>没有服务器，我们不会持有你的数据副本。</p>
-            <p>卸载应用或清除应用数据会删除全部本地内容。换机或清理前请先导出备份。</p>
+            <p>条目、计划、分类、日记、偏好与同意记录只保存在本机：优先 IndexedDB，不可用时退回 localStorage。没有服务器副本。</p>
+            <p>日记里的图片与文件只存进本应用自己的 IndexedDB，不写入相册、不申请存储权限、不联网、不做云端同步。IndexedDB 不可用时，日记文字仍可保存，附件功能会提示「当前环境不支持附件」。</p>
+            <p>卸载应用会删除全部本地内容；换机前请先导出备份。</p>
           </section>
 
           <section class="about-group">
             <h3>网络请求与数据去向</h3>
-            <p>只有天气与地址搜索会联网。它们发出的是搜索关键词和所选地点的坐标，收件方只有下列服务。</p>
-            <p>天气：只发送所选地点的经纬度（保留 3 位小数，约 100 米精度），发给 Open-Meteo。</p>
-            <p>城市与地点搜索：只发送你输入的搜索关键词，发给 Photon（基于 OpenStreetMap 数据）。</p>
-            <p>地址搜索：只发送你输入的搜索关键词，发给 Photon。</p>
-            <p>不会发送日程正文、备注、分类、计划、备份文件内容、账号信息、通讯录、相片，也不会发送设备型号。</p>
-            <p>所有请求都由设备用 HTTPS 直连上述服务，不经过本项目中转；应用没有统计、广告或崩溃上报 SDK。</p>
+            <p>只有天气与地点搜索会联网，且只发送搜索关键词或所选地点的坐标（保留 3 位小数，约 100 米精度）。</p>
+            <p>收件方只有：Open-Meteo（天气）、Photon（地点搜索，基于 OpenStreetMap 数据）。</p>
+            <p>不会发送日程正文、备注、分类、备份内容、账号、通讯录、相片或设备型号；应用没有统计、广告或崩溃上报 SDK。</p>
           </section>
 
           <section class="about-group">
-            <h3>权限清单</h3>
-            <p>通知：用于到点提醒。拒绝后应用仍可使用，但收不到提醒。</p>
-            <p>闹钟与提醒（Android 12 及以上）：用于准时触发提醒。拒绝后提醒可能延后或漏掉。</p>
-            <p>存储（旧版 Android）：只用于导出备份和读取你选择的备份文件。拒绝后无法导出或恢复。</p>
-            <p>振动：用于选择日期、时间时的轻触反馈。关闭后只是没有触感，不影响功能。</p>
-            <p>本应用不申请定位权限，也不读取设备位置。</p>
+            <h3>权限与系统限制</h3>
+            <p>通知：用于到点提醒；拒绝后仍可使用，但收不到提醒。</p>
+            <p>闹钟与提醒（Android 12/12L）：用于准时触发；Android 13 及以上由系统自动授予，没有单独开关。</p>
+            <p>振动：用于轻触反馈，可随时关闭。本版本不申请存储与定位权限：备份经系统保存/分享面板完成，导入由你手动选择文件。</p>
+            <p>国产系统的自启动、后台清理与省电策略可能拦截提醒；需要时请在系统设置里允许本应用自启动/后台运行，并把省电策略设为「不限制」。重要事项请同时在系统闹钟里设一次提醒。</p>
           </section>
 
           <section class="about-group">
             <h3>备份文件</h3>
-            <p>备份是 JSON 文件，当前未加密，含条目、计划、分类、设置和同意记录。</p>
-            <p>备份生成后交给系统的保存或分享面板，应用内不留副本，临时文件用完即删。</p>
-            <p>文件可能被网盘、聊天工具或他人看到，请存放到你可信的位置。</p>
-          </section>
-
-          <section class="about-group">
-            <h3>提醒的局限</h3>
-            <p>系统清理后台、省电模式或权限关闭时，提醒可能延迟，甚至不触发。</p>
-            <p>重要事项请同时在系统闹钟里设一次提醒。这是本应用的真实边界。</p>
+            <p>备份是未加密的 JSON，含条目、计划、分类、日记、偏好与同意记录。</p>
+            <p>默认备份不含附件本体，只有文件名、大小与类型；需要连图片一起带走时，在「备份数据」弹窗里选择「包含附件」，体积可能很大，导出前会估算并再次确认。</p>
+            <p>备份文件中的日记为明文，含附件时体积很大，请妥善保管。</p>
+            <p>生成后交给系统保存或分享面板，应用内不留副本，临时文件用完即删；文件可能被他人看到，请存放在可信位置。</p>
           </section>
 
           <section class="about-group">
@@ -599,18 +763,18 @@
           </section>
 
           <section class="about-group about-sources">
-            <h3>数据来源</h3>
-            <p>天气与预报：Open-Meteo。请求只包含所选地点的经纬度。</p>
-            <p>城市与地点搜索：Photon，基于 OpenStreetMap 数据。</p>
-            <p>OpenStreetMap 数据版权归 OpenStreetMap 贡献者，许可 ODbL。</p>
-            <p>以上请求都由设备直接发起，不经过本项目中转。</p>
+            <h3>数据来源与许可</h3>
+            <p>天气与预报：Open-Meteo，仅发送所选地点坐标。地点搜索：Photon（OpenStreetMap 数据，版权归贡献者，ODbL）。请求都由设备直达，不经过本项目中转。</p>
+
+
+
           </section>
 
           <section class="about-group">
             <h3>字体与图标许可</h3>
-            <p class="font-credit">站酷小薇 ZCOOL XiaoWei（中文）与 Cormorant Garamond（英文）：SIL Open Font License 1.1，随应用本地打包。</p>
-            <p class="font-credit">Lucide 图标集：ISC License，SVG 内联，随应用本地打包。</p>
-            <p class="font-credit">应用图标与启动图随应用本地打包。字体和图标都不从网络加载。</p>
+            <p class="font-credit">站酷小薇 ZCOOL XiaoWei 与 Cormorant Garamond：SIL Open Font License 1.1；Lucide 图标：ISC License。字体、图标、应用图标与启动图都随应用本地打包，不从网络加载。</p>
+
+
           </section>
 
           <section class="about-group">
@@ -623,9 +787,8 @@
           <section class="about-group about-agreement">
             <h3>协议条款</h3>
             <p>生效日期：2026-11-07。</p>
-            <p>本页内容共同构成使用协议：数据存放、网络请求与数据去向、权限清单、备份文件、提醒的局限。</p>
-            <p>协议更新时随新版本发布，并在本页标注新的生效日期；重大变更会在下次启动时再次提示确认。</p>
-            <p>继续使用即表示你已阅读并接受本协议。</p>
+            <p>本页内容共同构成使用协议：数据存放、网络请求与数据去向、权限与系统限制、备份文件、同意记录。</p>
+            <p>协议更新时随新版本发布并标注新的生效日期；重大变更会在下次启动时再次提示确认。继续使用即表示你已阅读并接受本协议。</p>
           </section>
 
           <section class="about-group">
@@ -633,7 +796,7 @@
             <p>请通过你获取本应用的渠道联系我们：应用商店页面、发布页面或仓库 Issue。</p>
           </section>
 
-          <p class="about-version">0.7.0</p>
+          <p class="about-version">0.9.0</p>
         </div>
 
         <div class="agreement-actions" id="agreementActions" hidden>
@@ -667,25 +830,21 @@
               <span class="perm-item-name">通知与提醒</span>
               <b class="perm-badge" id="permNotifyState">检测中…</b>
             </div>
-            <p class="perm-item-text">提醒由系统排程，关掉应用或锁屏后也会按时通知；系统限制后台运行时可能略有延迟。</p>
+            <p class="perm-item-text">提醒由系统排程，关掉应用或锁屏后也会按时通知。权限、通知渠道、精确闹钟与排程数量可以在下面自查。</p>
             <button class="secondary-btn perm-item-btn" id="permAllow" type="button">允许通知</button>
+            <button class="secondary-btn perm-item-btn" id="notifyTestBtn" type="button">测试通知（5 秒后）</button>
             <div class="perm-denied" id="permDenied" hidden>
               <p>系统拒绝了通知权限。可以打开手机「设置 → 应用 → 氢计划 → 通知」把通知打开，再回到这里点下面的按钮重新检查。</p>
             </div>
           </div>
-
-          <div class="perm-item">
-            <div class="perm-item-head">
-              <span class="perm-item-name">存储与备份</span>
-              <b class="perm-badge" id="permStorageState">检测中…</b>
-            </div>
-            <p class="perm-item-text">备份不会写进应用私有目录：生成后交给系统的保存 / 分享面板，由你决定存到哪里；临时文件用完即删。</p>
-            <button class="secondary-btn perm-item-btn" id="permStorageBtn" type="button">申请权限</button>
-          </div>
-
         </div>
 
-        <p class="perm-note" id="permNote">提醒可能因系统限制后台运行而略有延迟；重要事项请同时在系统闹钟里设一次。</p>
+        <p class="perm-note" id="permNote">重要事项请同时在系统闹钟里设一次；部分系统会限制后台运行，下面自查能帮你判断是哪一环断了。</p>
+
+        <div class="notify-diag" id="notifyDiag" hidden></div>
+        <div class="notify-diag-actions">
+          <button class="text-btn" id="notifyDiagRefresh" type="button">刷新自查</button>
+        </div>
 
         <div class="perm-actions">
           <button class="primary-btn" id="permLater" type="button">开始使用</button>
@@ -695,8 +854,8 @@
 
     </div>
   </div>
-  <script src="./i18n.js?v=28"></script>
-  <script src="./weather.js?v=28"></script>
-  <script src="./app.js?v=28"></script>
+  <script src="./i18n.js?v=39"></script>
+  <script src="./weather.js?v=39"></script>
+  <script src="./app.js?v=39"></script>
 </body>
 </html>

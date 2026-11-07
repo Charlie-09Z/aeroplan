@@ -1,5 +1,5 @@
 /* =========================================================
-   氢计划 / AeroPlan · 天气模块（v0.7.0）
+   氢计划 / AeroPlan · 天气模块（v0.8.0）
    数据源：Open-Meteo（免费、无需 API key、无 cookie、无追踪）。
    只请求每日所需的三个字段，不做统计，也不加载任何第三方 SDK。
    位置：只能由用户输入关键词搜索选择。应用不读取设备定位、
@@ -14,6 +14,8 @@
 
   var CACHE_MS = 45 * 60 * 1000;      // 45 分钟刷新一次，避免高频轮询
   var FORECAST_DAYS = 16;            // Open-Meteo 允许的上限
+  var STALE_MS = 6 * 60 * 60 * 1000; // 超过 6 小时标注「可能已过期」
+  var WCACHE_KEY = 'light-schedule.cache.weather.v1';
 
   var opts = {
     t: function (s) { return s; },
@@ -29,7 +31,9 @@
     pending: null,
     gen: 0,              // 清理代号：丢弃清理前发出的请求结果
     el: null,
-    key: ''
+    key: '',
+    enabled: true,       // 天气开关；关闭后不请求、不写缓存、不渲染
+    abort: null          // 当前在途请求的 AbortController
   };
 
   // ---------- 图标（内联 SVG，currentColor 随主题变化） ----------
@@ -87,7 +91,7 @@
     storm: 'wx-storm'
   };
 
-  function T(s) { return opts.t(s); }
+  function T(s, vars) { return opts.t(s, vars); }
   function isEn() { return !!opts.isEn(); }
 
   function todayKey() {
@@ -131,6 +135,64 @@
     return { name: name, latitude: lat, longitude: lon, label: label || name };
   }
 
+  // ---------- 离线缓存：城市 + 日期，一处只保留最新一条 ----------
+  // 每次成功拉取后写入 localStorage（与应用的 kv 层同一存储）；
+  // 数据结构：{ cityKey, at, days: { 'YYYY-MM-DD': {code,max,min} } }
+  // 只有一个当前城市，切换城市时整块丢弃；写入时整块覆盖，日期条目不会堆积。
+
+  function citySignature(c) {
+    return c ? (c.latitude.toFixed(3) + ',' + c.longitude.toFixed(3)) : '';
+  }
+
+  function dropWeatherCache() {
+    try { localStorage.removeItem(WCACHE_KEY); } catch (err) { /* 隐私模式下忽略 */ }
+  }
+
+  function loadWeatherCache(c) {
+    if (!c) return null;
+    try {
+      var raw = localStorage.getItem(WCACHE_KEY);
+      if (!raw) return null;
+      var obj = JSON.parse(raw);
+      if (!obj || obj.cityKey !== citySignature(c) || !obj.days || !isFinite(Number(obj.at))) return null;
+      var lo = todayKey();
+      var hi = forecastLastKey();
+      var keys = Object.keys(obj.days).filter(function (k) { return k >= lo && k <= hi; }).sort();
+      if (!keys.length) return null;
+      return {
+        at: Number(obj.at),
+        data: {
+          time: keys,
+          code: keys.map(function (k) { return obj.days[k].code; }),
+          max: keys.map(function (k) { return obj.days[k].max; }),
+          min: keys.map(function (k) { return obj.days[k].min; }),
+          label: c.name
+        }
+      };
+    } catch (err) {
+      return null; // 解析异常时当作没有缓存，不影响界面
+    }
+  }
+
+  function saveWeatherCache(c, data, at) {
+    if (!c || !data || !Array.isArray(data.time)) return;
+    try {
+      // 整块覆盖：每个「城市 + 日期」只留这一份最新数据，旧日期与旧副本
+      // 随这次写入一起被替换掉，不会累积历史记录。
+      var days = {};
+      data.time.forEach(function (k, i) {
+        days[k] = { code: data.code[i], max: data.max[i], min: data.min[i] };
+      });
+      localStorage.setItem(WCACHE_KEY, JSON.stringify({
+        v: 1,
+        cityKey: citySignature(c),
+        city: { name: c.name, label: c.label },
+        at: at,
+        days: days
+      }));
+    } catch (err) { /* 写入失败不影响展示 */ }
+  }
+
   // ---------- 配置与对外状态 ----------
 
   function configure(o) {
@@ -139,7 +201,36 @@
     if (o.isEn) opts.isEn = o.isEn;
     if (o.meta) opts.meta = o.meta;
     if (o.persist) opts.persist = o.persist;
+    // 老数据没有 weatherEnabled 字段时按默认开启处理
+    store.enabled = !(opts.meta && opts.meta.weatherEnabled === false);
     store.city = normalizeCity(opts.meta && opts.meta.weatherCity);
+    // 启动时先用本地缓存立即可显示，随后由 refresh() 在后台更新
+    var cached = loadWeatherCache(store.city);
+    store.data = cached ? cached.data : null;
+    store.at = cached ? cached.at : 0;
+    localizeCityLabel(store.city);
+  }
+
+  // 开关：关闭时作废在途请求、停止写缓存；重新打开时先用缓存立即渲染
+  function setEnabled(on) {
+    var next = !!on;
+    if (store.enabled === next) return;
+    store.enabled = next;
+    if (!next) {
+      store.gen++;
+      store.pending = null;
+      if (store.abort) {
+        try { store.abort.abort(); } catch (err) { /* 忽略 */ }
+        store.abort = null;
+      }
+      render();
+      return;
+    }
+    var cached = loadWeatherCache(store.city);
+    store.data = cached ? cached.data : null;
+    store.at = cached ? cached.at : 0;
+    render();
+    refresh(true);
   }
 
   function city() { return store.city; }
@@ -159,11 +250,16 @@
   function setCity(cityObj) {
     var c = normalizeCity(cityObj);
     if (!c) return false;
+    // 换城市：旧城市的缓存整块丢弃，再尝试载入新城市缓存
+    if (store.city && citySignature(store.city) !== citySignature(c)) dropWeatherCache();
     store.city = c;
     saveCity(c);
-    store.data = null;
-    store.at = 0;
-    refresh(true);
+    localizeCityLabel(c);
+    var cached = loadWeatherCache(c);
+    store.data = cached ? cached.data : null;
+    store.at = cached ? cached.at : 0;
+    if (store.enabled) refresh(true);
+    else render();
     return true;
   }
 
@@ -172,6 +268,7 @@
     saveCity(null);
     store.data = null;
     store.at = 0;
+    dropWeatherCache();
     return true;
   }
 
@@ -198,6 +295,7 @@
 
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
     var timer = controller ? setTimeout(function () { controller.abort(); }, 9000) : null;
+    if (controller) store.abort = controller;
 
     return fetch(url, {
       method: 'GET',
@@ -206,6 +304,7 @@
       signal: controller ? controller.signal : undefined
     }).then(function (res) {
       if (timer) clearTimeout(timer);
+      store.abort = null;
       if (!res.ok) throw new Error('http-' + res.status);
       return res.json();
     }).then(function (json) {
@@ -228,18 +327,23 @@
       };
     }).catch(function (err) {
       if (timer) clearTimeout(timer);
+      store.abort = null;
       throw err;
     });
   }
 
   function refresh(force) {
+    // 天气关闭时完全不联网：不请求、不写缓存
+    if (!store.enabled) { render(); return Promise.resolve(store.data); }
     if (store.pending) return store.pending;
     var now = Date.now();
+    // 缓存优先：先用已有数据立即渲染，再决定是否后台更新
+    render();
     if (!force && store.data && now - store.at < CACHE_MS) {
-      render();
       return Promise.resolve(store.data);
     }
 
+    var cityRef = store.city;
     var gen = store.gen;
     store.pending = resolvePosition()
       .then(fetchForecast)
@@ -247,12 +351,12 @@
         if (gen !== store.gen) return;
         store.data = data;
         store.at = Date.now();
+        saveWeatherCache(cityRef, data, store.at);
       })
       .catch(function () {
-        // 静默降级：清掉旧数据，保留用户选择的地点，不弹错误框
+        // 离线或失败：保留上一次有效缓存，不清空、不弹错误框；
+        // 从未成功拉取过时保持占位状态。
         if (gen !== store.gen) return;
-        store.data = null;
-        store.at = 0;
       })
       .then(function () {
         if (gen !== store.gen) return;
@@ -262,13 +366,18 @@
     return store.pending;
   }
 
-  // 清空数据 / 退出时调用：天气数据与所选地点一并丢弃，回到首次安装状态
+  // 清空数据 / 退出时调用：天气数据、离线缓存与所选地点一并丢弃
   function clearCache() {
     store.gen++;
     store.data = null;
     store.at = 0;
     store.pending = null;
     store.city = null;
+    dropWeatherCache();
+    try {
+      localStorage.removeItem(PLACE_ZH_KEY);
+      placeZhMemo = null;
+    } catch (err) { /* 忽略 */ }
     if (opts.meta && opts.meta.weatherCity) {
       delete opts.meta.weatherCity;
       if (opts.persist) opts.persist();
@@ -297,6 +406,12 @@
   }
 
   function paint(el, key) {
+    // 关闭天气：整块移除，不留占位、不撑高度
+    if (!store.enabled) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
     var today = todayKey();
     // 只显示选中日期当天：过去日期、超出预报范围时都不猜数据
     if (!key || key < today || key > forecastLastKey()) {
@@ -332,16 +447,25 @@
       ? '<span class="wx-place" title="' + esc(placeText) + '">' + esc(placeText) + '</span>'
       : '';
 
+    // 数据新鲜度：缓存优先时也能看出是哪次拉取的；超过 6 小时提示可能过期
+    var fresh = '';
+    if (store.at) {
+      var pulled = new Date(store.at);
+      var hhmm = pad2(pulled.getHours()) + ':' + pad2(pulled.getMinutes());
+      var stale = Date.now() - store.at > STALE_MS;
+      fresh = '<span class="wx-fresh' + (stale ? ' stale' : '') + '">' +
+        esc(T(stale ? '更新于 {time} · 可能已过期' : '更新于 {time}', { time: hhmm })) +
+      '</span>';
+    }
+
     el.innerHTML = '<div class="wx-now" title="' + esc(tip + (placeText ? ' · ' + placeText : '')) +
       '" aria-label="' + esc(tip) + '">' +
       '<span class="wx-now-main">' +
         '<span class="wx-big ' + ICON_TONE[entry[0]] + '">' + ICONS[entry[0]] + '</span>' +
-        '<span class="wx-now-meta">' +
-          '<span class="wx-temp">' + maxText + (minText ? '<i>/' + minText + '</i>' : '') + '</span>' +
-          '<span class="wx-text">' + esc(desc) + '</span>' +
-        '</span>' +
+        '<span class="wx-temp">' + maxText + (minText ? '<i>/' + minText + '</i>' : '') + '</span>' +
       '</span>' +
-      place +
+      '<span class="wx-text">' + esc(desc) + '</span>' +
+      place + fresh +
     '</div>';
   }
 
@@ -382,14 +506,46 @@
     return s.slice(0, 40);
   }
 
+  // Photon 用 Accept-Language 决定返回哪种语言的 name。WebView 自带的默认值
+  // 可能是 en-US，所以中文模式必须显式发 zh-CN，否则国内地名会回成英文/拼音。
+  // 注意不要用 lang=zh：演示服务器只收录 de/en/fr 与本地语言，lang=zh 会被
+  // 回落到服务端默认语言（英文），反而比不传更糟。
+  function photonLangHeader() {
+    return isEn() ? 'en' : 'zh-CN,zh;q=0.9,en;q=0.4';
+  }
+
+  function localizedNameOf(p, raw) {
+    if (isEn()) {
+      var en = p && (p['name:en'] || p['name:en-US']);
+      return cleanPlaceName(en || raw);
+    }
+    var zh = p && (p['name:zh'] || p['name:zh-Hans'] || p['name:zh-CN'] || p['name:zh-Hant']);
+    return cleanPlaceName(zh || raw);
+  }
+
   function cityOf(p) {
     // 只用真正的「市 / 镇 / 村 / 直辖市」字段；不要把省当城市，
     // 否则城市级结果的小字会显示成「浙江省」而不是「杭州市」。
-    return p.city || p.town || p.village || p.municipality || '';
+    return zhAdmin(p, 'city') || zhAdmin(p, 'town') || zhAdmin(p, 'village') || zhAdmin(p, 'municipality');
   }
 
   function districtOf(p) {
-    return p.district || p.city_district || p.county || p.borough || p.suburb || '';
+    return zhAdmin(p, 'district') || zhAdmin(p, 'city_district') || zhAdmin(p, 'county') ||
+      zhAdmin(p, 'borough') || zhAdmin(p, 'suburb');
+  }
+
+  // Photon 的 city / district 字段不一定跟着 Accept-Language 本地化。
+  // 中文界面下优先取同名字段的 :zh 变体；字段本身等于要素名时再用 name:zh。
+  function zhAdmin(p, key) {
+    var v = String(p[key] || '').trim();
+    if (!v || isEn()) return v;
+    var zh = p[key + ':zh'] || p[key + ':zh-Hans'] || p[key + ':zh-CN'] || p[key + ':zh-Hant'];
+    if (zh) return String(zh).trim();
+    if (v === String(p.name || '').trim()) {
+      var nameZh = p['name:zh'] || p['name:zh-Hans'] || p['name:zh-CN'] || p['name:zh-Hant'];
+      if (nameZh) return String(nameZh).trim();
+    }
+    return v;
   }
 
   function adminRegion(p, name) { // 省 · 市 · 区县，用于区分同名地点
@@ -426,6 +582,94 @@
     return parts.slice(0, 2).join(' · ');
   }
 
+  // Photon 偶尔仍返回英文/拼音的市名。中文界面下用 Open-Meteo 的
+  // language=zh 反查一次中文名并缓存；失败时保留原名，绝不显示空白。
+  var PLACE_ZH_KEY = 'light-schedule.cache.place-zh.v1';
+  var placeZhMemo = null;
+
+  function placeZhMap() {
+    if (placeZhMemo) return placeZhMemo;
+    try {
+      placeZhMemo = JSON.parse(localStorage.getItem(PLACE_ZH_KEY) || '{}') || {};
+    } catch (err) {
+      placeZhMemo = {};
+    }
+    return placeZhMemo;
+  }
+
+  function savePlaceZhMap() {
+    try {
+      var map = placeZhMap();
+      var keys = Object.keys(map);
+      if (keys.length > 120) {
+        keys.slice(0, keys.length - 120).forEach(function (k) { delete map[k]; });
+      }
+      localStorage.setItem(PLACE_ZH_KEY, JSON.stringify(map));
+    } catch (err) { /* 写入失败忽略 */ }
+  }
+
+  function translatePlaceName(raw) {
+    var s = String(raw || '').trim();
+    if (isEn() || !s || !/[A-Za-z]/.test(s) || /[\u4e00-\u9fa5]/.test(s)) {
+      return Promise.resolve(s);
+    }
+    var map = placeZhMap();
+    if (map[s]) return Promise.resolve(map[s]);
+
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 6000) : null;
+    var stop = function () { if (timer) clearTimeout(timer); };
+    var url = 'https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(s) +
+      '&count=1&language=zh&format=json';
+
+    return fetch(url, {
+      method: 'GET',
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      signal: controller ? controller.signal : undefined
+    }).then(function (res) {
+      stop();
+      if (!res.ok) throw new Error('http-' + res.status);
+      return res.json();
+    }).then(function (json) {
+      var hit = json && json.results && json.results[0];
+      var zh = hit && String(hit.name || '').trim();
+      if (zh && /[\u4e00-\u9fa5]/.test(zh)) {
+        map[s] = zh.slice(0, 24);
+        savePlaceZhMap();
+        return map[s];
+      }
+      return s;
+    }).catch(function () {
+      stop();
+      return s;
+    });
+  }
+
+  function localizeCityLabel(city) {
+    if (!city || isEn()) return;
+    var segs = String(city.label || city.name || '').split(' · ')
+      .map(function (s) { return s.trim(); })
+      .filter(Boolean).slice(0, 2);
+    if (!segs.length) return;
+    var needs = segs.some(function (s) {
+      return /[A-Za-z]/.test(s) && !/[\u4e00-\u9fa5]/.test(s);
+    });
+    if (!needs) return;
+
+    Promise.all(segs.map(function (s) {
+      return (/[A-Za-z]/.test(s) && !/[\u4e00-\u9fa5]/.test(s)) ? translatePlaceName(s) : Promise.resolve(s);
+    })).then(function (vals) {
+      if (!store.city || citySignature(store.city) !== citySignature(city)) return;
+      var label = vals.filter(Boolean).join(' · ');
+      if (!label || label === store.city.label) return;
+      if (segs[0] === city.name) city.name = vals[0] || city.name;
+      city.label = label;
+      saveCity(city);
+      render();
+    }).catch(function () { /* 翻译失败保留原名 */ });
+  }
+
   function photonSearch(q) {
     var url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) + '&limit=10';
     if (isEn()) url += '&lang=en';
@@ -440,6 +684,7 @@
       method: 'GET',
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
+      headers: { 'Accept': 'application/json', 'Accept-Language': photonLangHeader() },
       signal: controller ? controller.signal : undefined
     }).then(function (res) {
       stop();
@@ -452,7 +697,7 @@
       features.forEach(function (f) {
         var p = (f && f.properties) || {};
         var ll = (f && f.geometry && f.geometry.coordinates) || [];
-        var name = cleanPlaceName(p.name);
+        var name = localizedNameOf(p, p.name);
         var lat = Number(ll[1]);
         var lon = Number(ll[0]);
         if (!name || !isFinite(lat) || !isFinite(lon)) return;
@@ -479,6 +724,7 @@
   var SEARCH_PROVIDERS = [photonSearch];
 
   function search(query) {
+    if (!store.enabled) return Promise.resolve([]);
     var q = String(query || '').trim();
     if (q.length < 2) return Promise.resolve([]);
     // 按顺序尝试：某个来源没命中就换下一个，全部失败才把错误抛给调用方
@@ -509,7 +755,7 @@
 
   function photonMainName(p) {
     if (p.street) return p.street;
-    if (p.name && p.osm_value !== 'postcode') return p.name;
+    if (p.name && p.osm_value !== 'postcode') return localizedNameOf(p, p.name);
     return p.district || p.suburb || p.neighbourhood || p.city || p.town || p.village || '';
   }
 
@@ -551,7 +797,7 @@
       method: 'GET',
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
-      headers: { 'Accept': 'application/json', 'Accept-Language': isEn() ? 'en' : 'zh-CN' },
+      headers: { 'Accept': 'application/json', 'Accept-Language': photonLangHeader() },
       signal: controller ? controller.signal : undefined
     }).then(function (res) {
       stop();
@@ -568,6 +814,7 @@
   var ADDRESS_PROVIDERS = [photonAddressSearch];
 
   function searchAddress(query) {
+    if (!store.enabled) return Promise.resolve([]);
     var q = String(query || '').trim();
     if (q.length < 2) return Promise.resolve([]);
     function tryNext(i) {
@@ -585,6 +832,8 @@
 
   window.Weather = {
     configure: configure,
+    setEnabled: setEnabled,
+    isEnabled: function () { return store.enabled; },
     city: city,
     cityLabel: cityLabel,
     setCity: setCity,

@@ -2,7 +2,7 @@
   "name": "氢计划 · 日历待办计划",
   "short_name": "氢计划",
   "description": "氢计划（AeroPlan）：日历、日程、待办、行程表、天气和计划，数据只存在本机，无需账号。",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": "./index.html",
