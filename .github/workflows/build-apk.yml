@@ -10,6 +10,10 @@ jobs:
       contents: read
     env:
       CI: true
+      # 签名材料只从仓库 Secrets 读取，工作流运行结束后不保留 keystore 文件。
+      # 口令、别名不在这里直接声明：无论走 KEYSTORE_BUNDLE 还是旧的三项，
+      # 都由「还原签名文件」步骤解出后写入 GITHUB_ENV，后续步骤统一读取，
+      # 避免两种来源同名变量互相覆盖。
 
     steps:
       - name: 取回仓库文件
@@ -67,11 +71,68 @@ jobs:
             yes | "$SDKM" "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
           fi
 
-      - name: 检查签名文件
+      - name: 还原签名文件
+        env:
+          # 推荐：只配一个 KEYSTORE_BUNDLE（base64 的 JSON，含 keystore/password/alias）
+          KEYSTORE_BUNDLE: ${{ secrets.KEYSTORE_BUNDLE }}
+          # 兼容旧的三项 Secret
+          LEGACY_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          LEGACY_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          LEGACY_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          LEGACY_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          keytool -list -keystore keystore/light-schedule-release.keystore \
-            -storetype PKCS12 -storepass qingricheng
-          echo "签名文件可以正常读取"
+          mkdir -p keystore
+
+          if [ -n "$KEYSTORE_BUNDLE" ]; then
+            echo "使用单个 Secret：KEYSTORE_BUNDLE"
+            printf '%s' "$KEYSTORE_BUNDLE" | base64 -d > /tmp/keystore-bundle.json || {
+              echo "KEYSTORE_BUNDLE 不是合法的 base64，请整段重新复制（不要换行、不要带引号）"
+              exit 1
+            }
+            node -e 'const fs=require("fs");let b;try{b=JSON.parse(fs.readFileSync("/tmp/keystore-bundle.json","utf8"))}catch(e){console.error("KEYSTORE_BUNDLE 解码后不是合法 JSON");process.exit(1)}if(!b.keystore||!b.password||!b.alias){console.error("KEYSTORE_BUNDLE 缺少 keystore / password / alias 字段");process.exit(1)}'
+            KS_B64="$(node -p 'JSON.parse(require("fs").readFileSync("/tmp/keystore-bundle.json","utf8")).keystore')"
+            SIGN_PASS="$(node -p 'JSON.parse(require("fs").readFileSync("/tmp/keystore-bundle.json","utf8")).password')"
+            SIGN_ALIAS="$(node -p 'JSON.parse(require("fs").readFileSync("/tmp/keystore-bundle.json","utf8")).alias')"
+            SIGN_KEY_PASS="$(node -p 'JSON.parse(require("fs").readFileSync("/tmp/keystore-bundle.json","utf8")).keyPassword || JSON.parse(require("fs").readFileSync("/tmp/keystore-bundle.json","utf8")).password')"
+            rm -f /tmp/keystore-bundle.json
+            if [ -z "$KS_B64" ] || [ -z "$SIGN_PASS" ] || [ -z "$SIGN_ALIAS" ]; then
+              echo "KEYSTORE_BUNDLE 里有空字段：keystore / password / alias 都不能为空"
+              exit 1
+            fi
+            printf '%s' "$KS_B64" | base64 -d > keystore/release.keystore || {
+              echo "KEYSTORE_BUNDLE 里的 keystore 字段不是合法 base64"
+              exit 1
+            }
+          elif [ -n "$LEGACY_KEYSTORE_BASE64" ] && [ -n "$LEGACY_KEYSTORE_PASSWORD" ]; then
+            echo "使用旧的三项 Secret：KEYSTORE_BASE64 + KEYSTORE_PASSWORD + KEY_ALIAS"
+            SIGN_PASS="$LEGACY_KEYSTORE_PASSWORD"
+            SIGN_ALIAS="${LEGACY_KEY_ALIAS:-qingjihua}"
+            SIGN_KEY_PASS="${LEGACY_KEY_PASSWORD:-$LEGACY_KEYSTORE_PASSWORD}"
+            printf '%s' "$LEGACY_KEYSTORE_BASE64" | base64 -d > keystore/release.keystore || {
+              echo "KEYSTORE_BASE64 不是合法 base64"
+              exit 1
+            }
+          else
+            echo "缺少签名材料，构建已停止（不会产出未签名包）。"
+            echo "推荐做法：只添加一个 Secret，名称为 KEYSTORE_BUNDLE，值是 base64 的 {\"keystore\":\"...\",\"password\":\"...\",\"alias\":\"...\"}。"
+            echo "兼容做法：添加三项 KEYSTORE_BASE64、KEYSTORE_PASSWORD、KEY_ALIAS。"
+            echo "KEYSTORE_BUNDLE 优先；两者都没有时不会继续。"
+            exit 1
+          fi
+
+          # 后面的步骤通过 GITHUB_ENV 读取口令与别名，prepare-android.mjs 无需改动
+          {
+            echo "KEYSTORE_PASSWORD=$SIGN_PASS"
+            echo "KEY_ALIAS=$SIGN_ALIAS"
+            echo "KEY_PASSWORD=$SIGN_KEY_PASS"
+          } >> "$GITHUB_ENV"
+
+          keytool -list -keystore keystore/release.keystore \
+            -storetype PKCS12 -storepass "$SIGN_PASS" > /dev/null || {
+            echo "签名文件能读出，但口令不对（keytool 校验失败）"
+            exit 1
+          }
+          echo "签名文件已还原并通过 keytool 校验（base64 解码后的临时 JSON 已删除）"
 
       - name: 安装打包依赖
         run: npm install --no-audit --no-fund
@@ -94,18 +155,50 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
 
+      - name: 校验合并后的权限（确认没有定位）
+        run: |
+          MANIFEST=$(find android/app/build/intermediates -name AndroidManifest.xml -path '*merged*release*' | head -n 1)
+          if [ -z "$MANIFEST" ]; then
+            echo "没有找到合并后的清单，跳过权限校验"
+            exit 0
+          fi
+          echo "合并后的清单：$MANIFEST"
+          echo "--- 清单里实际声明的权限 ---"
+          grep -o 'android.permission.[A-Z_]*' "$MANIFEST" | sort -u
+          if grep -q 'ACCESS_FINE_LOCATION\|ACCESS_COARSE_LOCATION' "$MANIFEST"; then
+            echo "发现定位权限，构建失败"
+            exit 1
+          fi
+          echo "已确认：清单里没有任何定位权限"
+
+      - name: 输出官方签名指纹
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          if [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "没有读到签名口令（上一步未写入 GITHUB_ENV），跳过证书指纹输出"
+            exit 1
+          fi
+          echo "--- 证书 SHA-256 ---"
+          keytool -list -v -keystore keystore/release.keystore \
+            -storetype PKCS12 -storepass "$KEYSTORE_PASSWORD" | grep -i 'SHA256:' || true
+          echo "--- APK 实际签名（与此前一致才可覆盖安装）---"
+          APKSIGNER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner -type f | sort | tail -n 1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs "$APK" || true
+          fi
+
       - name: 整理产物
         run: |
           mkdir -p dist
           VERSION=$(node -p "require('./package.json').version")
           echo "package.json 里的版本号是：$VERSION"
-          cp android/app/build/outputs/apk/release/app-release.apk "dist/light-schedule-${VERSION}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/qingjihua-${VERSION}.apk"
           ls -l dist
 
       - name: 上传 APK（在运行页面底部下载）
         uses: actions/upload-artifact@v7
         with:
-          name: light-schedule-apk
+          name: qingjihua-apk
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
