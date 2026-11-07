@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#4C6FFF">
-  <meta name="aeroplan-build" content="dev">
+
   <meta name="description" content="氢计划（AeroPlan）：日历、日程、待办、行程表与周月年计划，数据只存在本机，无需账号。">
   <title>氢计划</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=41">
+  <link rel="stylesheet" href="./styles.css?v=42">
 </head>
 <body>
   <div class="phone">
@@ -266,7 +266,7 @@
           <div class="chip-flow cat-chip-flow" id="categoryChips"></div>
 
           <div class="chip-editor" id="remindEditor" hidden>
-            <input class="inline-number" id="remindMinutes" type="number" min="1" max="1440" step="1" inputmode="numeric" placeholder="提前多少分钟">
+            <input class="inline-number" id="remindMinutes" type="number" min="1" max="10080" step="1" inputmode="numeric" placeholder="提前多少分钟">
             <span class="chip-editor-unit">分钟前</span>
             <button class="chip-editor-ok" id="remindApply" type="button">确定</button>
             <button class="chip-editor-clear" id="remindClear" type="button">不提醒</button>
@@ -368,7 +368,7 @@
           <div class="chip-flow cat-chip-flow" id="planCategoryChips"></div>
 
           <div class="chip-editor" id="planRemindEditor" hidden>
-            <input class="inline-number" id="planRemindInput" type="number" min="1" max="1440" step="1" inputmode="numeric" placeholder="提前多少分钟">
+            <input class="inline-number" id="planRemindInput" type="number" min="1" max="10080" step="1" inputmode="numeric" placeholder="提前多少分钟">
             <span class="chip-editor-unit">分钟前</span>
             <button class="chip-editor-ok" id="planRemindApply" type="button">确定</button>
             <button class="chip-editor-clear" id="planRemindClear" type="button">不提醒</button>
@@ -742,7 +742,6 @@
 
           <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
           <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.9.1</div>
-          <div class="settings-version" id="settingsBuildStamp">构建标识：dev</div>
         </div>
       </div>
 
@@ -763,12 +762,6 @@
           </section>
 
           <section class="about-group">
-            <h3>构建标识</h3>
-            <p id="aboutBuildStamp">dev</p>
-            <p>用于核对安装包是否为最新构建：格式为「构建时间 · CI 流水号 · 短 commit」。</p>
-          </section>
-
-          <section class="about-group">
             <h3>数据存放</h3>
             <p>条目、计划、分类、日记、偏好与同意记录只保存在本机：优先 IndexedDB，不可用时退回 localStorage。没有服务器副本。</p>
             <p>日记里的图片与文件只存进本应用自己的 IndexedDB，不写入相册、不申请存储权限、不联网、不做云端同步。IndexedDB 不可用时，日记文字仍可保存，附件功能会提示「当前环境不支持附件」。</p>
@@ -786,8 +779,10 @@
             <h3>权限与系统限制</h3>
             <p>通知：用于到点提醒；拒绝后仍可使用，但收不到提醒。</p>
             <p>闹钟与提醒（Android 12/12L）：用于准时触发；Android 13 及以上由系统自动授予，没有单独开关。</p>
+            <p>日历（可选，默认关闭）：只有你在「权限管理」里打开「同时写入系统日历」后才会申请读写权限。开启后，带提醒的条目写入专用日历「AeroPlan 提醒」，提醒由系统日历负责，不联网；关闭开关会清空该专用日历里由本应用写入的事件，不会改动你原有的任何日历。</p>
             <p>振动：用于轻触反馈，可随时关闭。本版本不申请存储与定位权限：备份经系统保存/分享面板完成，导入由你手动选择文件。</p>
-            <p>国产系统的自启动、后台清理与省电策略可能拦截提醒；需要时请在系统设置里允许本应用自启动/后台运行，并把省电策略设为「不限制」。重要事项请同时在系统闹钟里设一次提醒。</p>
+            <p>国产系统的自启动、后台清理与省电策略可能拦截提醒；需要时请在系统设置里允许本应用自启动/后台运行，并把省电策略设为「不限制」。应用无法把自己加入这些白名单，只能由你手动开启。重要事项请同时在系统闹钟里设一次提醒。</p>
+            <p>系统日历和本地通知用的是同一套 AlarmManager。区别在于系统日历是系统应用、在系统白名单里，不受省电与自启动策略限制，所以更可靠；它并不是用了特殊的推送通道。</p>
           </section>
 
           <section class="about-group">
@@ -872,35 +867,98 @@
               <span class="perm-item-name">通知与提醒</span>
               <b class="perm-badge" id="permNotifyState">检测中…</b>
             </div>
-            <p class="perm-item-text">提醒由系统排程，关掉应用或锁屏后也会按时通知。权限、通知渠道、精确闹钟与排程数量可以在下面自查。</p>
+            <p class="perm-item-text">提醒由系统排程，关掉应用或锁屏后也会按时通知。权限、通知渠道、精确闹钟与排程数量可以在「通知自查」里逐项查看。</p>
             <button class="secondary-btn perm-item-btn" id="permAllow" type="button">允许通知</button>
             <div class="perm-denied" id="permDenied" hidden>
               <p>系统拒绝了通知权限。可以打开手机「设置 → 应用 → 氢计划 → 通知」把通知打开，再回到这里点下面的按钮重新检查。</p>
             </div>
           </div>
+          <button class="row-btn perm-selfcheck-btn" id="notifySelfCheckBtn" type="button">
+            <span>通知自查</span>
+            <b id="notifySelfCheckState">权限、渠道与排程</b>
+            <span class="row-arrow">›</span>
+          </button>
+
+          <div class="perm-item">
+            <div class="perm-item-head">
+              <span class="perm-item-name">同时写入系统日历</span>
+              <label class="perm-switch">
+                <input type="checkbox" id="calendarSyncToggle">
+                <span class="perm-switch-track"></span>
+              </label>
+            </div>
+            <p class="perm-item-text">开启后，带提醒的日程/待办会写入专用日历「AeroPlan 提醒」，由系统日历负责提醒，更不容易被后台策略拦住。默认关闭。</p>
+            <p class="perm-calendar-state" id="calendarSyncState" hidden></p>
+          </div>
         </div>
 
-        <p class="perm-note" id="permNote">重要事项请同时在系统闹钟里设一次；部分系统会限制后台运行，下面自查能帮你判断是哪一环断了。</p>
+        <p class="perm-note" id="permNote">重要事项请同时在系统闹钟里设一次；部分系统会限制后台运行。</p>
 
-        <div class="notify-diag" id="notifyDiag" hidden></div>
         <p class="perm-request-hint" id="newPackageHint" hidden></p>
-        <p class="perm-request-hint" id="permRequestHint" hidden></p>
-        <div class="notify-diag-actions">
-          <button class="secondary-btn" id="permRequest" type="button">申请通知权限</button>
-          <button class="text-btn" id="notifyDiagRefresh" type="button">刷新自查</button>
-        </div>
 
         <div class="perm-actions">
           <button class="primary-btn" id="permLater" type="button">开始使用</button>
-          <button class="text-btn" id="permRecheck" type="button">重新检查</button>
+        </div>
+      </div>
+
+      <!-- 通知自查：从「权限管理」进入的独立整页，内容多时正常纵向滚动 -->
+      <div class="notify-diag-page" id="notifyDiagPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="notifyDiagClose" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5.5 8.5 12 15 18.5"/></svg>
+          </button>
+          <h2>通知自查</h2>
+        </header>
+        <div class="settings-body notify-diag-body">
+          <p class="diag-lead">这里列出权限原始返回值、通知渠道、全部条目的提醒存储值与本轮排程结果。权限已允许、渠道已创建、排程数大于 0 仍不响时，多半是系统后台限制。</p>
+          <p class="diag-refresh-state" id="notifyDiagStatus" hidden></p>
+          <p class="perm-request-hint" id="permRequestHint" hidden></p>
+          <div class="notify-diag" id="notifyDiag" hidden></div>
+          <div class="notify-diag-actions">
+            <button class="secondary-btn" id="permRequest" type="button">申请通知权限</button>
+            <button class="text-btn" id="notifyDiagRefresh" type="button">刷新自查</button>
+          </div>
+
+          <div class="diag-selftest">
+            <h3>十秒自检</h3>
+            <p>点一次按钮：用与正式提醒完全相同的参数排一条 10 秒后的通知，并实时记录监听事件、系统队列、已送达列表与当前是否在前台。</p>
+            <button class="secondary-btn" id="notifySelfTestBtn" type="button">开始十秒自检</button>
+            <div class="diag-selftest-log" id="notifySelfTestLog" hidden></div>
+            <div class="diag-criteria">
+              <p><b>怎么判读：</b></p>
+              <p>① 收到事件 + 已送达有记录 + 屏幕无横幅 → 投递成功但被系统拦截显示（渠道/横幅/勿扰）。</p>
+              <p>② 收到事件 + 已送达为空 → 投递失败，重点查小图标与提示音。</p>
+              <p>③ 未收到事件 + 队列在等待后被清空 → 闹钟被系统吞掉（后台策略）。</p>
+              <p>④ 未收到事件 + 队列里仍有该条 → 排程未生效。</p>
+            </div>
+          </div>
+
+          <div class="diag-native">
+            <h3>原生通道</h3>
+            <p>这条通道不经过 Capacitor 插件：由 App 内的 AlarmManager 直接排程、广播接收后自己发通知。</p>
+            <div class="diag-native-body" id="nativeDiag">
+              <p class="diag-empty">检测中…</p>
+            </div>
+            <button class="secondary-btn" id="nativeTestBtn" type="button">测试原生通道（10 秒）</button>
+            <div class="diag-selftest-log" id="nativeTestLog" hidden></div>
+            <p class="diag-hint">若原生通道也收不到，问题必然在系统层（省电、后台限制或 ROM 拦截），不在应用代码。</p>
+          </div>
+
+          <div class="diag-bg-guide">
+            <h3>后台限制自查与引导</h3>
+            <p class="diag-bg-device" id="bgGuideDevice">读取设备信息…</p>
+            <div class="diag-bg-steps" id="bgGuide"></div>
+            <button class="secondary-btn" id="bgGuideSettingsBtn" type="button">去设置</button>
+            <p class="diag-hint">应用无法把自己加入系统自启动/省电白名单，只能按上面的路径手动开启。开启「同时写入系统日历」后，这条路径不依赖上述白名单，可作为兜底。</p>
+          </div>
         </div>
       </div>
 
     </div>
   </div>
-  <script src="./i18n.js?v=41"></script>
-  <script src="./regions.js?v=41"></script>
-  <script src="./weather.js?v=41"></script>
-  <script src="./app.js?v=41"></script>
+  <script src="./i18n.js?v=42"></script>
+  <script src="./regions.js?v=42"></script>
+  <script src="./weather.js?v=42"></script>
+  <script src="./app.js?v=42"></script>
 </body>
 </html>

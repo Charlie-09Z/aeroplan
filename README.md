@@ -39,6 +39,17 @@
 - `USE_EXACT_ALARM`（Android 13+ 精确闹钟，系统自动授予、没有单独开关）
 - `RECEIVE_BOOT_COMPLETED`（重启后由本地通知插件恢复已排程的提醒）
 - `VIBRATE`（滚轮触觉反馈）
+- `USE_FULL_SCREEN_INTENT`（原生提醒通道在锁屏时的全屏意图，系统不支持时自动忽略）
+- `READ_CALENDAR` / `WRITE_CALENDAR`（可选的「同时写入系统日历」，只在用户打开开关时申请）
+
+**原生提醒通道**：`prepare-android.mjs` 会额外生成四个类，完全不经过 Capacitor 插件——
+
+- `AeroNativeBridge`：通过 `addJavascriptInterface` 暴露为 `window.AeroNativeReminders`，提供 `schedule(json)` / `cancelAll()` / `listScheduled()` / `postTest(seconds)` / `getDiagnostics()`；排程数据写入 `SharedPreferences`。
+- `AeroReminderReceiver`：`AlarmManager.setExactAndAllowWhileIdle`（`RTC_WAKEUP`）到点后直接 `NotificationCompat` 发通知，渠道 `aeroplan-native-v1`（重要性 HIGH、系统默认提示音、锁屏公开），小图标优先 `ic_stat_icon`、找不到退回 `android.R.drawable.ic_dialog_info`。
+- `AeroReminderBootReceiver`：监听 `BOOT_COMPLETED` / `LOCKED_BOOT_COMPLETED` / `MY_PACKAGE_REPLACED`，从 `SharedPreferences` 重排。
+- `AeroCalendarPlugin`：可选的系统日历通道，专用日历「AeroPlan 提醒」（`ACCOUNT_TYPE_LOCAL`），方法 `ensureCalendar` / `upsertEvent` / `deleteEvent` / `clearCalendar` / `checkCalendarPermission` / `requestCalendarPermission` / `openAppSettings` / `deviceInfo`。
+
+网页侧优先调用原生桥，桥不存在时才回落到 `LocalNotifications` 插件或页面计时器。构建末端的 `build-apk.yml` 会在 APK 的 dex 里断言这四个类都存在，并校验清单里已声明两个接收器。
 
 **本版本不再声明 `READ_EXTERNAL_STORAGE` / `WRITE_EXTERNAL_STORAGE`**：备份经系统保存或分享面板写出，导入由用户手动选择文件，全部走应用缓存目录，不需要任何存储权限。
 
@@ -60,9 +71,8 @@
 
 产物文件名固定为 `AeroPlan.apk`（不带版本号），版本号由 `versionName` / `versionCode` 体现。
 
-### 构建标识与升级安装
+### 升级安装
 
-- 每次构建会把「构建时间 · CI 流水号 · 短 commit」写进网页，在「设置 → 关于 → 构建标识」可核对装的是不是最新包。
 - 包名是 `com.aeroplan.app`。**升级必须覆盖同一个包名**；若手机上装过旧包名（如 `com.qingricheng.app`）的版本，需要先卸载旧版再装，否则两个图标并存、数据互不相通。
 - 包名变更等于另一个应用：旧版数据不会继承。请先在旧版「设置 → 备份数据」导出，再在新版「恢复数据」导入。
 - 已创建的旧通知渠道、旧 Service Worker 缓存与旧签名指纹均会作废，属预期行为。

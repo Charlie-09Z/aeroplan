@@ -29,21 +29,9 @@ function read(name) {
   return fs.readFileSync(path.join(root, name), 'utf8');
 }
 
-// ---------- 构建标识 ----------
-// 用户能一眼核对装的是不是最新包：时间 + CI 流水号 + 短 commit。
-// 写进 index.html 的 meta，随「先走网络」的导航一起更新，不受 Service Worker 静态缓存影响。
-const buildTime = (process.env.BUILD_TIME || new Date().toISOString()).replace('T', ' ').slice(0, 16);
-const buildRun = process.env.GITHUB_RUN_NUMBER ? '#' + process.env.GITHUB_RUN_NUMBER : '';
-const buildSha = (process.env.GITHUB_SHA || '').slice(0, 7);
-const BUILD_STAMP = [buildTime, buildRun, buildSha].filter(Boolean).join(' · ') || 'dev';
-
 // ---------- HTML ----------
 const htmlSource = read('index.html');
-if (!/name="aeroplan-build"/.test(htmlSource)) {
-  console.error('index.html 缺少 <meta name="aeroplan-build"> 占位，构建标识无法写入');
-  process.exit(1);
-}
-const html = await minifyHtml(htmlSource.replace(/<meta name="aeroplan-build"[^>]*>/, '<meta name="aeroplan-build" content="' + BUILD_STAMP + '">'), {
+const html = await minifyHtml(htmlSource, {
   collapseWhitespace: true,
   conservativeCollapse: true,
   removeComments: true,
@@ -54,7 +42,6 @@ const html = await minifyHtml(htmlSource.replace(/<meta name="aeroplan-build"[^>
   minifyJS: false
 });
 fs.writeFileSync(path.join(www, 'index.html'), html);
-console.log('构建标识：' + BUILD_STAMP);
 
 // ---------- CSS ----------
 const cssResult = new CleanCSS({ level: 1 }).minify(read('styles.css'));

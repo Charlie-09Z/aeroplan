@@ -4454,10 +4454,63 @@ html[lang="en"] .splash-sub {
 .perm-badge.danger { background: var(--danger-soft); color: var(--danger); }
 .perm-item-text { margin: 0 0 9px; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
 .perm-item-btn { width: 100%; height: 36px; font-size: 13px; }
+/* 「通知自查」入口：与上面权限卡片同色，整行可点 */
+.perm-selfcheck-btn {
+  min-height: 48px;
+  padding: 0 13px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-size: 14px;
+}
+.perm-selfcheck-btn > b { font-size: 12px; font-weight: 500; color: var(--muted); }
+/* 系统日历开关 */
+.perm-switch { position: relative; flex: 0 0 auto; width: 44px; height: 26px; display: inline-block; }
+.perm-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; z-index: 2; }
+.perm-switch-track { position: absolute; inset: 0; border-radius: 13px; background: var(--line); transition: background .18s; }
+.perm-switch-track::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .18s; }
+.perm-switch input:checked + .perm-switch-track { background: var(--accent); }
+.perm-switch input:checked + .perm-switch-track::after { transform: translateX(18px); }
+.perm-calendar-state { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.perm-calendar-state.error { color: var(--danger); }
 .perm-actions { display: flex; flex-direction: column; gap: 6px; }
 .perm-actions .text-btn { height: 40px; }
 .perm-denied { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
 .perm-denied p { margin: 0 0 4px; font-size: 12.5px; line-height: 1.65; color: var(--danger); }
+
+/* ---------- 通知自查（权限管理 → 通知自查） ---------- */
+/* 整页盖在权限引导（--z-perm = 71）之上，自带滚动，不缩放、不影响下层编辑状态 */
+.notify-diag-page {
+  position: fixed;
+  inset: 0;
+  left: 50%;
+  right: auto;
+  z-index: calc(var(--z-perm) + 1);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 408px;
+  background: var(--bg);
+  transform: translateX(-50%);
+}
+.notify-diag-body { padding-top: 2px; }
+.diag-lead { margin: 0 0 12px; font-size: 12.5px; line-height: 1.65; color: var(--muted); }
+.diag-refresh-state { margin: 0 0 12px; font-size: 12.5px; line-height: 1.65; color: var(--muted); }
+.diag-refresh-state.error { color: var(--danger); }
+.notify-diag-actions .text-btn.busy,
+.notify-diag-actions .secondary-btn.busy { opacity: .6; pointer-events: none; }
+.notify-diag-body .notify-diag { margin: 0 0 14px; }
+.notify-diag-body .notify-diag-actions { padding-bottom: 10px; }
+/* 十秒自检 */
+.diag-selftest { margin: 6px 0 4px; padding: 12px 13px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); }
+.diag-selftest h3 { margin: 0 0 6px; font-size: 14px; }
+.diag-selftest > p { margin: 0 0 10px; font-size: 12px; line-height: 1.65; color: var(--muted); }
+.diag-selftest .secondary-btn { width: 100%; height: 38px; font-size: 13px; }
+.diag-selftest-log { margin-top: 10px; padding: 9px 10px; border-radius: 10px; background: var(--bg); font-size: 11.5px; line-height: 1.75; max-height: 260px; overflow-y: auto; }
+.diag-selftest-log div { font-variant-numeric: tabular-nums; }
+.diag-criteria { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.diag-criteria p { margin: 0 0 4px; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+.diag-criteria b { color: var(--text); }
 
 /* ---------- 语言切换 ---------- */
 .lang-setting { min-height: 46px; }
@@ -4986,6 +5039,39 @@ html.dark .row-time { color: #A9B1C4; }
   color: var(--muted);
 }
 
+/* 原生通道区块 */
+.diag-native,
+.diag-bg-guide {
+  margin: 6px 0 4px;
+  padding: 12px 13px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+.diag-native h3,
+.diag-bg-guide h3 { margin: 0 0 6px; font-size: 14px; }
+.diag-native > p,
+.diag-bg-guide > p { margin: 0 0 10px; font-size: 12px; line-height: 1.65; color: var(--muted); }
+.diag-native-body { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.diag-native .secondary-btn,
+.diag-bg-guide .secondary-btn { width: 100%; height: 38px; font-size: 13px; }
+.diag-empty { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.diag-bg-device { font-variant-numeric: tabular-nums; }
+.diag-bg-steps { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.diag-copy {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+  word-break: break-word;
+}
+
 /* 提醒实例表：横向可滚动，避免 8 列把面板撑破 */
 .diag-sub {
   margin: 12px 0 6px;
@@ -5040,9 +5126,10 @@ html.dark .row-time { color: #A9B1C4; }
   font-size: 10px;
 }
 
-.diag-table tr.diag-ok td:nth-child(6) { color: var(--green); }
-.diag-table tr.diag-skip td:nth-child(6) { color: var(--muted); }
-.diag-table tr.diag-fail td:nth-child(6) { color: var(--danger); }
+/* 排程结果表现在是 9 列，状态在「是否已排程」这一列（第 7 列） */
+.diag-table:not(.diag-raw) tr.diag-ok td:nth-child(7) { color: var(--green); }
+.diag-table:not(.diag-raw) tr.diag-skip td:nth-child(7) { color: var(--muted); }
+.diag-table:not(.diag-raw) tr.diag-fail td:nth-child(7) { color: var(--danger); }
 
 /* 「全部条目存储原值」表是 7 列，判定结果在最后一列 */
 .diag-table.diag-raw tr.diag-ok td:last-child { color: var(--green); }

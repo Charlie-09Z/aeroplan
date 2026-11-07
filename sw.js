@@ -1,15 +1,15 @@
 /* 氢计划 Service Worker：只缓存 app shell，让断网时也能打开。
    上传到 https 网址后，手机浏览器访问时会自动启用离线缓存。 */
 
-const CACHE_NAME = 'aeroplan-v41';
+const CACHE_NAME = 'aeroplan-v42';
 
 const ASSETS = [
   './index.html',
-  './styles.css?v=41',
-  './i18n.js?v=41',
-  './regions.js?v=41',
-  './weather.js?v=41',
-  './app.js?v=41',
+  './styles.css?v=42',
+  './i18n.js?v=42',
+  './regions.js?v=42',
+  './weather.js?v=42',
+  './app.js?v=42',
   './fonts/zcool-xiaowei-subset.woff2',
   './fonts/cormorant-garamond-subset.woff2',
   './manifest.webmanifest',

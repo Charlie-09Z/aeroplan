@@ -895,7 +895,7 @@
     const completions = normalizeCompletions(raw.completions);
     const remindRaw = Number(raw.remindBefore);
     const remindBefore = isFinite(remindRaw) && Math.round(remindRaw) === remindRaw &&
-      remindRaw >= 1 && remindRaw <= 1440 ? remindRaw : null;
+      remindRaw >= 1 && remindRaw <= 10080 ? remindRaw : null;
     return {
       id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
       type: type,
@@ -1012,7 +1012,7 @@
     const time = /^\d{2}:\d{2}$/.test(String(raw.time || '')) ? String(raw.time) : null;
     const remindRaw = Number(raw.remindBefore);
     const remindBefore = isFinite(remindRaw) && Math.round(remindRaw) === remindRaw &&
-      remindRaw >= 1 && remindRaw <= 1440 ? remindRaw : null;
+      remindRaw >= 1 && remindRaw <= 10080 ? remindRaw : null;
     return {
       id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
       kind: kind,
@@ -2069,8 +2069,10 @@
     if (!month || !year) return;
 
     const MIN_MOVE = 8;
-    const PINCH_IN = 1.18;   // 两指张开 18% 才进入年历，避免误触
-    const PINCH_OUT = 0.84;  // 在年历里捏合到 84% 才回到月历
+    // 方向按「两指间距相对初始值」判断：
+    // 月历里往内捏（缩到 82%）→ 年历；年历里往外拉（放大到 118%）→ 月历。
+    const PINCH_IN = 0.82;
+    const PINCH_OUT = 1.18;
     let startDist = 0;
     let pinching = false;
 
@@ -2078,6 +2080,53 @@
       const dx = touches[0].clientX - touches[1].clientX;
       const dy = touches[0].clientY - touches[1].clientY;
       return Math.hypot(dx, dy);
+    }
+
+    function resetEl(el) {
+      el.style.transition = '';
+      el.style.transform = '';
+      el.style.transformOrigin = '';
+      el.style.opacity = '';
+    }
+
+    // 跟手反馈：捏合过程中月历按比例缩小（方向与手势一致，不突然跳变）
+    function scaleMonth(ratio) {
+      const r = Math.max(PINCH_IN, Math.min(1, ratio));
+      month.style.transition = 'none';
+      month.style.transformOrigin = '50% 22%';
+      month.style.transform = 'scale(' + r.toFixed(3) + ')';
+      month.style.opacity = String(0.5 + ((r - PINCH_IN) / (1 - PINCH_IN)) * 0.5);
+    }
+
+    function animateOpenYear() {
+      openYearView();
+      // 年历从略小的尺寸展开，和「往里捏把月历收成小格」的方向衔接
+      year.style.transition = 'none';
+      year.style.transform = 'scale(.9)';
+      year.style.opacity = '0';
+      requestAnimationFrame(function () {
+        year.style.transition = 'transform .18s ease-out, opacity .18s ease-out';
+        year.style.transform = 'scale(1)';
+        year.style.opacity = '1';
+      });
+    }
+
+    function animateCloseYear() {
+      year.style.transition = 'transform .16s ease-in, opacity .16s ease-in';
+      year.style.transform = 'scale(1.06)';
+      year.style.opacity = '0';
+      setTimeout(function () {
+        closeYearView();
+        resetEl(year);
+        // 月历从稍小的尺寸回到正常，对应「往外拉放大」
+        month.style.transition = 'transform .16s ease-out, opacity .16s ease-out';
+        month.style.transform = 'scale(.92)';
+        month.style.opacity = '1';
+        requestAnimationFrame(function () {
+          month.style.transform = 'scale(1)';
+        });
+        setTimeout(function () { resetEl(month); }, 170);
+      }, 150);
     }
 
     function onStart(e) {
@@ -2090,14 +2139,25 @@
     function onMove(e) {
       if (e.touches.length !== 2 || !startDist) return;
       const ratio = distance(e.touches) / startDist;
-      if (!pinching && ratio >= PINCH_IN && !state.yearView) {
-        pinching = true;
-        openYearView();
+
+      if (!state.yearView) {
+        if (ratio < 1) scaleMonth(ratio);
+        if (!pinching && ratio <= PINCH_IN) {
+          pinching = true;
+          resetEl(month);
+          animateOpenYear();
+        }
         return;
       }
-      if (!pinching && ratio <= PINCH_OUT && state.yearView) {
+
+      if (ratio > 1) {
+        year.style.transition = 'none';
+        year.style.transformOrigin = '50% 50%';
+        year.style.transform = 'scale(' + Math.min(PINCH_OUT, ratio).toFixed(3) + ')';
+      }
+      if (!pinching && ratio >= PINCH_OUT) {
         pinching = true;
-        closeYearView();
+        animateCloseYear();
       }
     }
 
@@ -2106,6 +2166,14 @@
         startDist = 0;
         pinching = false;
         state.pinchActive = false;
+        if (!state.yearView) {
+          // 没到阈值就松手：还原缩放
+          resetEl(month);
+        } else {
+          year.style.transition = 'transform .16s ease-out';
+          year.style.transform = 'scale(1)';
+          setTimeout(function () { if (state.yearView) resetEl(year); }, 170);
+        }
       }
     }
 
@@ -2457,6 +2525,10 @@
 
     const MIN_MOVE = 7;           // 判定方向的位移（越小越跟手）
     const VELOCITY = 0.18;        // px/ms，轻轻快扫也能翻页
+    // 翻月动画压到 70 + 80 = 150ms：动画结束立刻解锁，快速连划能顺畅接上。
+    // 一次手势只翻一个月靠的是「方向锁 + 位移阈值」，而不是长时间冷却。
+    const ANIM_OUT = 70;
+    const ANIM_IN = 80;
 
     let pid = null;
     let active = false;
@@ -2480,13 +2552,13 @@
 
     function springBack() {
       animating = true;
-      grid.style.transition = 'transform .24s cubic-bezier(.22,.61,.36,1)';
+      grid.style.transition = 'transform .16s cubic-bezier(.22,.61,.36,1)';
       grid.style.transform = 'translate3d(0,0,0)';
       setTimeout(function () {
         grid.style.transition = '';
         grid.style.transform = '';
         animating = false;
-      }, 250);
+      }, 170);
     }
 
     function release(pointerId) {
@@ -2516,7 +2588,7 @@
       // 当前月份跟手滑出，再从另一侧滑入新月份
       haptic(8);
       animating = true;
-      grid.style.transition = 'transform .24s cubic-bezier(.22,.61,.36,1)';
+      grid.style.transition = 'transform ' + ANIM_OUT + 'ms cubic-bezier(.2,.7,.3,1)';
       grid.style.transform = 'translate3d(' + (-dir * w) + 'px,0,0)';
 
       setTimeout(function () {
@@ -2531,16 +2603,16 @@
         grid.style.transform = 'translate3d(' + (dir * w) + 'px,0,0)';
         requestAnimationFrame(function () {
           requestAnimationFrame(function () {
-            grid.style.transition = 'transform .26s cubic-bezier(.22,.61,.36,1)';
+            grid.style.transition = 'transform ' + ANIM_IN + 'ms cubic-bezier(.2,.7,.3,1)';
             grid.style.transform = 'translate3d(0,0,0)';
             setTimeout(function () {
               grid.style.transition = '';
               grid.style.transform = '';
               animating = false;
-            }, 280);
+            }, ANIM_IN);
           });
         });
-      }, 240);
+      }, ANIM_OUT);
     }
 
     grid.addEventListener('pointerdown', function (e) {
@@ -2653,6 +2725,7 @@
     await persistItems();
     renderAll();
     scheduleReminders();
+    if (calendarSyncEnabled()) syncCalendarEvents();
     showToast(T('已删除'), 1200);
   }
 
@@ -5496,6 +5569,41 @@
     }, 300);
   }
 
+  // 保存后立即排程，并把结果直接推到操作现场：
+  // 「已排程 1 条提醒 · 2026-11-07 20:20 触发」或「排程失败：<原因>」。
+  function scheduleAfterSave(item) {
+    if (typeof item.remindBefore !== 'number') {
+      scheduleReminders();
+      return;
+    }
+    const beforeLog = Array.isArray(state.meta.reminderLog) ? state.meta.reminderLog.length : 0;
+    const beforeIds = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.join(',') : '';
+
+    scheduleReminders({
+      done: function (s) {
+        if (s.scheduled > 0) {
+          showToast(T('已排程 {n} 条提醒').replace('{n}', s.scheduled) +
+            (s.firstFire ? ' · ' + s.firstFire + T(' 触发') : ''));
+        } else if (s.error || s.failReason) {
+          showToast(T('排程失败：{r}').replace('{r}', s.error || s.failReason));
+        } else if (s.skipReason) {
+          showToast(T('未排程：{r}').replace('{r}', s.skipReason));
+        } else {
+          showToast(T('没有可排程的提醒实例'));
+        }
+      }
+    });
+
+    // 兜底：2 秒内既没有新增日志、排程 id 也没变化 → 明确提示「排程未生效」
+    setTimeout(function () {
+      const logNow = Array.isArray(state.meta.reminderLog) ? state.meta.reminderLog.length : 0;
+      const idsNow = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.join(',') : '';
+      if (logNow === beforeLog && idsNow === beforeIds) {
+        showToast(T('排程未生效：2 秒内没有新增排程记录，请打开「权限管理 → 通知自查」查看原因'));
+      }
+    }, 2000);
+  }
+
   async function saveItem() {
     if (state.saving) return;
     const title = $('#itemTitle').value.trim();
@@ -5505,14 +5613,18 @@
     }
 
     const date = /^\d{4}-\d{2}-\d{2}$/.test(draft.date) ? draft.date : todayKey();
-    // 用户可能已经输入分钟数、但没点「确定」就直接保存：这里兜底提交，
-    // 否则 remindBefore 仍是 null，界面看着有值而提醒永远不会排程。
-    if ($('#remindEditor') && !$('#remindEditor').hidden) {
-      const pendingRemind = remindEditorValue();
-      if (pendingRemind !== null) {
-        draft.remindBefore = pendingRemind;
-        syncRemindChip();
-      }
+    // 兜底：无论提醒编辑条是否收起，都以输入框里的当前值为准。
+    // 之前「输入了数字但没点确定就保存」会沿用旧值，这里彻底堵住。
+    const domRemind = parseRemindMinutes($('#remindMinutes').value);
+    if (Number.isNaN(domRemind)) {
+      showToast(T('提醒分钟数无效：请输入 1–10080 的整数'));
+      $('#remindMinutes').focus();
+      return;
+    }
+    if (domRemind !== null) {
+      draft.remindBefore = domRemind;
+      $('#remindMinutes').value = String(domRemind);
+      syncRemindChip();
     }
     const base = state.editingId ? state.items.find(function (i) { return i.id === state.editingId; }) : null;
     // 重复条目的时间以 recurrence.time 为准；编辑后同步过去，详情页与编辑面板才不会显示两套
@@ -5549,7 +5661,10 @@
 
     if (state.view === 'agenda') state.agendaAnchor = item.date;
     renderAll();
-    scheduleReminders();
+    // 带提醒的条目：保存完成立即排程，并把结果直接告诉用户
+    scheduleAfterSave(item);
+    // 开了「同时写入系统日历」时，增删改立即同步到专用日历
+    if (calendarSyncEnabled()) syncCalendarEvents();
     // 保存成功后同一帧后再刷新一次自查表：用户能立刻看到这一条是否真的落库、是否排上
     requestAnimationFrame(function () { renderNotifyDiagnostics(); });
     // 有提醒时确保拿到系统通知（Android 13+）与精确闹钟（Android 12+）权限
@@ -5558,6 +5673,8 @@
       else maybeAskExactAlarm();
     }
     if (!ok) showToast(T('保存失败：未能写入本机，提醒不会生效'));
+    // 有提醒时不再弹「已添加」，避免盖住排程结果提示
+    else if (typeof item.remindBefore === 'number') return;
     else if (base) showToast(T('已保存修改：{title}', { title: shorten(item.title, 14) }));
     else showToast(T('已添加：{title}', { title: shorten(item.title, 18) }));
   }
@@ -5732,14 +5849,17 @@
       return;
     }
     const date = /^\d{4}-\d{2}-\d{2}$/.test(planDraft.date) ? planDraft.date : todayKey();
-    // 同条目：输入了分钟数但没点「确定」就保存时，兜底提交
-    if ($('#planRemindEditor') && !$('#planRemindEditor').hidden) {
-      const rawRemind = $('#planRemindInput').value.trim();
-      const nRemind = Number(rawRemind);
-      if (rawRemind && isFinite(nRemind) && Math.round(nRemind) === nRemind && nRemind >= 1 && nRemind <= 1440) {
-        planDraft.remindBefore = nRemind;
-        syncPlanRemindChip();
-      }
+    // 同条目：以输入框当前值为准，不依赖是否点过「确定」
+    const domRemind = parseRemindMinutes($('#planRemindInput').value);
+    if (Number.isNaN(domRemind)) {
+      showToast(T('提醒分钟数无效：请输入 1–10080 的整数'));
+      $('#planRemindInput').focus();
+      return;
+    }
+    if (domRemind !== null) {
+      planDraft.remindBefore = domRemind;
+      $('#planRemindInput').value = String(domRemind);
+      syncPlanRemindChip();
     }
     const base = state.planEditingId ? state.plans.find(function (p) { return p.id === state.planEditingId; }) : null;
 
@@ -5770,13 +5890,15 @@
     state.saving = false;
     closePlanSheet();
     renderPlan();
-    scheduleReminders();
+    scheduleAfterSave(plan);
+    if (calendarSyncEnabled()) syncCalendarEvents();
     requestAnimationFrame(function () { renderNotifyDiagnostics(); });
     if (typeof plan.remindBefore === 'number' && isNativeApp()) {
       if (notifyState.status !== 'granted') ensureReminderPermissions();
       else maybeAskExactAlarm();
     }
     if (!ok) showToast(T('保存失败：未能写入本机，提醒不会生效'));
+    else if (typeof plan.remindBefore === 'number') return;
     else if (base) showToast(T('已保存修改：{title}', { title: shorten(plan.title, 14) }));
     else showToast(T('已添加{kind}：{title}', { kind: T(PLAN_KINDS[plan.kind]), title: shorten(plan.title, 16) }));
   }
@@ -6173,30 +6295,9 @@
     }, 1800);
   }
 
-  // 构建标识：CI 在压缩网页时写进 <meta name="aeroplan-build">，
-  // 用户可以在「设置 → 关于」一眼核对装的是不是最新构建（渠道参数、插件等差异都能据此判断）。
-  function buildStampText() {
-    try {
-      const meta = document.querySelector('meta[name="aeroplan-build"]');
-      const value = meta && meta.getAttribute('content');
-      return value && value !== 'dev' ? value : (isEn() ? 'dev (running from source)' : 'dev（本地源码运行）');
-    } catch (err) {
-      return 'dev';
-    }
-  }
-
-  function applyBuildStamp() {
-    const text = buildStampText();
-    const row = document.getElementById('settingsBuildStamp');
-    if (row) row.textContent = (isEn() ? 'Build: ' : '构建标识：') + text;
-    const about = document.getElementById('aboutBuildStamp');
-    if (about) about.textContent = text;
-  }
-
   function renderSettings() {
     if (!storage.status) return;
 
-    applyBuildStamp();
     $('#themeToggle').checked = document.documentElement.classList.contains('dark');
     $('#lunarToggle').checked = lunarVisible();
     if ($('#almanacToggle')) $('#almanacToggle').checked = almanacVisible();
@@ -6476,16 +6577,33 @@
     return plugin('LocalNotifications');
   }
 
+  // 原生自建提醒通道：由 MainActivity 通过 addJavascriptInterface 注入，
+  // 不经过 Capacitor 插件。桥存在时提醒优先走它。
+  function nativeReminderBridge() {
+    const bridge = window.AeroNativeReminders;
+    return bridge && typeof bridge.schedule === 'function' ? bridge : null;
+  }
+
+  function parseBridgeJSON(raw) {
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw === 'object') return raw;
+    try { return JSON.parse(String(raw)); } catch (err) { return null; }
+  }
+
+
   // 提醒专用渠道：重要性 HIGH 才会横幅弹出；渠道不存在时 Android 会静默丢弃通知。
   // Android 的渠道参数一旦创建就不可修改：设备上的旧渠道（importance 4）无法升级，
   // 重建同 id 无效，所以这里改用带版本的新 id，启动时逐个删除旧渠道。
-  const REMIND_CHANNEL_ID = 'aeroplan-reminders-v3';
+  const REMIND_CHANNEL_ID = 'aeroplan-reminders-v4';
   const REMIND_CHANNEL_LEGACY_IDS = [
+    'aeroplan-reminders-v3',
     'aeroplan-reminders-v2',
     'qingjihua-reminders-v2',
     'qingjihua-reminders',
     'light-schedule-reminders'
   ];
+  // 设备截图显示 v3 的重要性仍然是 4：AndroidIMPORTANCE_HIGH = 4、IMPORTANCE_MAX = 5，
+  // 要横幅 + 声音必须用 5。渠道参数创建后不可改，只能再换一个新的 id（v4）。
   const REMIND_CHANNEL_IMPORTANCE = 5;
   const REMIND_SMALL_ICON = 'ic_stat_icon';
   const REMIND_SOUND = 'aeroplan_notify';
@@ -6502,9 +6620,10 @@
       // 只把 sound 写在单条通知上无效，缺渠道音就会变成静音通知。
       sound: REMIND_SOUND,
       importance: REMIND_CHANNEL_IMPORTANCE,
-      visibility: 1,      // 1 = 锁屏可见
+      visibility: 1,      // 1 = VISIBILITY_PUBLIC，锁屏显示完整内容
       vibration: true,
-      lights: true
+      lights: true,
+      setShowBadge: true
     };
   }
 
@@ -6526,14 +6645,26 @@
     if (channelTask) return channelTask;
 
     const task = (async function () {
-      const options = reminderChannelOptions();
+      let options = reminderChannelOptions();
       try {
         await notify.createChannel(options);
       } catch (err) {
-        state.channelReady = false;
-        state.channelInfo = null;
-        console.warn('创建通知渠道失败：', err);
-        return false;
+        // 提示音资源不合规时，部分 ROM 会拒绝整条渠道：回退成系统默认提示音再试一次，
+        // 至少保证通知能投递，而不是整条被丢弃。
+        console.warn('创建通知渠道失败，改用系统默认提示音重试：', err);
+        try {
+          options = reminderChannelOptions();
+          delete options.sound;
+          options.useDefaultSound = true;
+          await notify.createChannel(options);
+          state.channelFallbackSound = true;
+        } catch (err2) {
+          state.channelReady = false;
+          state.channelInfo = null;
+          state.channelFallbackSound = false;
+          console.warn('创建通知渠道失败：', err2);
+          return false;
+        }
       }
       // 建完再读回一次：渠道参数只在首次创建时生效，读回的值才是系统里真正生效的
       let info = options;
@@ -6587,7 +6718,8 @@
     showInfo(T('去设置'), T('打开手机「设置 → 应用 → 氢计划 → 权限」，手动打开对应权限后，再回到这里点「重新检查」。'));
   }
 
-  async function refreshNotifyState() {
+  async function refreshNotifyState(options) {
+    const skipSchedule = !!(options && options.skipSchedule);
     const notify = localNotifyPlugin();
     notifyState.native = !!notify;
     notifyState.webFallback = false;
@@ -6627,7 +6759,7 @@
     renderSettings();
     renderPermissionSheet();
     // 必须在 check 完成后重排：启动时 notifyState 还是 default，提前排程会走页面计时器
-    scheduleReminders();
+    if (!skipSchedule) scheduleReminders();
     return notifyState.status;
   }
 
@@ -6726,6 +6858,628 @@
       pkgHint.hidden = !(empty && isNativeApp());
       pkgHint.textContent = T('这是 AeroPlan 的新安装包（com.aeroplan.app）。如需保留旧数据，请先在旧版「设置 → 备份数据」导出，再在本版「恢复数据」导入；新旧包名不同，不能直接覆盖升级。');
     }
+
+    // 「通知自查」入口右侧的摘要：不用点进去也能看出权限与排程是否正常
+    const selfCheck = $('#notifySelfCheckState');
+    if (selfCheck) {
+      const pendingCount = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.length : 0;
+      selfCheck.textContent = notifyState.status === 'granted'
+        ? T('已授权 · 排程 {n} 条').replace('{n}', pendingCount)
+        : T('查看权限、渠道与排程');
+    }
+
+    syncCalendarUI();
+  }
+
+  // 通知自查：独立整页，盖在权限引导之上；返回后不会动下层（含写作页）的编辑状态
+  function openNotifyDiagPage() {
+    const page = $('#notifyDiagPage');
+    if (!page || !page.hidden) return;
+    page.hidden = false;
+    const body = page.querySelector('.notify-diag-body');
+    if (body) body.scrollTop = 0;
+    renderNotifyDiagnostics();
+    renderNativeBlock();
+    renderBackgroundGuide();
+    refreshAllPermissionStates();
+  }
+
+  function closeNotifyDiagPage() {
+    const page = $('#notifyDiagPage');
+    if (!page || page.hidden) return;
+    page.hidden = true;
+  }
+
+  // 回到前台时对比「上次排程」与系统队列：被消费了还是从未被消费，日志里能直接看
+  async function logPendingDiff() {
+    // 原生通道：对比的是桥自己的本机排程表，不是插件的 getPending
+    const bridge = nativeReminderBridge();
+    if (bridge && typeof bridge.listScheduled === 'function') {
+      try {
+        const res = parseBridgeJSON(bridge.listScheduled()) || {};
+        const known = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds : [];
+        const items = Array.isArray(res.items) ? res.items : [];
+        const ids = items.map(function (n) { return Number(n.id); });
+        const missing = known.filter(function (id) { return ids.indexOf(Number(id)) === -1; });
+        appendReminderLog([], {
+          plugin: 'AeroNativeReminders',
+          method: 'listScheduled',
+          error: '前台对比（原生通道）：上次排程 ' + known.length + ' 条，仍在系统里 ' + ids.length + ' 条' +
+            (missing.length ? '；已被系统消费/移除：' + missing.join(', ') : '；无缺失')
+        });
+      } catch (err) { /* 对比失败不打扰用户 */ }
+      return;
+    }
+    const notify = localNotifyPlugin();
+    if (!notify || typeof notify.getPending !== 'function') return;
+    try {
+      const res = await notify.getPending();
+      const ids = ((res && res.notifications) || []).map(function (n) { return n.id; });
+      const known = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds : [];
+      const missing = known.filter(function (id) { return ids.indexOf(id) === -1; });
+      appendReminderLog([], {
+        method: 'getPending',
+        error: '前台对比：上次排程 ' + known.length + ' 条，仍在队列 ' + ids.length + ' 条' +
+          (missing.length ? '；已被系统消费/移除：' + missing.join(', ') : '；无缺失')
+      });
+    } catch (err) { /* 对比失败不打扰用户 */ }
+  }
+
+  // 十秒自检：注册监听 → 排 10 秒后的通知 → 读队列 → 等事件 → 读已送达 → 给判据
+  let selfTestRunning = false;
+  async function runNotifySelfTest() {
+    const btn = $('#notifySelfTestBtn');
+    const logEl = $('#notifySelfTestLog');
+    if (selfTestRunning) return;
+    const notify = localNotifyPlugin();
+    if (!notify) {
+      showToast(T('未检测到原生通知插件，无法自检'));
+      return;
+    }
+    selfTestRunning = true;
+    if (btn) { btn.disabled = true; btn.classList.add('busy'); btn.textContent = T('自检进行中…'); }
+    const lines = [];
+    const push = function (text) {
+      lines.push(clockTimeText(Date.now()) + ' · ' + text);
+      if (logEl) {
+        logEl.hidden = false;
+        logEl.innerHTML = lines.map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('');
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    };
+    const testId = 1999000000 + Math.floor(Math.random() * 900000);
+    let received = false;
+    try {
+      const mk = function (name, fn) {
+        try {
+          const p = notify.addListener(name, fn);
+          if (p && typeof p.then === 'function') p.catch(function () {});
+          return true;
+        } catch (err) { return false; }
+      };
+      const ok1 = mk('localNotificationReceived', function (n) {
+        if (n && Number(n.id) === testId) { received = true; push(T('收到 localNotificationReceived 事件')); }
+      });
+      const ok2 = mk('localNotificationScheduled', function (n) {
+        if (n && Number(n.id) === testId) push(T('收到 localNotificationScheduled 事件'));
+      });
+      const ok3 = mk('localNotificationActionPerformed', function (n) {
+        if (n && n.notification && Number(n.notification.id) === testId) push(T('收到 localNotificationActionPerformed 事件'));
+      });
+      push(T('监听注册：') + [ok1 ? 'Received' : 'Received✗', ok2 ? 'Scheduled' : 'Scheduled✗', ok3 ? 'ActionPerformed' : 'ActionPerformed✗'].join(' / '));
+      push(T('当前是否前台：') + (document.visibilityState === 'visible' ? T('是') : T('否')));
+
+      // 与正式提醒完全相同的参数（渠道、小图标、allowWhileIdle）
+      await notify.schedule({
+        notifications: [{
+          id: testId,
+          title: T('氢计划提醒'),
+          body: T('十秒自检通知'),
+          channelId: REMIND_CHANNEL_ID,
+          smallIcon: REMIND_SMALL_ICON,
+          autoCancel: true,
+          schedule: { at: new Date(Date.now() + 10000), allowWhileIdle: true },
+          extra: { selfTest: true }
+        }]
+      });
+      push(T('已排程：10 秒后触发（') + clockTimeText(Date.now() + 10000) + '）');
+
+      let pendingIds = [];
+      try {
+        const p1 = await notify.getPending();
+        pendingIds = ((p1 && p1.notifications) || []).map(function (n) { return n.id; });
+        push(T('getPending：') + (pendingIds.indexOf(testId) !== -1 ? T('在队列中') : T('不在队列（排程未生效）')));
+      } catch (err) {
+        push(T('getPending 读取失败：') + pluginErrorText(err));
+      }
+
+      push(T('等待 12 秒…'));
+      await new Promise(function (resolve) { setTimeout(resolve, 12000); });
+      push(received ? T('事件：已收到') : T('事件：12 秒内未收到（未触发）'));
+
+      let deliveredIds = [];
+      try {
+        if (typeof notify.getDeliveredNotifications === 'function') {
+          const d = await notify.getDeliveredNotifications();
+          deliveredIds = ((d && d.notifications) || []).map(function (n) { return n.id; });
+          push(T('已送达列表：') + (deliveredIds.indexOf(testId) !== -1 ? T('有本条') : T('无本条')));
+        } else {
+          push(T('已送达列表：插件不支持'));
+        }
+      } catch (err) {
+        push(T('已送达读取失败：') + pluginErrorText(err));
+      }
+
+      let stillPending = null;
+      try {
+        const p2 = await notify.getPending();
+        stillPending = ((p2 && p2.notifications) || []).some(function (n) { return n.id === testId; });
+        push(T('触发后队列：') + (stillPending ? T('仍有该条') : T('已清空')));
+      } catch (err) { /* 忽略 */ }
+      push(T('此刻是否前台：') + (document.visibilityState === 'visible' ? T('是') : T('否')));
+
+      let verdict;
+      if (received && deliveredIds.indexOf(testId) !== -1) {
+        verdict = T('投递成功；屏幕无横幅则是渠道/横幅/勿扰拦截了显示');
+      } else if (received) {
+        verdict = T('投递失败：事件到了但已送达为空，重点查小图标与提示音');
+      } else if (stillPending === false) {
+        verdict = T('闹钟被系统吞掉（后台策略）：队列已清空但事件未触发');
+      } else {
+        verdict = T('排程未生效：队列里仍有该条，系统没有触发');
+      }
+      push(T('结论：') + verdict);
+      appendReminderLog([], { method: 'selfTest', error: verdict });
+      try { await notify.cancel({ notifications: [{ id: testId }] }); } catch (err) { /* 忽略 */ }
+    } catch (err) {
+      push(T('自检失败：') + pluginErrorText(err));
+      appendReminderLog([], { method: 'selfTest', error: 'failed: ' + pluginErrorText(err) });
+    } finally {
+      ['localNotificationReceived', 'localNotificationScheduled', 'localNotificationActionPerformed'].forEach(function (name) {
+        try { if (typeof notify.removeAllListeners === 'function') notify.removeAllListeners(name); } catch (err) { /* 忽略 */ }
+      });
+      selfTestRunning = false;
+      if (btn) { btn.disabled = false; btn.classList.remove('busy'); btn.textContent = T('开始十秒自检'); }
+    }
+  }
+
+  // 自查刷新：重新读数据源 → 权限 → 重排（内含 getPending）→ 整块重绘。
+  // 任何一步失败都写进面板顶部，其他项照常显示；按钮始终会恢复可点，不会「点了没反应」。
+  let selfCheckBusy = false;
+  async function refreshSelfCheck() {
+    if (selfCheckBusy) return;
+    selfCheckBusy = true;
+    const btn = $('#notifyDiagRefresh');
+    const statusEl = $('#notifyDiagStatus');
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('busy');
+      btn.textContent = T('刷新中…');
+    }
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.classList.remove('error');
+      statusEl.textContent = T('刷新中…');
+    }
+    const issues = [];
+    try {
+      // 1) 重新读取条目与计划（失败单独标注，不中断后面）
+      try {
+        await loadAll();
+      } catch (err) {
+        issues.push(T('条目/计划读取失败：') + pluginErrorText(err));
+      }
+      // 2) 权限状态（这一步内部会刷新精确闹钟）
+      try {
+        await refreshNotifyState({ skipSchedule: true });
+      } catch (err) {
+        issues.push(T('权限读取失败：') + pluginErrorText(err));
+      }
+      // 3) 渠道：只补建，不让异常打断整个刷新
+      try {
+        await ensureReminderChannel(localNotifyPlugin());
+      } catch (err) {
+        issues.push(T('渠道读取失败：') + pluginErrorText(err));
+      }
+      // 4) 重排并等本轮结束（原生排程有回读，最长等 3 秒），再重绘
+      await new Promise(function (resolve) {
+        let settled = false;
+        const finish = function () { if (!settled) { settled = true; resolve(); } };
+        setTimeout(finish, 3000);
+        try {
+          scheduleReminders({ done: finish });
+        } catch (err) {
+          issues.push(T('排程调用失败：') + pluginErrorText(err));
+          finish();
+        }
+      });
+      try {
+        await renderNotifyDiagnostics();
+      } catch (err) {
+        issues.push(T('面板绘制失败：') + pluginErrorText(err));
+      }
+      try {
+        renderNativeBlock();
+      } catch (err) {
+        issues.push(T('原生通道状态读取失败：') + pluginErrorText(err));
+      }
+      try {
+        renderBackgroundGuide();
+      } catch (err) {
+        issues.push(T('后台限制引导读取失败：') + pluginErrorText(err));
+      }
+      if (!issues.length) {
+        if (statusEl) statusEl.textContent = T('已刷新：') + clockTimeText(Date.now());
+      } else {
+        if (statusEl) {
+          statusEl.classList.add('error');
+          statusEl.textContent = T('刷新完成，但有读取失败：') + issues.join('；');
+        }
+      }
+    } catch (err) {
+      const msg = T('刷新失败：') + pluginErrorText(err);
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.classList.add('error');
+        statusEl.textContent = msg;
+      }
+      showToast(msg);
+    } finally {
+      selfCheckBusy = false;
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('busy');
+        btn.textContent = T('刷新自查');
+      }
+    }
+  }
+
+  // ==================== 原生通道自查 ====================
+
+  let nativeTestRunning = false;
+
+  function readNativeDiagnostics() {
+    const bridge = nativeReminderBridge();
+    if (!bridge) return null;
+    try {
+      return parseBridgeJSON(bridge.getDiagnostics());
+    } catch (err) {
+      return { bridge: false, error: String((err && err.message) || err) };
+    }
+  }
+
+  function renderNativeBlock() {
+    const box = $('#nativeDiag');
+    if (!box) return;
+    const bridge = nativeReminderBridge();
+    const d = readNativeDiagnostics();
+    const line = function (k, v) {
+      return '<div class="diag-row"><span class="diag-key">' + diagEsc(k) + '</span>' +
+        '<span class="diag-value">' + diagEsc(v) + '</span></div>';
+    };
+    if (!bridge) {
+      box.innerHTML = '<p class="diag-empty">' + diagEsc(T('当前环境没有注入原生通道（网页版或旧安装包）。提醒会回落到 Capacitor 插件或页面计时器。')) + '</p>';
+      return;
+    }
+    const fmt = function (ms) { return ms ? clockTimeText(Number(ms)) : T('无'); };
+    let html = line(T('桥注入'), T('已注入 AeroNativeReminders'));
+    if (!d) {
+      html += line(T('读取诊断'), T('读取失败'));
+    } else if (d.error) {
+      html += line(T('读取诊断'), T('失败：') + d.error);
+    } else {
+      html += line(T('已排条数'), String(d.scheduledCount == null ? '?' : d.scheduledCount));
+      html += line(T('最近一次排程'), fmt(d.lastScheduleAt) + (d.lastScheduleResult ? '（' + d.lastScheduleResult + '）' : ''));
+      html += line(T('最近一次投递'), fmt(d.lastDeliveryAt));
+      html += line(T('最近一次错误'), d.lastError || T('无'));
+      html += line(T('原生渠道'), (d.channelId || '—') + ' · ' + T('重要性 ') + (d.channelImportance == null ? '?' : d.channelImportance));
+      html += line(T('通知总开关 / 精确闹钟'),
+        (d.notificationsEnabled ? T('通知已开') : T('通知被关')) + ' / ' +
+        (d.exactAlarms ? T('精确闹钟可用') : T('精确闹钟被关，退化为允许延迟')));
+    }
+    box.innerHTML = html;
+  }
+
+  async function runNativeChannelTest() {
+    const btn = $('#nativeTestBtn');
+    const logEl = $('#nativeTestLog');
+    const bridge = nativeReminderBridge();
+    if (!bridge) {
+      showToast(T('当前安装包没有原生通道'));
+      return;
+    }
+    if (nativeTestRunning) return;
+    nativeTestRunning = true;
+    if (btn) { btn.disabled = true; btn.classList.add('busy'); btn.textContent = T('测试中…'); }
+    const write = function (text) {
+      if (!logEl) return;
+      logEl.hidden = false;
+      logEl.textContent = text;
+    };
+    try {
+      const res = parseBridgeJSON(bridge.postTest(10)) || {};
+      if (res.ok === false) throw new Error(res.error || 'postTest rejected');
+      write(T('已排一条 10 秒后的原生通知（id {id}），请留在本页等待…').replace('{id}', res.id));
+      const before = readNativeDiagnostics() || {};
+      await new Promise(function (r) { setTimeout(r, 11000); });
+      const after = readNativeDiagnostics() || {};
+      const delivered = Number(after.lastDeliveryAt || 0) > Number(before.lastDeliveryAt || 0);
+      write(delivered
+        ? T('已投递：原生通道在 {t} 发出了通知。若屏幕仍无横幅，问题在系统通知开关/横幅权限/勿扰。').replace('{t}', clockTimeText(after.lastDeliveryAt))
+        : T('未投递：10 秒内没有收到原生通道的投递记录。此时问题在系统层（省电、后台限制或 ROM 拦截），而不是应用代码。'));
+      renderNativeBlock();
+    } catch (err) {
+      write(T('测试失败：') + String((err && err.message) || err));
+    } finally {
+      nativeTestRunning = false;
+      if (btn) { btn.disabled = false; btn.classList.remove('busy'); btn.textContent = T('测试原生通道（10 秒）'); }
+    }
+  }
+
+  function diagEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  // ==================== 后台限制自查与引导 ====================
+  // 应用无法把自己加进系统白名单，只能按品牌给出可照做的路径。
+  const BG_GUIDES = {
+    xiaomi: {
+      name: '小米 / Redmi（MIUI / HyperOS）',
+      steps: [
+        '设置 → 应用设置 → 应用管理 → 氢计划 → 自启动（打开）',
+        '应用信息 → 省电策略 → 无限制',
+        '通知管理 → 允许通知 → 横幅通知 / 锁屏通知（全部打开）'
+      ]
+    },
+    huawei: {
+      name: '华为 / 荣耀（EMUI / HarmonyOS）',
+      steps: [
+        '设置 → 应用 → 应用启动管理 → 氢计划 → 关闭「自动管理」',
+        '手动勾选：允许自启动、允许关联启动、允许后台活动',
+        '通知管理 → 允许通知 → 横幅通知 / 锁屏通知'
+      ]
+    },
+    oppo: {
+      name: 'OPPO / 一加（ColorOS）',
+      steps: [
+        '设置 → 应用管理 → 氢计划 → 自启动管理（打开）',
+        '耗电管理 → 允许后台运行 / 允许高耗电',
+        '通知管理 → 允许通知 → 横幅通知 / 锁屏通知'
+      ]
+    },
+    vivo: {
+      name: 'vivo / iQOO（OriginOS）',
+      steps: [
+        '设置 → 电池 → 后台耗电管理 → 氢计划 → 允许后台高耗电',
+        '设置 → 应用与权限 → 权限管理 → 自启动（打开）',
+        '通知管理 → 允许通知 → 横幅通知 / 锁屏通知'
+      ]
+    },
+    other: {
+      name: '其他 Android 设备',
+      steps: [
+        '设置 → 应用 → 氢计划 → 电池 → 不限制 / 允许后台运行',
+        '设置 → 应用 → 氢计划 → 自启动 / 关联启动（若有，打开）',
+        '设置 → 应用 → 氢计划 → 通知 → 横幅通知 / 锁屏通知（打开）'
+      ]
+    }
+  };
+
+  function brandKeyOf(brand) {
+    const s = String(brand || '').toLowerCase();
+    if (/xiaomi|redmi|poco|mi\b/.test(s)) return 'xiaomi';
+    if (/huawei|honor|harmony/.test(s)) return 'huawei';
+    if (/oppo|oneplus|realme/.test(s)) return 'oppo';
+    if (/vivo|iqoo/.test(s)) return 'vivo';
+    return 'other';
+  }
+
+  function currentBrandText() {
+    const d = readNativeDiagnostics();
+    if (d && d.brand) return (d.brand + (d.model ? ' ' + d.model : '')).trim();
+    const ua = (navigator.userAgent || '');
+    return ua ? ua : '';
+  }
+
+  function renderBackgroundGuide() {
+    const box = $('#bgGuide');
+    const deviceEl = $('#bgGuideDevice');
+    if (!box) return;
+    const brand = currentBrandText();
+    const key = brandKeyOf(brand);
+    const guide = BG_GUIDES[key] || BG_GUIDES.other;
+    if (deviceEl) {
+      deviceEl.textContent = brand
+        ? T('当前设备：{brand}').replace('{brand}', brand)
+        : T('未能读取设备品牌，按通用路径显示');
+    }
+    box.innerHTML = '<div class="diag-sub">' + diagEsc(guide.name) + '</div>' +
+      guide.steps.map(function (step) {
+        return '<p class="diag-copy">' + diagEsc(step) + '</p>';
+      }).join('') +
+      '<p class="diag-hint">' + diagEsc(T('长按任意一行可复制路径。应用无法把自己加入系统白名单，只能按上面的路径手动开启。')) + '</p>';
+  }
+
+  async function openAppSettingsPage() {
+    const cal = calendarPlugin();
+    if (cal && typeof cal.openAppSettings === 'function') {
+      try {
+        await cal.openAppSettings();
+        return;
+      } catch (err) { /* 落到提示 */ }
+    }
+    showToast(T('请手动进入：设置 → 应用 → 氢计划'));
+  }
+
+  // ==================== 可选：同步到系统日历 ====================
+  // 专用日历「AeroPlan 提醒」，只写本应用的事件；关闭开关时清空该日历下的事件。
+  const CALENDAR_NAME = 'AeroPlan 提醒';
+  const CALENDAR_MARK = 'AeroPlan:';
+
+  function calendarPlugin() {
+    if (!window.Capacitor) return null;
+    // 原生 self-registered 插件用 registerPlugin 拿代理最稳；老实现则回落到 Plugins 表
+    if (typeof window.Capacitor.registerPlugin === 'function') {
+      try {
+        const p = window.Capacitor.registerPlugin('AeroCalendar');
+        if (p) return p;
+      } catch (err) { /* 回落到下面的 Plugins 表 */ }
+    }
+    return plugin('AeroCalendar');
+  }
+
+  function calendarSyncEnabled() {
+    return !!(state.meta && state.meta.calendarSync === true);
+  }
+
+  function setCalendarStateText(text, isError) {
+    const el = $('#calendarSyncState');
+    if (!el) return;
+    el.hidden = !text;
+    el.classList.toggle('error', !!isError);
+    el.textContent = text || '';
+  }
+
+  function syncCalendarUI() {
+    const toggle = $('#calendarSyncToggle');
+    if (toggle) toggle.checked = calendarSyncEnabled();
+    if (calendarSyncEnabled()) {
+      setCalendarStateText(T('已开启：条目会写入专用日历「{name}」，由系统日历负责提醒').replace('{name}', CALENDAR_NAME), false);
+    }
+  }
+
+  function calendarEventTimes(item) {
+    const info = reminderFireTime(item, item.date, 0);
+    const begin = info.at;
+    const duration = item.type === 'event' ? 60 * 60 * 1000 : 30 * 60 * 1000;
+    return { begin: begin, end: begin + duration };
+  }
+
+  async function syncCalendarEvents() {
+    if (!calendarSyncEnabled()) return { ok: false, reason: 'disabled' };
+    const cal = calendarPlugin();
+    if (!cal) return { ok: false, reason: 'plugin-missing' };
+    try {
+      const ensured = await cal.ensureCalendar({ name: CALENDAR_NAME });
+      if (!ensured || !ensured.calendarId) {
+        return { ok: false, reason: (ensured && ensured.error) || T('没有可写的日历账户') };
+      }
+      const desired = {};
+      state.items.forEach(function (item) {
+        if (typeof item.remindBefore !== 'number') return;
+        if (!item.recurrence && item.done) return;
+        const times = calendarEventTimes(item);
+        const key = String(item.id) + '|' + item.date;
+        desired[key] = {
+          title: CALENDAR_MARK + ' ' + (item.title || ''),
+          description: CALENDAR_MARK + item.id + '|' + item.date,
+          begin: times.begin,
+          end: times.end,
+          remind: Math.max(0, Math.round(item.remindBefore)),
+          location: item.address || ''
+        };
+      });
+      const prev = (state.meta.calendarEventIds && typeof state.meta.calendarEventIds === 'object')
+        ? state.meta.calendarEventIds : {};
+      const next = {};
+      let added = 0;
+      let updated = 0;
+      for (const key of Object.keys(desired)) {
+        const ev = desired[key];
+        const payload = Object.assign({
+          calendarId: ensured.calendarId,
+          eventId: prev[key] || null
+        }, ev);
+        const res = await cal.upsertEvent(payload);
+        if (res && res.eventId) {
+          next[key] = res.eventId;
+          if (prev[key]) updated += 1;
+          else added += 1;
+        }
+      }
+      let removed = 0;
+      for (const key of Object.keys(prev)) {
+        if (desired[key]) continue;
+        try {
+          await cal.deleteEvent({ eventId: prev[key] });
+          removed += 1;
+        } catch (err) { /* 单条删除失败不影响其余 */ }
+      }
+      state.meta.calendarEventIds = next;
+      state.meta.calendarLastSync = Date.now();
+      await persistMeta();
+      return { ok: true, added: added, updated: updated, removed: removed };
+    } catch (err) {
+      return { ok: false, reason: pluginErrorText(err) };
+    }
+  }
+
+  async function clearCalendarEvents() {
+    const cal = calendarPlugin();
+    if (!cal) return { ok: false, reason: 'plugin-missing' };
+    try {
+      const res = await cal.clearCalendar({ name: CALENDAR_NAME });
+      state.meta.calendarEventIds = {};
+      await persistMeta();
+      return { ok: true, removed: (res && res.removed) || 0 };
+    } catch (err) {
+      return { ok: false, reason: pluginErrorText(err) };
+    }
+  }
+
+  async function setCalendarSyncEnabled(enabled) {
+    const toggle = $('#calendarSyncToggle');
+    if (!enabled) {
+      state.meta.calendarSync = false;
+      await persistMeta();
+      const cleared = await clearCalendarEvents();
+      syncCalendarUI();
+      setCalendarStateText(cleared.ok
+        ? T('已关闭，并清空「{name}」里由本应用写入的事件').replace('{name}', CALENDAR_NAME)
+        : T('已关闭；清空日历失败：') + (cleared.reason || ''), !cleared.ok);
+      return;
+    }
+    const cal = calendarPlugin();
+    if (!cal) {
+      if (toggle) toggle.checked = false;
+      state.meta.calendarSync = false;
+      await persistMeta();
+      setCalendarStateText(T('当前安装包没有日历插件（网页版不支持），开关保持关闭'), true);
+      return;
+    }
+    let perm = null;
+    try { perm = await cal.checkCalendarPermission(); } catch (err) { /* 当作未授权 */ }
+    if (!perm || !perm.read || !perm.write) {
+      try { perm = await cal.requestCalendarPermission(); } catch (err) { perm = null; }
+    }
+    if (!perm || !perm.read || !perm.write) {
+      if (toggle) toggle.checked = false;
+      state.meta.calendarSync = false;
+      await persistMeta();
+      setCalendarStateText(T('没有日历读写权限，开关保持关闭。可在系统设置里允许后再打开。'), true);
+      return;
+    }
+    const ensured = await (async function () {
+      try { return await cal.ensureCalendar({ name: CALENDAR_NAME }); } catch (err) { return { error: pluginErrorText(err) }; }
+    })();
+    if (!ensured || !ensured.calendarId) {
+      if (toggle) toggle.checked = false;
+      state.meta.calendarSync = false;
+      await persistMeta();
+      setCalendarStateText(T('没有可写的日历账户，已自动关闭：') + ((ensured && ensured.error) || ''), true);
+      return;
+    }
+    state.meta.calendarSync = true;
+    await persistMeta();
+    const res = await syncCalendarEvents();
+    syncCalendarUI();
+    if (!res.ok) {
+      setCalendarStateText(T('已开启，但首次同步失败：') + (res.reason || ''), true);
+    } else {
+      setCalendarStateText(T('已开启：已同步 {n} 条到「{name}」').replace('{n}', res.added + res.updated).replace('{name}', CALENDAR_NAME), false);
+    }
   }
 
   function openPermissionSheet() {
@@ -6736,6 +7490,9 @@
     // 打开面板时顺手重排一次：保证实例表里的触发时间/状态是最新的
     scheduleReminders();
     renderNotifyDiagnostics();
+    renderNativeBlock();
+    renderBackgroundGuide();
+    syncCalendarUI();
     $('#permBackdrop').hidden = false;
     page.hidden = false;
     requestAnimationFrame(function () {
@@ -7378,6 +8135,14 @@
   const REMIND_HORIZON_DAYS = 60;
   const REMIND_PER_ITEM = 60;
   const REMIND_MAX = 180;
+  // 宽限窗口：触发时刻刚过去（≤2 分钟）时不丢弃，而是立刻补发一次。
+  // 真机证据：19:30 的条目提前 1 分钟 → 触发 19:29:00，自查时已 19:29:11，
+  // 旧逻辑直接把「已经过去 11 秒」判为过期，于是这条提醒永远不响。
+  const REMIND_GRACE_MS = 2 * 60 * 1000;
+  // 补发排在「现在 + 5 秒」，给系统一点调度余量，避免又被当成过去时刻丢掉
+  const REMIND_CATCHUP_DELAY_MS = 5 * 1000;
+  // 补发记录保留 24 小时：过期后清理，防止 meta 无限增长
+  const REMIND_CATCHUP_TTL_MS = 24 * 60 * 60 * 1000;
   // 全天 / 未设时间的条目没有基准时刻，统一按当天 09:00 计算，
   // 详情页会注明这一基准，避免「设了提醒却永远不响」。
   const REMIND_DEFAULT_TIME = '09:00';
@@ -7385,6 +8150,19 @@
   function clearReminderTimers() {
     state.reminderTimers.forEach(function (timer) { clearTimeout(timer); });
     state.reminderTimers = [];
+  }
+
+  // 读取并顺带清理宽限补发记录：只保留 24 小时内的，避免 meta 无限增长
+  function readCatchUpMap() {
+    const raw = state.meta && state.meta.reminderCatchUp;
+    const map = {};
+    if (!raw || typeof raw !== 'object') return map;
+    const now = Date.now();
+    Object.keys(raw).forEach(function (k) {
+      const ts = Number(raw[k]);
+      if (isFinite(ts) && ts > 0 && now - ts < REMIND_CATCHUP_TTL_MS) map[k] = ts;
+    });
+    return map;
   }
 
   function effectiveRemind(item) {
@@ -7432,7 +8210,63 @@
     };
   }
 
-  function scheduleReminders() {
+  // 把一轮排程结果汇总成一句话，保存后直接提示用户「排上了没有」
+  function summarizeReminderRound(rows) {
+    const okRows = rows.filter(function (r) { return r.status === 'ok'; });
+    const timerRows = rows.filter(function (r) { return r.status === 'timer'; });
+    const failRows = rows.filter(function (r) { return r.status === 'fail'; });
+    const skipRows = rows.filter(function (r) { return r.status === 'skip'; });
+    const first = okRows.concat(timerRows)[0];
+    return {
+      scheduled: okRows.length + timerRows.length,
+      timerOnly: okRows.length === 0 && timerRows.length > 0,
+      firstFire: first ? (first.fireText || first.computedText) : '',
+      fail: failRows.length,
+      failReason: failRows.length ? failRows[0].reason : '',
+      skip: skipRows.length,
+      skipReason: skipRows.length ? skipRows[0].reason : ''
+    };
+  }
+
+  // 排程尝试写进本地环形日志（最近 200 条，重启后仍在，自查页可查）
+  function appendReminderLog(rows, roundNote) {
+    if (!state.meta) return;
+    const prev = Array.isArray(state.meta.reminderLog) ? state.meta.reminderLog.slice() : [];
+    const at = Date.now();
+    const defaultPlugin = 'Capacitor.Plugins.LocalNotifications';
+    rows.forEach(function (r) {
+      prev.push({
+        at: at,
+        key: r.key,
+        fire: r.fireText || r.computedText || '',
+        status: r.status,
+        type: r.failType || '',
+        id: r.numericId || '',
+        params: r.paramText || '',
+        plugin: r.plugin || defaultPlugin,
+        method: r.method || 'schedule',
+        error: r.reason || ''
+      });
+    });
+    if (roundNote) {
+      prev.push({
+        at: at,
+        key: '（本轮）',
+        fire: '',
+        status: 'note',
+        id: '',
+        params: '',
+        plugin: roundNote.plugin || defaultPlugin,
+        method: roundNote.method || 'schedule',
+        error: roundNote.error || ''
+      });
+    }
+    state.meta.reminderLog = prev.slice(-200);
+    persistMeta();
+  }
+
+  function scheduleReminders(options) {
+    const done = options && typeof options.done === 'function' ? options.done : null;
     clearReminderTimers();
     const now = Date.now();
     const t = todayKey();
@@ -7440,7 +8274,10 @@
 
     // 原生端：有 LocalNotifications 且已授权时，交给系统排程（App 关掉、锁屏也能弹）
     const notify = localNotifyPlugin();
-    const useNative = !!(notify && typeof notify.schedule === 'function' &&
+    // 优先走自建原生通道：不依赖 Capacitor 插件，也不受它的权限状态影响
+    const bridge = nativeReminderBridge();
+    const useBridge = !!bridge;
+    const useNative = useBridge || !!(notify && typeof notify.schedule === 'function' &&
       notifyState.status === 'granted' && !notifyState.webFallback);
     // 记录这一轮扫描的时间与规模：自查面板据此区分「还没算」与「确实没有提醒」
     state.reminderScan = {
@@ -7469,33 +8306,77 @@
           ? T('未设时间') + '（' + T('基准') + ' ' + REMIND_DEFAULT_TIME + '）'
           : info.timeText),
         before: before,
-        fireText: reminderClockText(info.at),
+        // 按「条目时间 − 提前量」算出来的触发时刻，永不被改写，方便核对边界
+        computedText: reminderClockText(info.at),
+        // 真正交给系统/计时器的时间：宽限补发会改成「现在 + 5 秒」，跳过时留空
+        fireText: '',
         status: 'queued',
         numericId: '',
-        reason: ''
+        reason: '',
+        catchUp: false,
+        // 「本轮排程调用时间 / 条目最后更新时间」，用来核对保存是否真的触发了排程
+        callText: clockTimeText(now) + ' / ' + (item.updatedAt ? clockTimeText(item.updatedAt) : '—'),
+        // 调用参数摘要与失败的类别，写进排程日志
+        paramText: '',
+        failType: '',
+        method: 'schedule'
       };
     }
 
     function skipRow(item, key, before, info, reason) {
       const row = baseRow(item, key, before, info);
       row.status = 'skip';
+      row.method = 'skip';
       row.reason = reason;
       return pushRow(row);
     }
 
+    // 补发记录：{ '条目id|日期|提前量': 补发时间戳 }。同一实例只补发一次，
+    // 否则每次回到前台重排都会再弹一遍。
+    const catchUp = readCatchUpMap();
+
     function consider(item, key, before, kind) {
       const info = reminderFireTime(item, key, before);
       const row = baseRow(item, key, before, info);
-      const diff = info.at - now;
+      const computedAt = info.at;
+      let diff = computedAt - now;
+      let fireAt = computedAt;
+
       if (diff <= 0) {
-        row.status = 'skip';
-        row.reason = T('触发时间已过去');
-        pushRow(row);
-        return false;
+        const late = -diff;
+        if (late > REMIND_GRACE_MS) {
+          row.status = 'skip';
+          row.method = 'skip';
+          row.failType = 'expired';
+          row.reason = T('已过期：触发时间已过去 {n} 分钟，超过 {g} 分钟宽限，不补发（预期行为，不是提醒失效）')
+            .replace('{n}', Math.max(1, Math.round(late / 60000)))
+            .replace('{g}', Math.round(REMIND_GRACE_MS / 60000));
+          pushRow(row);
+          return false;
+        }
+        const stamp = String(item.id) + '|' + key + '|' + before;
+        const prevAt = catchUp[stamp];
+        if (prevAt) {
+          row.status = 'skip';
+          row.method = 'skip';
+          row.failType = 'catchup-done';
+          row.reason = T('宽限期内已补发过一次（{t}），不重复提醒').replace('{t}', clockTimeText(prevAt));
+          pushRow(row);
+          return false;
+        }
+        catchUp[stamp] = now;
+        fireAt = now + REMIND_CATCHUP_DELAY_MS;
+        diff = REMIND_CATCHUP_DELAY_MS;
+        row.catchUp = true;
+        row.reason = T('触发时间刚过去 {n} 秒，宽限期内立即补发一次')
+          .replace('{n}', Math.max(0, Math.round(late / 1000)));
       }
+      row.fireText = reminderClockText(fireAt);
+
       // 网页端只留 24 小时内的页面计时器；原生端按较长的日历窗口预约
       if (!useNative && diff >= 24 * 60 * 60 * 1000) {
         row.status = 'skip';
+        row.method = 'skip';
         row.reason = T('网页版只排 24 小时内');
         pushRow(row);
         return false;
@@ -7511,9 +8392,17 @@
       usedIds[numericId] = true;
       row.status = 'queued';
       row.numericId = String(numericId);
-      if (guard > 0) row.reason = T('id 碰撞，已顺延');
+      // 调用参数摘要：日志里能对照「到底按什么参数排的」
+      row.paramText = useBridge
+        ? 'AeroNativeReminders.schedule, channel=aeroplan-native-v1, at=' + new Date(fireAt).toISOString()
+        : 'channel=' + REMIND_CHANNEL_ID + ', smallIcon=' + REMIND_SMALL_ICON +
+          ', at=' + new Date(fireAt).toISOString() + ', allowWhileIdle=true' +
+          ', exact=' + (state.exactAlarmStatus !== 'denied');
+      if (guard > 0) {
+        row.reason = (row.reason ? row.reason + '；' : '') + T('id 碰撞，已顺延');
+      }
       pushRow(row);
-      pending.push({ item: item, key: key, fireAt: info.at, diff: diff, kind: kind, numericId: numericId, row: row });
+      pending.push({ item: item, key: key, fireAt: fireAt, diff: diff, kind: kind, numericId: numericId, row: row });
       return true;
     }
 
@@ -7564,13 +8453,116 @@
     });
 
     state.reminderReport = report;
+    // 立即把补发记录写回 meta：这样重排/回前台时能看到「已补发过」，不会连续弹
+    state.meta.reminderCatchUp = catchUp;
+    persistMeta();
+
+    // 本轮收尾：写排程日志（环形 200 条）+ 刷新自查 + 回调保存提示
+    const finishRound = function (noteObj) {
+      state.reminderReport = report;
+      appendReminderLog(report, noteObj || null);
+      renderNotifyDiagnostics();
+      if (done) done(summarizeReminderRound(report));
+    };
+
+    // 原生环境但插件不存在：这是「plugin-missing」，不能当成网页版悄悄降级
+    if (isNativeApp() && !useBridge && !notify) {
+      report.forEach(function (r) {
+        if (r.status !== 'queued') return;
+        r.status = 'fail';
+        r.failType = 'plugin-missing';
+        r.method = 'schedule';
+        r.reason = T('排程失败：原生通知插件缺失（@capacitor/local-notifications 未注册）');
+      });
+      state.nativeScheduleError = T('原生通知插件缺失');
+      finishRound({ method: 'loadPlugin', error: '@capacitor/local-notifications not registered' });
+      return;
+    }
+
+    // ---------- 自建原生通道（优先） ----------
+    // 不经过 Capacitor 插件：JS 把 JSON 交给 @JavascriptInterface，
+    // Java 侧用 AlarmManager + BroadcastReceiver + NotificationCompat 投递。
+    if (useBridge) {
+      const ordered = pending.slice().sort(function (a, b) { return a.fireAt - b.fireAt; });
+      ordered.slice(REMIND_MAX).forEach(function (p) {
+        p.row.status = 'fail';
+        p.row.failType = 'over-limit';
+        p.row.method = 'schedule';
+        p.row.plugin = 'AeroNativeReminders';
+        p.row.reason = T('超过并发上限：超出本轮排程上限 {n} 条').replace('{n}', REMIND_MAX);
+      });
+      const list = ordered.slice(0, REMIND_MAX).map(function (p) {
+        const timeText = (p.item.recurrence && p.item.recurrence.time) || p.item.time || '';
+        return {
+          id: p.numericId,
+          at: p.fireAt,
+          title: T('氢计划提醒'),
+          body: (timeText || T('全天')) + ' · ' + monthDay(p.key) + ' · ' + p.item.title,
+          itemId: p.item.id,
+          date: p.key,
+          kind: p.kind
+        };
+      });
+      const newIds = list.map(function (n) { return n.id; });
+      try {
+        // 先清掉上一轮的全部原生闹钟，再按本轮重新排，避免旧 id 留在系统里继续弹
+        if (typeof bridge.cancelAll === 'function') {
+          try { bridge.cancelAll(); } catch (err) { /* 清理失败不阻塞排程 */ }
+        }
+        const raw = bridge.schedule(JSON.stringify({ notifications: list }));
+        const res = parseBridgeJSON(raw) || {};
+        if (res && res.ok === false) throw new Error(res.error || 'native bridge rejected');
+        const acceptedRaw = res && res.ids ? (Array.isArray(res.ids) ? res.ids : [res.ids]) : newIds;
+        const accepted = acceptedRaw.map(Number);
+        state.meta.reminderIds = list.length ? newIds : [];
+        state.nativeReminderIds = state.meta.reminderIds.slice();
+        state.nativeScheduleError = '';
+        persistMeta();
+        list.forEach(function (n) {
+          const p = pending.filter(function (row) { return row.numericId === n.id; })[0];
+          if (!p) return;
+          p.row.plugin = 'AeroNativeReminders';
+          p.row.method = 'schedule';
+          if (accepted.indexOf(n.id) === -1) {
+            p.row.status = 'fail';
+            p.row.failType = 'not-accepted';
+            p.row.reason = T('原生通道没有接受该排程');
+          } else {
+            p.row.status = 'ok';
+          }
+        });
+        finishRound({ plugin: 'AeroNativeReminders', method: 'schedule', error: '' });
+      } catch (err) {
+        const rawError = String((err && (err.message || err)) || 'unknown error');
+        state.nativeScheduleError = rawError;
+        pending.forEach(function (p) {
+          if (p.row.status !== 'queued') return;
+          p.row.status = 'fail';
+          p.row.failType = 'native-bridge-error';
+          p.row.plugin = 'AeroNativeReminders';
+          p.row.method = 'schedule';
+          p.row.reason = T('原生通道排程失败：') + rawError;
+        });
+        finishRound({ plugin: 'AeroNativeReminders', method: 'schedule', error: rawError });
+        pending.forEach(function (p) {
+          if (p.diff >= 24 * 60 * 60 * 1000) return;
+          const timer = setTimeout(function () {
+            fireReminder(p.item, p.key);
+          }, p.diff);
+          state.reminderTimers.push(timer);
+        });
+      }
+      return;
+    }
 
     if (useNative) {
       const ordered = pending.slice().sort(function (a, b) { return a.fireAt - b.fireAt; });
       // 超出单轮上限的实例如实标出来，而不是悄悄丢掉
       ordered.slice(REMIND_MAX).forEach(function (p) {
-        p.row.status = 'skip';
-        p.row.reason = T('超出本轮排程上限 {n} 条').replace('{n}', REMIND_MAX);
+        p.row.status = 'fail';
+        p.row.failType = 'over-limit';
+        p.row.method = 'schedule';
+        p.row.reason = T('超过并发上限：超出本轮排程上限 {n} 条').replace('{n}', REMIND_MAX);
       });
 
       const notifications = ordered
@@ -7599,6 +8591,7 @@
       const stale = previous.filter(function (id) { return newIds.indexOf(id) === -1; });
 
       const gen = ++state.nativeReminderGen;
+      let readbackEmpty = false;
 
       const cancelIds = function (ids) {
         if (!ids.length) return Promise.resolve();
@@ -7616,7 +8609,20 @@
           if (gen !== state.nativeReminderGen) return null;
           if (!channelOk) throw new Error('notification channel unavailable');
           if (!notifications.length) return { ids: [] };
+          // 运行时兜底：smallIcon 资源缺失/不合规时，系统会在投递阶段静默丢弃整条通知。
+          // 先用正式参数排；抛错就退化为「不传 smallIcon」（插件回退到默认图标）再试一次。
+          const withoutIcon = notifications.map(function (n) {
+            const copy = Object.assign({}, n);
+            delete copy.smallIcon;
+            return copy;
+          });
+          state.reminderIconVariant = 'ic_stat_icon';
           return Promise.resolve(notify.schedule({ notifications: notifications }))
+            .catch(function (err) {
+              console.warn('按 ic_stat_icon 排程失败，改用默认小图标重试：', err);
+              state.reminderIconVariant = 'default(ic_launcher)';
+              return Promise.resolve(notify.schedule({ notifications: withoutIcon }));
+            })
             .then(function () {
               // 回读系统里的排程：排程调用成功但被系统丢掉时，自查表能直接看出来
               return Promise.resolve(notify.getPending()).then(function (res) {
@@ -7631,6 +8637,9 @@
           state.nativeReminderIds = state.meta.reminderIds.slice();
           persistMeta();
           const readback = result && result.ids;
+          // 排程调用没抛错、但 getPending() 里一条都看不到：说明调用可能打到了
+          // 错误的插件实例，或系统直接丢弃了排程。日志里单列一条 note。
+          readbackEmpty = !!(readback && notifications.length > 0 && readback.length === 0);
           const missing = readback ? newIds.filter(function (id) { return readback.indexOf(id) === -1; }) : [];
           notifications.forEach(function (n) {
             const p = pending.filter(function (row) { return row.numericId === n.id; })[0];
@@ -7638,7 +8647,8 @@
             p.row.status = 'ok';
             if (readback && readback.indexOf(n.id) === -1) {
               p.row.status = 'fail';
-              p.row.reason = T('系统未接受该排程');
+              p.row.failType = 'not-accepted';
+              p.row.reason = T('系统未接受该排程（getPending 里没有这个 id）');
             }
           });
           state.nativeScheduleError = missing.length
@@ -7648,22 +8658,25 @@
         })
         .then(function () {
           if (gen !== state.nativeReminderGen) return;
-          state.reminderReport = report;
-          renderNotifyDiagnostics();
+          finishRound(readbackEmpty ? {
+            method: 'getPending',
+            error: 'schedule() 未抛错，但 getPending() 返回空队列；请核对调用的插件实例是否为 Capacitor.Plugins.LocalNotifications'
+          } : null);
         })
         .catch(function (err) {
           if (gen !== state.nativeReminderGen) return;
           // 系统拒绝排程时不再“装作已排程”：记录原因，并保留前台页面计时器兜底
           state.nativeScheduleError = pluginErrorText(err);
+          const rawError = String((err && (err.message || err.code || err)) || 'unknown error');
           console.warn('本地通知排程失败：', err);
           pending.forEach(function (p) {
             if (p.row.status === 'queued') {
               p.row.status = 'fail';
+              p.row.failType = 'schedule-error';
               p.row.reason = state.nativeScheduleError || T('排程失败');
             }
           });
-          state.reminderReport = report;
-          renderNotifyDiagnostics();
+          finishRound({ method: 'schedule', error: rawError });
           pending.forEach(function (p) {
             // setTimeout 超过 2^31ms 会溢出成立即触发，只兜底 24 小时内的
             if (p.diff >= 24 * 60 * 60 * 1000) return;
@@ -7680,8 +8693,10 @@
     pending.forEach(function (p) {
       // 原生环境里权限没给：连系统排程都不会发生，如实写进表里，方便用户对照
       if (!useNative && notify && notifyState.status !== 'granted') {
-        p.row.status = 'skip';
-        p.row.reason = T('通知权限未允许');
+        p.row.status = 'fail';
+        p.row.failType = 'permission-denied';
+        p.row.method = 'requestPermissions';
+        p.row.reason = T('排程失败：通知权限未授予');
         return;
       }
       p.row.status = p.row.status === 'queued' ? 'timer' : p.row.status;
@@ -7690,8 +8705,10 @@
       }, p.diff);
       state.reminderTimers.push(timer);
     });
-    state.reminderReport = report;
-    renderNotifyDiagnostics();
+    finishRound(useNative ? null : {
+      method: 'schedule',
+      error: notify ? 'permission not granted' : 'native notification plugin unavailable; using in-page timer'
+    });
   }
 
   // 申请通知权限；Android 12+ 再检查「精确闹钟」权限。返回是否已授权
@@ -7862,9 +8879,11 @@
       rows.push([L('申请失败原因', 'Request error'), notifyState.lastRequestError]);
     }
     rows.push([L('通知通道', 'Notification path'),
-      notifyState.webFallback
-        ? L('降级：应用内提示（不会弹系统通知）', 'Fallback: in-app alert only (no system notification)')
-        : (notify ? L('原生系统通知', 'Native system notification') : L('不支持', 'Unsupported'))]);
+      nativeReminderBridge()
+        ? L('原生通道（AeroNativeReminders，不经插件）', 'Native bridge (AeroNativeReminders, no plugin)')
+        : (notifyState.webFallback
+          ? L('降级：应用内提示（不会弹系统通知）', 'Fallback: in-app alert only (no system notification)')
+          : (notify ? L('原生系统通知', 'Native system notification') : L('不支持', 'Unsupported')))]);
     rows.push([L('数据加载', 'Data loaded'),
       state.loaded
         ? L('已加载 ' + state.items.length + ' 条条目 / ' + state.plans.length + ' 条计划', 'Loaded ' + state.items.length + ' items / ' + state.plans.length + ' plans')
@@ -7874,6 +8893,25 @@
         ? L('扫描 ' + state.reminderScan.items + ' 条条目、' + state.reminderScan.plans + ' 条计划 · 权限 ' + statusText(state.reminderScan.status),
           'Scanned ' + state.reminderScan.items + ' items, ' + state.reminderScan.plans + ' plans · ' + statusText(state.reminderScan.status))
         : L('尚未扫描', 'not scanned yet')]);
+
+    if (!notify && nativeReminderBridge()) {
+      const nd = readNativeDiagnostics() || {};
+      rows.push([L('原生通道', 'Native bridge'), L('已注入 AeroNativeReminders（不经 Capacitor 插件）', 'Injected AeroNativeReminders (no plugin)')]);
+      rows.push([L('原生通道渠道', 'Native channel'),
+        (nd.channelId || 'aeroplan-native-v1') + L(' · 回读重要性 ', ' · importance ') +
+        (nd.channelImportance == null ? '?' : nd.channelImportance)]);
+      rows.push([L('原生通道已排条数', 'Native scheduled'),
+        nd.scheduledCount == null ? L('未知', 'Unknown') : String(nd.scheduledCount) + L(' 条', '')]);
+      rows.push([L('原生通道最近排程', 'Native last schedule'),
+        nd.lastScheduleAt ? clockTimeText(nd.lastScheduleAt) : L('尚未排程', 'never')]);
+      rows.push([L('原生通道最近投递', 'Native last delivery'),
+        nd.lastDeliveryAt ? clockTimeText(nd.lastDeliveryAt) : L('尚未投递', 'never')]);
+      rows.push([L('原生通道最近错误', 'Native last error'), nd.lastError || L('无', 'none')]);
+      if (Array.isArray(state.meta.migrationLog) && state.meta.migrationLog.length) {
+        rows.push([L('旧数据迁移', 'Legacy migration'), state.meta.migrationLog.join('；')]);
+      }
+      return rows;
+    }
 
     if (!notify) {
       rows.push([L('原生插件', 'Native plugin'),
@@ -7887,6 +8925,8 @@
     }
 
     let channelText = L('未创建', 'Missing');
+    let actualImportance = null;
+    let readbackFailed = false;
     try {
       const res = await notify.listChannels();
       const list = (res && res.channels) || [];
@@ -7896,6 +8936,7 @@
       });
       if (ch) {
         state.channelInfo = ch;
+        actualImportance = typeof ch.importance === 'number' ? ch.importance : null;
         channelText = L('已创建 · 重要性 ', 'Created · importance ') + ch.importance;
         if (ch.importance < 5) channelText += L('（不是 5，可能不弹横幅；渠道参数不可改，需要换新 id）', ' (not 5, may not pop; channel settings are immutable, use a new id)');
         channelText += ch.sound ? L(' · 含提示音', ' · sound on') : L(' · 无提示音', ' · no sound');
@@ -7903,12 +8944,31 @@
       }
       if (legacy.length) channelText += L(' · 旧渠道仍在：' + legacy.map(function (c) { return c.id; }).join('、'), ' · legacy present: ' + legacy.map(function (c) { return c.id; }).join(', '));
     } catch (err) {
+      readbackFailed = true;
       channelText = state.channelInfo
         ? L('已创建（未回读）· 重要性 ', 'Created (not read back) · importance ') + state.channelInfo.importance
         : L('读取失败', 'Unreadable');
     }
     rows.push([L('通知渠道', 'Channel'), channelText]);
     rows.push([L('渠道 id', 'Channel id'), REMIND_CHANNEL_ID]);
+    // 渠道参数创建后不可修改：把「请求值」和「系统回读值」并排列出，
+    // 两者不一致基本等于设备上还是旧构建建的渠道，必须换新 id 或重装。
+    rows.push([L('创建时请求的重要性', 'Requested importance'),
+      String(REMIND_CHANNEL_IMPORTANCE) + L('（5 = IMPORTANCE_MAX，才有横幅与声音）', ' (5 = IMPORTANCE_MAX: banner + sound)')]);
+    rows.push([L('系统回读的重要性', 'Read-back importance'),
+      actualImportance === null
+        ? L(readbackFailed ? '回读失败' : '未回读到（渠道可能尚未创建）', readbackFailed ? 'read-back failed' : 'not read back (channel may not exist yet)')
+        : String(actualImportance)]);
+    if (actualImportance !== null && actualImportance !== REMIND_CHANNEL_IMPORTANCE) {
+      rows.push([L('重要性与请求不一致', 'Importance mismatch'),
+        L('系统里的渠道仍是旧参数（旧构建或旧 id 创建），渠道不可修改：请确认安装的是最新构建并重装以删除旧渠道',
+          'The channel still has older settings (created by an old build/id); channels are immutable — install the latest build and reinstall to drop old channels')]);
+    }
+    rows.push([L('本轮使用的小图标', 'Small icon in use'), state.reminderIconVariant || REMIND_SMALL_ICON]);
+    if (state.channelFallbackSound) {
+      rows.push([L('渠道提示音', 'Channel sound'),
+        L('自定义提示音不可用，已回退为系统默认（避免整条通知被丢弃）', 'Custom sound unavailable; fell back to system default')]);
+    }
 
     // 小图标与提示音是否存在只能构建时校验；这里亮出配置值，便于和构建日志对照
     rows.push([L('通知小图标', 'Small icon'), REMIND_SMALL_ICON + L('（构建时校验在 APK 内）', ' (verified in APK at build)')]);
@@ -7929,13 +8989,61 @@
       state.exactAlarmStatus === 'denied' ? L('允许延迟', 'Inexact (may be delayed)') : L('精确', 'Exact')]);
 
     let pendingText = L('未知', 'Unknown');
+    let pendingIdsText = L('未知', 'Unknown');
     try {
       const res = await notify.getPending();
-      pendingText = String(((res && res.notifications) || []).length) + L(' 条', '');
+      const list = (res && res.notifications) || [];
+      pendingText = String(list.length) + L(' 条', '');
+      // 原始 id 列表：直接看系统队列里到底有没有东西在排队，不依赖代码推断
+      pendingIdsText = list.length
+        ? list.map(function (n) { return n.id; }).join(', ')
+        : L('（空队列）', '(empty queue)');
     } catch (err) {
       pendingText = L('读取失败', 'Unreadable');
+      pendingIdsText = L('读取失败：' + String((err && err.message) || err), 'Read failed: ' + String((err && err.message) || err));
     }
     rows.push([L('系统里已排程', 'Pending in system'), pendingText]);
+    rows.push([L('系统队列 id（getPending 原始）', 'Pending ids (raw getPending)'), pendingIdsText]);
+
+    // 原生通道存在时，上面两项只是插件队列（通常为 0），真正生效的是下面的原生通道
+    if (nativeReminderBridge()) {
+      const nd = readNativeDiagnostics() || {};
+      rows.push([L('实际提醒通道', 'Active channel'),
+        L('原生通道 AeroNativeReminders（不经 Capacitor 插件）', 'Native bridge AeroNativeReminders (no Capacitor plugin)')]);
+      rows.push([L('原生通道渠道', 'Native channel'),
+        (nd.channelId || 'aeroplan-native-v1') + L(' · 回读重要性 ', ' · importance ') +
+        (nd.channelImportance == null ? '?' : nd.channelImportance)]);
+      rows.push([L('原生通道已排条数', 'Native scheduled'),
+        nd.scheduledCount == null ? L('未知', 'Unknown') : String(nd.scheduledCount) + L(' 条', '')]);
+      rows.push([L('原生通道最近投递', 'Native last delivery'),
+        nd.lastDeliveryAt ? clockTimeText(nd.lastDeliveryAt) : L('尚未投递', 'never')]);
+      rows.push([L('原生通道最近错误', 'Native last error'), nd.lastError || L('无', 'none')]);
+    }
+
+    // 已送达通知：到点后这里有没有本条，是区分「投递失败」与「渠道静默」的关键
+    let deliveredText = L('未知', 'Unknown');
+    try {
+      if (typeof notify.getDeliveredNotifications === 'function') {
+        const res = await notify.getDeliveredNotifications();
+        const list = (res && res.notifications) || [];
+        deliveredText = list.length
+          ? list.map(function (n) { return n.id + (n.title ? '(' + n.title + ')' : ''); }).join(', ')
+          : L('（空）：到点后仍为空 → 投递阶段失败，重点查小图标与提示音', '(empty): delivery failed; check small icon and sound');
+      } else {
+        deliveredText = L('插件不支持该接口', 'not supported');
+      }
+    } catch (err) {
+      deliveredText = L('读取失败：', 'read failed: ') + pluginErrorText(err);
+    }
+    rows.push([L('已送达通知（getDeliveredNotifications 原始）', 'Delivered (raw getDeliveredNotifications)'), deliveredText]);
+
+    const scan = state.reminderScan || null;
+    rows.push([L('最近一次排程调用', 'Last schedule call'), scan && scan.at ? clockTimeText(scan.at) : L('尚未排程', 'never')]);
+    const lastUpdated = state.items.concat(state.plans).reduce(function (max, it) {
+      const t = Number(it && it.updatedAt) || 0;
+      return t > max ? t : max;
+    }, 0);
+    rows.push([L('最近一次条目更新', 'Last item update'), lastUpdated ? clockTimeText(lastUpdated) : L('无', 'none')]);
 
     const recorded = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.length : 0;
     rows.push([L('本轮记录的排程', 'Recorded this round'), String(recorded) + L(' 条', '')]);
@@ -8037,8 +9145,8 @@
     let tableHTML = '';
     if (report) {
       const tHead = isEn()
-        ? ['Instance', 'Title', 'Item time', 'Before', 'Fires at', 'Scheduled', 'id', 'Reason']
-        : ['实例 keys', '标题', '条目时间', '提前', '触发时间', '是否已排程', '排程 id', '失败原因'];
+        ? ['Instance', 'Title', 'Item time', 'Before', 'Computed fire time', 'Scheduled at', 'Scheduled', 'id', 'Schedule call / item updated', 'Reason']
+        : ['实例键', '标题', '条目时间', '提前', '计算触发时间', '实际排程时间', '是否已排程', '排程 id', '排程调用 / 条目更新', '失败或跳过原因'];
       if (!report.length) {
         tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Scheduling result' : '带提醒的实例（排程结果）') + '</div>' +
           '<p class="diag-empty">' + esc(state.loaded
@@ -8055,9 +9163,11 @@
               '<td>' + esc(r.title) + '</td>' +
               '<td>' + esc(r.when) + '</td>' +
               '<td>' + esc(r.before + ' ' + (isEn() ? 'min' : '分钟')) + '</td>' +
-              '<td class="diag-mono">' + esc(r.fireText) + '</td>' +
+              '<td class="diag-mono">' + esc(r.computedText || '—') + '</td>' +
+              '<td class="diag-mono">' + esc(r.fireText || '—') + '</td>' +
               '<td>' + esc(statusText(r.status)) + '</td>' +
               '<td class="diag-mono">' + esc(r.numericId || '—') + '</td>' +
+              '<td class="diag-mono">' + esc(r.callText || '—') + '</td>' +
               '<td>' + esc(r.reason || '—') + '</td>' +
               '</tr>';
           }).join('') +
@@ -8065,12 +9175,50 @@
       }
     }
 
+    // 「已跳过」不等于「提醒失效」：把原因写清楚，避免用户误判
+    const hasSkip = !!(report && report.some(function (r) { return r.status === 'skip'; }));
+    const skipNote = hasSkip
+      ? '<p class="diag-empty">' + esc(isEn()
+        ? '“Skipped” means the computed fire time has already passed. Within 2 minutes it is delivered once immediately (catch-up); beyond 2 minutes it counts as expired and is not rescheduled — that is a time already gone, not a broken reminder. To test, create an entry 30 minutes ahead with a 10-minute lead.'
+        : '「已跳过」表示该实例的计算触发时间已经过去：2 分钟内会立即补发一次（实际排程时间＝现在+5 秒）；超过 2 分钟才判定过期、不再重排——这不是提醒失效，而是这个时间点已经过去了。验证请用「30 分钟后的条目 + 提前 10 分钟」。') + '</p>'
+      : '';
+
+    // ---------- 表三：排程日志（持久化，最近 200 条，页面只渲染最近 40 条） ----------
+    const logAll = Array.isArray(state.meta.reminderLog) ? state.meta.reminderLog : [];
+    const logRows = logAll.slice(-40).reverse();
+    const logHead = isEn()
+      ? ['Time', 'Instance', 'Fire', 'Status/type', 'id', 'Plugin · method', 'Params', 'Error']
+      : ['时间', '实例键', '触发时间', '状态/类别', 'id', '插件·方法', '调用参数', '错误原文'];
+    const logHTML = '<div class="diag-sub">' + esc(isEn()
+      ? 'Schedule log (latest ' + logRows.length + ' of ' + logAll.length + ')'
+      : '排程日志（最近 ' + logRows.length + ' 条，共 ' + logAll.length + ' 条）') + '</div>' +
+      (logRows.length
+        ? '<div class="diag-table-wrap"><table class="diag-table diag-log"><thead><tr>' +
+          logHead.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
+          '</tr></thead><tbody>' +
+          logRows.map(function (e) {
+            return '<tr>' +
+              '<td class="diag-mono">' + esc(clockTimeText(e.at)) + '</td>' +
+              '<td class="diag-mono">' + esc(e.key || '') + '</td>' +
+              '<td class="diag-mono">' + esc(e.fire || '—') + '</td>' +
+              '<td>' + esc((e.status || '') + (e.type ? ' · ' + e.type : '')) + '</td>' +
+              '<td class="diag-mono">' + esc(e.id || '—') + '</td>' +
+              '<td class="diag-mono">' + esc((e.plugin || '—') + ' · ' + (e.method || '—')) + '</td>' +
+              '<td class="diag-mono">' + esc(e.params || '—') + '</td>' +
+              '<td>' + esc(e.error || '—') + '</td>' +
+              '</tr>';
+          }).join('') +
+          '</tbody></table></div>'
+        : '<p class="diag-empty">' + esc(isEn()
+          ? 'No scheduling attempt logged yet. Save an entry with a reminder and it will appear here immediately.'
+          : '还没有排程记录；保存一条带提醒的条目后这里会立即出现。') + '</p>');
+
     box.innerHTML = '<div class="diag-title">' + esc(head) + '</div>' +
       rows.map(function (r) {
         return '<div class="diag-row"><span class="diag-key">' + esc(r[0]) + '</span>' +
           '<span class="diag-value">' + esc(r[1]) + '</span></div>';
       }).join('') +
-      '<p class="diag-hint">' + esc(hint) + '</p>' + rawTableHTML + tableHTML;
+      '<p class="diag-hint">' + esc(hint) + '</p>' + rawTableHTML + tableHTML + skipNote + logHTML;
     box.hidden = false;
   }
 
@@ -8154,11 +9302,20 @@
     setTimeout(function () { box.hidden = true; }, 220);
   }
 
+  // 提醒分钟数上限：7 天。超过按上限处理，非数字/负数直接判为无效
+  const REMIND_MAX_MINUTES = 10080;
+
+  // 返回 null（空）、NaN（无效）或归一化后的整数
+  function parseRemindMinutes(raw) {
+    const text = String(raw == null ? '' : raw).trim();
+    if (!text) return null;
+    const n = Number(text);
+    if (!isFinite(n) || Math.round(n) !== n || n < 1) return NaN;
+    return Math.min(n, REMIND_MAX_MINUTES);
+  }
+
   function remindEditorValue() {
-    const raw = $('#remindMinutes').value.trim();
-    const n = Number(raw);
-    if (!raw || !isFinite(n) || Math.round(n) !== n || n < 1 || n > 1440) return null;
-    return n;
+    return parseRemindMinutes($('#remindMinutes').value);
   }
 
   function openRemindEditor() {
@@ -8176,12 +9333,14 @@
 
   function applyRemindEditor() {
     const n = remindEditorValue();
-    if (n === null) {
-      showToast(T('请输入 1–1440 的整数分钟'));
+    if (!n) {
+      showToast(T('请输入 1–10080 的整数分钟'));
       $('#remindMinutes').focus();
       return;
     }
     draft.remindBefore = n;
+    // 归一化后回显，保证气泡、详情页、诊断表看到的是同一个数字
+    $('#remindMinutes').value = String(n);
     syncRemindChip();
     closeRemindEditor();
   }
@@ -8518,6 +9677,16 @@
         applyRemindEditor();
       }
     });
+    // 输入过程中就写回草稿：即使不点「确定」直接保存，也不会用到旧值
+    ['input', 'change', 'blur'].forEach(function (evt) {
+      $('#remindMinutes').addEventListener(evt, function () {
+        const n = remindEditorValue();
+        if (n) {
+          draft.remindBefore = n;
+          syncRemindChip();
+        }
+      });
+    });
 
     $('#detailNote').addEventListener('input', updateDetailNoteCount);
     $('#detailClose').addEventListener('click', closeDetail);
@@ -8693,15 +9862,26 @@
     });
 
     $('#planRemindApply').addEventListener('click', function () {
-      const raw = $('#planRemindInput').value.trim();
-      const n = Number(raw);
-      if (!raw || !isFinite(n) || Math.round(n) !== n || n < 1 || n > 1440) {
+      const n = parseRemindMinutes($('#planRemindInput').value);
+      if (!n) {
+        showToast(T('请输入 1–10080 的整数分钟'));
         $('#planRemindInput').focus();
         return;
       }
       planDraft.remindBefore = n;
+      $('#planRemindInput').value = String(n);
       $('#planRemindEditor').hidden = true;
       syncPlanRemindChip();
+    });
+
+    ['input', 'change', 'blur'].forEach(function (evt) {
+      $('#planRemindInput').addEventListener(evt, function () {
+        const n = parseRemindMinutes($('#planRemindInput').value);
+        if (n) {
+          planDraft.remindBefore = n;
+          syncPlanRemindChip();
+        }
+      });
     });
 
     $('#planRemindInput').addEventListener('keydown', function (e) {
@@ -8910,8 +10090,52 @@
     $('#permLater').addEventListener('click', finishPermissionIntro);
     $('#permAllow').addEventListener('click', function () { askNotifyPermission(); });
     $('#permRequest').addEventListener('click', function () { askNotifyPermission(); });
-    $('#permRecheck').addEventListener('click', function () { refreshAllPermissionStates(); });
-    $('#notifyDiagRefresh').addEventListener('click', function () { refreshAllPermissionStates(); });
+    // 「通知自查」入口 / 返回 / 「刷新自查」统一用事件委托绑在 document 上：
+    // 面板或按钮被重绘后监听依然有效，不会出现「点了没反应」。
+    document.addEventListener('click', function (e) {
+      const refresh = e.target.closest && e.target.closest('#notifyDiagRefresh');
+      if (refresh) {
+        e.preventDefault();
+        refreshSelfCheck();
+        return;
+      }
+      const open = e.target.closest && e.target.closest('#notifySelfCheckBtn');
+      if (open) {
+        e.preventDefault();
+        openNotifyDiagPage();
+        return;
+      }
+      const close = e.target.closest && e.target.closest('#notifyDiagClose');
+      if (close) {
+        e.preventDefault();
+        closeNotifyDiagPage();
+        return;
+      }
+      const selfTest = e.target.closest && e.target.closest('#notifySelfTestBtn');
+      if (selfTest) {
+        e.preventDefault();
+        runNotifySelfTest();
+        return;
+      }
+      const nativeTest = e.target.closest && e.target.closest('#nativeTestBtn');
+      if (nativeTest) {
+        e.preventDefault();
+        runNativeChannelTest();
+        return;
+      }
+      const bgSettings = e.target.closest && e.target.closest('#bgGuideSettingsBtn');
+      if (bgSettings) {
+        e.preventDefault();
+        openAppSettingsPage();
+      }
+    });
+
+    // 日历开关：change 不冒泡到 click，单独绑在 document 上，面板重绘后依然有效
+    document.addEventListener('change', function (e) {
+      if (e.target && e.target.id === 'calendarSyncToggle') {
+        setCalendarSyncEnabled(!!e.target.checked);
+      }
+    });
 
     $('#themeToggle').addEventListener('change', function () {
       state.meta.theme = $('#themeToggle').checked ? 'dark' : 'light';
@@ -9094,6 +10318,8 @@
     if (addressSheet.open) { closeAddressSheet(); return true; }
     if (!$('#citySheet').hidden) { closeCitySheet(); return true; }
     if (!$('#catPop').hidden) { closeCatPop(); return true; }
+    // 通知自查是盖在权限引导之上的整页：返回键先关它，再关权限引导
+    if ($('#notifyDiagPage') && !$('#notifyDiagPage').hidden) { closeNotifyDiagPage(); return true; }
     if (!$('#permSheet').hidden) { finishPermissionIntro(); return true; }
     if (!$('#modalCard').hidden) { closeModal(); return true; }
     // 日记：预览 → 写作页 → 附件/备份选择 → 管理态，逐层退出
@@ -10851,6 +12077,25 @@
       await refreshExactAlarmStatus(bootNotify);
     }
     await refreshNotifyState();
+
+    // 开了「同时写入系统日历」：启动时补一次同步，把离线期间的增删改补齐
+    if (calendarSyncEnabled()) {
+      setTimeout(function () { syncCalendarEvents(); }, 1200);
+    }
+    syncCalendarUI();
+
+    // 回到前台：对比「上次排程」与系统队列，写进排程日志，判断是“消费了没显示”还是“从未消费”
+    const appPlugin = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.App : null;
+    if (appPlugin && typeof appPlugin.addListener === 'function') {
+      try {
+        appPlugin.addListener('appStateChange', function (st) {
+          if (st && st.isActive) {
+            logPendingDiff();
+            refreshNotifyState({ skipSchedule: true }).catch(function () {});
+          }
+        });
+      } catch (err) { /* 旧版本没有 App 插件时忽略 */ }
+    }
 
     // 首启自动申请一次系统通知权限：Activity 就绪后再调用，避免「从未弹过授权」。
     // 只尝试一次，失败或用户拒绝后不再打扰；「权限管理 → 申请通知权限」是可靠的手动兜底。
