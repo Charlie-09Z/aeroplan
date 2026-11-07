@@ -88,6 +88,9 @@
   --z-modal: 61;
   --z-perm-bg: 70;
   --z-perm: 71;
+  /* 节假日标记：放假偏暖红，调休中性灰蓝（深色主题在 html.dark 里提亮） */
+  --holiday: #C0392B;
+  --workday-mark: #4B6584;
   --z-splash: 90;
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -123,6 +126,9 @@ html.dark {
   --sheet-bg: #12151D;
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, .22);
   --sch-hatch: rgba(255, 255, 255, .05);
+  /* 深色下提亮，保证 11px 小圆里的 8.5px 文字仍有足够对比度 */
+  --holiday: #FF8A7A;
+  --workday-mark: #9BB3D4;
 
   /* 深色下层次只比卡片（#1E222C）深一点点，靠细描边分离，避免糊成黑块 */
   --deck-fill-1: #1B1F28;
@@ -339,8 +345,9 @@ svg { display: block; }
 .batch-bar {
   flex: 0 0 auto;
   margin: 4px 16px 2px;
-  padding: 8px 10px 8px 12px;
+  padding: 8px 12px;
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 10px;
   background: var(--card);
@@ -353,23 +360,37 @@ svg { display: block; }
 .batch-count {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
+/* 按钮只允许单行：给足两字内距与最小宽度，绝不因容器变窄折行或被裁切 */
 .batch-btn {
   flex: 0 0 auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   height: 30px;
-  padding: 0 13px;
+  min-width: 54px;
+  padding: 0 14px;
   border-radius: 15px;
   border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--text-2);
   font-size: 12.5px;
   font-weight: 600;
+  line-height: 1;
   font-family: inherit;
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
 }
 
 .batch-btn:active { transform: scale(.96); }
@@ -380,7 +401,15 @@ svg { display: block; }
   color: var(--danger);
 }
 
-.batch-btn.danger[disabled] { opacity: .45; }
+/* 禁用只改颜色，不改尺寸，避免选中后按钮跳动 */
+.batch-btn.danger[disabled] {
+  opacity: .45;
+  background: var(--card-soft);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.batch-btn[disabled] { pointer-events: none; }
 
 /* 组头「全选本组」：批量模式下唯一的整组选择入口 */
 .batch-group-count {
@@ -553,84 +582,118 @@ svg { display: block; }
   flex-shrink: 0;
 }
 
-/* 展开态高度 0、不占位；收起态固定 52px 并粘顶，
-   高度写死避免农历文字长短不同导致抖动 */
-.week-strip {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  flex: 0 0 auto;
-  height: 0;
-  margin: 0 -16px;
-  padding: 0 16px;
-  overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
-  background: var(--bg);
-  transition: height .26s cubic-bezier(.2, .8, .2, 1), opacity .18s ease;
+/* ==================== 年历（双指捏合展开） ==================== */
+.year-view {
+  padding: 6px 2px 18px;
+  animation: yearIn .22s cubic-bezier(.2, .8, .2, 1);
 }
 
-.cal-collapsed .week-strip {
-  height: 52px;
-  opacity: 1;
-  pointer-events: auto;
-  box-shadow: 0 8px 14px -10px rgba(0, 0, 0, .28);
+.year-view[hidden] { display: none; }
+
+@keyframes yearIn {
+  from { opacity: 0; transform: scale(.94); }
+  to { opacity: 1; transform: scale(1); }
 }
 
-.ws-track {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  height: 52px;
-  touch-action: pan-y;
-  will-change: transform;
-}
-
-.ws-cell {
+.year-head {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  height: 52px;
-  padding: 0 2px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  font-family: inherit;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 4px 10px;
+}
+
+.year-title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: .5px;
   color: var(--text);
-  -webkit-tap-highlight-color: transparent;
-}
-
-.ws-wday {
-  font-size: 9.5px;
-  line-height: 1.1;
-  color: var(--muted);
-}
-
-.ws-num {
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
 
-.ws-sub {
-  max-width: 100%;
-  overflow: hidden;
-  font-size: 8.5px;
-  line-height: 1.1;
+.year-tip {
+  font-size: 10.5px;
   color: var(--muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: right;
 }
 
-.ws-cell.today .ws-num { color: var(--today-red); }
+.year-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  touch-action: pan-y;
+}
 
-.ws-cell.selected {
+.ym-card {
+  padding: 7px 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--card);
+  font-family: inherit;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ym-card.current {
+  border-color: var(--primary);
   background: var(--primary-soft);
 }
 
-.ws-cell.selected .ws-num { color: var(--primary); }
+.ym-name {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ym-card.current .ym-name { color: var(--primary); }
+
+.ym-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+}
+
+.ym-day {
+  position: relative;
+  height: 14px;
+  line-height: 14px;
+  font-size: 8.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.ym-day.out { color: transparent; }
+
+.ym-day.today {
+  color: #fff;
+  font-weight: 700;
+}
+
+.ym-day.today::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  background: var(--today-red);
+  z-index: -1;
+}
+
+/* 年历里只保留极小色点，避免 12 个月同时铺文字后糊成一片 */
+.ym-day .ym-holiday-dot {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--holiday);
+}
+
+/* 年历里只留色点：放假暖红、调休上班灰蓝，与月历的「假 / 班」标记同源 */
+.ym-day .ym-holiday-dot.work { background: var(--workday-mark); }
+
 
 .weekdays {
   display: grid;
@@ -710,6 +773,41 @@ svg { display: block; }
 }
 
 .cal-cell.all-done .dots { opacity: .32; }
+
+/* 「假 / 班」：内层日期格右下角内侧 2px，直径 11px，字号 8.5px。
+   绘制在文字下层（z-index: 0 + 文字提升），不遮挡日期数字与农历。 */
+.cal-holiday {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  font-size: 8.5px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0;
+  pointer-events: none;
+  transform: scale(.96);
+}
+
+.cal-holiday.holiday {
+  color: var(--holiday);
+  background: rgba(214, 69, 54, .14);
+}
+
+.cal-holiday.workday {
+  color: var(--workday-mark);
+  background: rgba(76, 101, 132, .16);
+}
+
+.cal-cell .dnum,
+.cal-cell .cal-lunar,
+.cal-cell .dots { position: relative; z-index: 1; }
 
 /* 图例行与单日详情共用一个网格：左列自上而下是图例、日期、农历，
    右列天气块跨这两行并从第一行顶部开始，天然与图例齐平、不会高过它 */
@@ -2648,6 +2746,66 @@ html.dark .detail-sheet {
   box-shadow: inset 0 0 0 1px var(--line);
 }
 
+/* 详情页统一层级：标题在最上，主信息紧随，次要字段折叠 */
+.detail-hero {
+  padding: 12px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detail-hero-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.detail-hero-badge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.detail-facts .detail-row:first-child .detail-value {
+  font-weight: 600;
+}
+
+.detail-more {
+  margin: 10px 0 12px;
+  border-radius: 10px;
+  background: var(--card-soft);
+}
+
+.detail-more > summary {
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.detail-more > summary::-webkit-details-marker { display: none; }
+
+.detail-more > summary::after {
+  content: '›';
+  float: right;
+  transition: transform .18s ease;
+}
+
+.detail-more[open] > summary::after { transform: rotate(90deg); }
+
+.detail-more .detail-row {
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
 .detail-row {
   display: flex;
   align-items: flex-start;
@@ -2826,11 +2984,12 @@ html.dark .detail-sheet {
   box-shadow: var(--shadow-soft);
 }
 
+/* 分组标题：小而加粗（11.5 / 600 / 次要色），行标签保持 13.5 常规字重 */
 .setting-group h3 {
   margin: 4px 0 6px;
   padding: 0;
   font-size: 11.5px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: .5px;
   color: var(--muted);
 }
@@ -2869,10 +3028,14 @@ html.dark .setting-group {
   color: var(--text-2);
 }
 
-.setting-row b {
+/* 设置行右侧值：统一次要色 + 常规字重，
+   「未开启 / 已开启」这类状态值与城市值走同一套，不加粗 */
+.setting-group .setting-row b,
+.setting-group .row-btn b,
+.setting-group .loc-value {
   font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
+  font-weight: 400;
+  color: var(--text-2);
   text-align: right;
   overflow-wrap: anywhere;
 }
@@ -2884,7 +3047,17 @@ html.dark .setting-group {
   padding: 0 2px;
 }
 
-.toggle-row span:first-child { color: var(--text); }
+/* 设置行左侧标签统一到「语言 / Language」基准：13.5 / 400 / 次要色，
+   开关行、按钮行与语言行不再出现偏浅或偏深 */
+.setting-group .setting-row > span:first-child,
+.setting-group .row-btn > span:first-child {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--text-2);
+}
 
 .secondary-btn {
   width: 100%;
@@ -2916,6 +3089,12 @@ html.dark .setting-group {
 }
 .row-btn:active { opacity: .6; background: var(--card-soft); }
 .row-btn > span:first-child { flex: 0 0 auto; }
+
+/* 设置页内的按钮行与开关行同高、同字阶，标签与右侧控件垂直居中 */
+.setting-group .row-btn {
+  min-height: 46px;
+  font-size: 13.5px;
+}
 
 .row-arrow { color: var(--muted); font-size: 14px; }
 
@@ -4267,7 +4446,7 @@ html[lang="en"] .splash-sub {
 .perm-denied p { margin: 0 0 4px; font-size: 12.5px; line-height: 1.65; color: var(--danger); }
 
 /* ---------- 语言切换 ---------- */
-.lang-setting { min-height: 48px; }
+.lang-setting { min-height: 46px; }
 .lang-row { display: flex; flex: 0 0 auto; gap: 6px; margin: 0; }
 .lang-chip {
   flex: 0 0 auto;
@@ -4290,15 +4469,11 @@ html[lang="en"] .splash-sub {
 
 /* ---------- 备份位置 ---------- */
 .loc-row { align-items: center; }
+/* 字色 / 字重 / 字号由设置行的统一规则给出，这里只管布局与两行截断 */
 .loc-value {
   flex: 1 1 auto;
   margin-left: auto;
-  text-align: right;
-  font-size: 12px;
-  font-weight: 500;
   line-height: 1.45;
-  color: var(--muted);
-  overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -4797,6 +4972,64 @@ html.dark .row-time { color: #A9B1C4; }
   color: var(--muted);
 }
 
+/* 提醒实例表：横向可滚动，避免 8 列把面板撑破 */
+.diag-sub {
+  margin: 12px 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.diag-empty {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.diag-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.diag-table th,
+.diag-table td {
+  padding: 5px 7px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.diag-table th {
+  position: sticky;
+  top: 0;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--card-soft);
+}
+
+.diag-table tr:last-child td { border-bottom: 0; }
+
+.diag-table td { color: var(--text-2); max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+
+.diag-mono {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
+.diag-table tr.diag-ok td:nth-child(6) { color: var(--green); }
+.diag-table tr.diag-skip td:nth-child(6) { color: var(--muted); }
+.diag-table tr.diag-fail td:nth-child(6) { color: var(--danger); }
+
 .notify-diag-actions {
   display: flex;
   justify-content: flex-end;
@@ -5288,24 +5521,19 @@ html.dark .wx-snow { color: #A9BDD3; }
   font-size: 12.5px;
 }
 
-.diary-manage-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: var(--card-batch);
+/* 日记管理态：与日程批量删除共用 .batch-bar 视觉，贴在滚动区底部 */
+.diary-batch-bar {
+  position: sticky;
+  bottom: calc(6px + env(safe-area-inset-bottom));
+  z-index: 6;
+  margin: 8px 16px 6px;
+  padding: 8px 12px;
+  background: var(--card);
+  box-shadow: 0 6px 20px rgba(16, 20, 34, .18);
 }
 
-.dmb-count {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-2);
-}
-
-.dmb-actions { display: flex; gap: 6px; }
+/* 操作栏浮在列表上时给底部留出空间 */
+#viewDiary.managing .diary-body { padding-bottom: 58px; }
 
 /* ---------- 时间线卡片 ---------- */
 
@@ -5547,6 +5775,186 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
   font-size: 10px;
 }
 
+/* ---------- 卡片头部：标题 → 日期时间 → 心情 → 位置 ---------- */
+
+.dc-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dc-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 无标题时用正文首行替代，样式略弱 */
+.dc-title.is-weak {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.dc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.dc-date { font-variant-numeric: tabular-nums; }
+
+.dc-ahead {
+  padding: 0 6px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  font-size: 10px;
+}
+
+/* 位置在卡片上只到市，超长截断 */
+.dc-loc {
+  max-width: 48%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diary-card.is-future {
+  border-style: dashed;
+  opacity: .84;
+}
+
+/* 摘要类目分组（按日期搜索时区分「日期」与「正文 / 标签」） */
+.diary-sec + .diary-sec { margin-top: 16px; }
+
+.diary-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.diary-sec-n {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--card-soft);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* ---------- 网格卡头部（同样顺序，位置只到市） ---------- */
+
+.dcard-head {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px 0;
+}
+
+.dcard.has-cover .dcard-head {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 9px 10px 16px;
+  background: linear-gradient(rgba(10, 13, 24, .66), rgba(10, 13, 24, 0));
+}
+
+.dcard-title {
+  font-size: 13px;
+  line-height: 1.36;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.dcard-title.is-weak { font-weight: 500; color: var(--text-2); }
+
+.dcard.has-cover .dcard-title,
+.dcard.has-cover .dcard-meta { color: #F4F6FF; }
+
+.dcard-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.dcard-ahead {
+  padding: 0 4px;
+  border: 1px dashed currentColor;
+  border-radius: 6px;
+  font-size: 9.5px;
+  opacity: .9;
+}
+
+.dcard-loc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dcard.has-cover .dcard-foot { margin-top: auto; }
+
+.dcard-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(12, 15, 26, .52);
+}
+
+.dcard-play svg {
+  width: 18px;
+  height: 18px;
+  fill: #fff;
+  margin-left: 2px;
+}
+
+.dcard-dur {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  margin-top: 4px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: rgba(10, 12, 20, .64);
+  color: #fff;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.dcard.is-future {
+  border-style: dashed;
+  opacity: .86;
+}
+
 #viewDiary .empty-state { padding-top: 54px; }
 
 /* ---------- 写作页 ---------- */
@@ -5591,6 +5999,170 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
   margin: 3px 0 0;
   font-size: 11.5px;
   color: var(--muted);
+}
+
+/* 日期可点：打开滚轮补写过去的日记 */
+.de-date-btn {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+}
+
+.de-date-btn::after {
+  content: '▾';
+  margin-left: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  vertical-align: 1px;
+}
+
+.de-date-btn:active { opacity: .7; }
+
+/* 标题：日期下方、正文上方，单行，可选 */
+.de-title {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.45;
+  outline: none;
+}
+
+.de-title::placeholder { color: var(--muted); font-weight: 500; }
+
+/* 位置：整栏可选，省市 + 手写具体位置 */
+.de-loc {
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.de-loc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.de-loc-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.de-loc-pick,
+.de-loc-clear {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--card-soft);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.de-loc-pick { margin-left: auto; }
+
+.de-loc-clear {
+  margin-left: 6px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.de-loc-summary {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.de-loc-summary[hidden] { display: none; }
+
+.de-loc-text {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.de-loc-text::placeholder { color: var(--muted); }
+
+/* 省市滚轮：复用跳转面板的 .wheel，两列 */
+.region-wheels {
+  display: flex;
+  gap: 8px;
+}
+
+.region-wheels .wheel { flex: 1 1 0; min-width: 0; }
+
+.region-note {
+  margin: 2px 22px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* 视频附件：首帧封面 + 播放标识 + 时长 */
+.de-video { aspect-ratio: 1; }
+
+.de-video img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: var(--card-soft);
+}
+
+.de-video img.missing { opacity: 0; }
+
+.de-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.de-play svg {
+  width: 24px;
+  height: 24px;
+  fill: #fff;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .5));
+}
+
+.de-dur {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: rgba(10, 12, 20, .62);
+  color: #fff;
+  font-size: 9.5px;
+}
+
+#diaryViewerVideo {
+  max-width: 100%;
+  max-height: 76vh;
+  border-radius: 10px;
+  background: #000;
 }
 
 .de-head-actions {

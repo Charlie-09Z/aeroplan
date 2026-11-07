@@ -1,7 +1,7 @@
 'use strict';
 
 /* =========================================================
-   氢计划 / AeroPlan v0.9.0
+   氢计划 / AeroPlan v0.9.1
    纯前端：无框架、无 CDN、无构建步骤
    数据存在手机上：优先用浏览器数据库，不可用时退到本地存储，再不行只放内存
    ========================================================= */
@@ -32,7 +32,7 @@
   // 日记附件单独一个对象仓库，按 id 索引，避免把 Blob 塞进 kv 的大对象里
   const DIARY_FILE_STORE = 'diaryFiles';
 
-  const APP_VERSION = '0.9.0';
+  const APP_VERSION = '0.9.1';
   const POLICY_VERSION = 'privacy-1.1';
   // 生成新 keystore 后，把证书 SHA-256 指纹填在这里（README 有步骤）
   const OFFICIAL_CERT_SHA256 = '';
@@ -195,15 +195,20 @@
     firedReminders: {},
     nativeReminderIds: [],
     nativeReminderGen: 0,
-    // 原生排程如果被系统拒绝，这里记录原因，供「测试通知」面板直接显示
+    // 原生排程如果被系统拒绝，这里记录原因，供「权限管理」里的状态自查直接显示
     nativeScheduleError: '',
     // 精确闹钟的当前状态；'' 表示还没检测过。denied 时排程会退化为非精确，可能延迟
     exactAlarmStatus: '',
     channelReady: false,
     // 渠道建完后从系统读回的实际参数（重要性、提示音等），自查面板据此判断是否生效
     channelInfo: null,
-    lastTestNotify: '',
+    // 最近一次排程的逐条诊断（自查面板的实例表直接用这份数据）
+    reminderReport: [],
     lastDayKey: '',
+    // 年历：捏合展开时记下正在浏览的年份；pinchActive 用于让横滑手势让位
+    yearView: false,
+    yearViewYear: new Date().getFullYear(),
+    pinchActive: false,
     // ===== 日记 =====
     diary: [],
     diaryQuery: '',
@@ -599,8 +604,11 @@
     const d = dt.getDate();
     const lunar = solarToLunar(y, m, d);
     const term = solarTermsOfYear(y)[m + '-' + d] || '';
-    let festival = lunarFestivalOf(lunar) || solarFestivalOf(y, m, d);
-    if (!festival && term === '清明') festival = '清明';
+    const lunarFestival = lunarFestivalOf(lunar);
+    let festival = lunarFestival || solarFestivalOf(y, m, d);
+    // 清明既是节气也是传统节日，归到「跟随农历」这一类；公历/国际节日则始终显示
+    let festivalKind = lunarFestival ? 'lunar' : (festival ? 'solar' : '');
+    if (!festival && term === '清明') { festival = '清明'; festivalKind = 'lunar'; }
     const monthName = LUNAR_MONTH_NAMES[lunar.month - 1];
     const meta = {
       lunar: lunar,
@@ -609,7 +617,8 @@
         : (lunar.isLeap ? '闰' : '') + LUNAR_DAY_NAMES[lunar.day - 1],
       lunarFull: (lunar.isLeap ? '闰' : '') + monthName + '月' + LUNAR_DAY_NAMES[lunar.day - 1],
       term: term,
-      festival: festival
+      festival: festival,
+      festivalKind: festivalKind
     };
     dayMetaCache[key] = meta;
     return meta;
@@ -1027,6 +1036,12 @@
   const DIARY_IMG_QUALITY = 0.82;
   const DIARY_THUMB_MAX = 320;
   const DIARY_THUMB_QUALITY = 0.72;
+  // 标题上限 60 字；视频单篇最多 1 个、单个 50MB。
+  // WebView 里无法转码，视频原样入库，只抽首帧做封面（约 320px）。
+  const DIARY_TITLE_MAX = 60;
+  const DIARY_MAX_VIDEOS = 1;
+  const DIARY_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+  const DIARY_VIDEO_COVER_MAX = 320;
 
   function moodMeta(id) {
     for (let i = 0; i < DIARY_MOODS.length; i++) {
@@ -1053,15 +1068,27 @@
     const id = typeof raw.id === 'string' ? raw.id : '';
     const name = String(raw.name || '').trim().slice(0, 200);
     if (!id || !name) return null;
+    const kind = raw.kind === 'image' ? 'image' : (raw.kind === 'video' ? 'video' : 'file');
     return {
       id: id,
       name: name,
       type: typeof raw.type === 'string' ? raw.type : '',
       size: Number(raw.size) > 0 ? Math.round(Number(raw.size)) : 0,
-      kind: raw.kind === 'image' ? 'image' : 'file',
+      kind: kind,
       w: Number(raw.w) > 0 ? Math.round(Number(raw.w)) : 0,
-      h: Number(raw.h) > 0 ? Math.round(Number(raw.h)) : 0
+      h: Number(raw.h) > 0 ? Math.round(Number(raw.h)) : 0,
+      duration: Number(raw.duration) > 0 ? Math.round(Number(raw.duration)) : 0
     };
+  }
+
+  // 位置：省市来自内置表（完全离线），具体位置是用户自己写的一行，全部可选
+  function normalizeDiaryLocation(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const province = String(raw.province || '').trim().slice(0, 20);
+    const city = String(raw.city || '').trim().slice(0, 20);
+    const text = String(raw.text || '').trim().slice(0, 60);
+    if (!province && !city && !text) return null;
+    return { province: province, city: city, text: text };
   }
 
   function normalizeDiary(raw) {
@@ -1077,14 +1104,19 @@
     const attachments = Array.isArray(raw.attachments)
       ? raw.attachments.map(normalizeDiaryAttachment).filter(Boolean).slice(0, DIARY_MAX_FILES)
       : [];
+    const title = typeof raw.title === 'string' ? raw.title.trim().slice(0, DIARY_TITLE_MAX) : '';
+    const location = normalizeDiaryLocation(raw.location);
     const text = typeof raw.text === 'string' ? raw.text.slice(0, 50000) : '';
-    // 完全空的记录直接丢弃：旧版本或异常退出可能留下空壳
-    if (!text.trim() && !mood && !tags.length && !attachments.length) return null;
+    // 完全空的记录直接丢弃：旧版本或异常退出可能留下空壳。
+    // 只有标题、只有位置也属于有效记录。
+    if (!text.trim() && !title && !mood && !tags.length && !attachments.length && !location) return null;
     return {
       date: date,
+      title: title,
       text: text,
       mood: mood,
       tags: tags,
+      location: location,
       attachments: attachments,
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
       updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now()
@@ -1125,6 +1157,10 @@
     for (let i = 0; i < entry.attachments.length; i++) {
       if (entry.attachments[i].kind === 'image') return entry.attachments[i];
     }
+    // 没有图片时用视频首帧封面
+    for (let i = 0; i < entry.attachments.length; i++) {
+      if (entry.attachments[i].kind === 'video') return entry.attachments[i];
+    }
     return null;
   }
 
@@ -1133,9 +1169,11 @@
     const snapshot = state.diary.map(function (entry) {
       return {
         date: entry.date,
+        title: entry.title || '',
         text: entry.text,
         mood: entry.mood,
         tags: entry.tags.slice(),
+        location: entry.location ? Object.assign({}, entry.location) : null,
         attachments: entry.attachments.map(function (a) { return Object.assign({}, a); }),
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt
@@ -1555,12 +1593,18 @@
     let onToday = false;
 
     if (state.view === 'calendar') {
-      title.textContent = isEn()
-        ? MONTH_EN[state.month.getMonth()] + ' ' + state.month.getFullYear()
-        : state.month.getFullYear() + '年' + (state.month.getMonth() + 1) + '月';
+      if (state.yearView) {
+        title.textContent = isEn() ? String(state.yearViewYear) : state.yearViewYear + ' 年';
+      } else {
+        title.textContent = isEn()
+          ? MONTH_EN[state.month.getMonth()] + ' ' + state.month.getFullYear()
+          : state.month.getFullYear() + '年' + (state.month.getMonth() + 1) + '月';
+      }
       prev.hidden = false;
       next.hidden = false;
-      onToday = state.month.getFullYear() === td.getFullYear() && state.month.getMonth() === td.getMonth();
+      onToday = state.yearView
+        ? state.yearViewYear === td.getFullYear()
+        : state.month.getFullYear() === td.getFullYear() && state.month.getMonth() === td.getMonth();
     } else if (state.view === 'agenda') {
       title.textContent = relativeDayLabel(state.agendaAnchor) + ' · ' + weekdayOf(state.agendaAnchor);
       prev.hidden = false;
@@ -1620,6 +1664,77 @@
     $('#summaryBar').hidden = false;
   }
 
+  // ==================== 节假日（内置数据表，离线可用，不联网） ====================
+  // 覆盖 2024–2027 年国务院办公厅公布的放假/调休安排。
+  // 表外年份如实降级：不绘制「假 / 班」标记，不猜测。
+  const HOLIDAY_RANGES = [
+    ['2024-01-01', '2024-01-01', '元旦'],
+    ['2024-02-10', '2024-02-17', '春节'],
+    ['2024-04-04', '2024-04-06', '清明'],
+    ['2024-05-01', '2024-05-05', '劳动节'],
+    ['2024-06-08', '2024-06-10', '端午'],
+    ['2024-09-15', '2024-09-17', '中秋'],
+    ['2024-10-01', '2024-10-07', '国庆'],
+    ['2025-01-01', '2025-01-01', '元旦'],
+    ['2025-01-28', '2025-02-04', '春节'],
+    ['2025-04-04', '2025-04-06', '清明'],
+    ['2025-05-01', '2025-05-05', '劳动节'],
+    ['2025-05-31', '2025-06-02', '端午'],
+    ['2025-10-01', '2025-10-08', '国庆中秋'],
+    ['2026-01-01', '2026-01-03', '元旦'],
+    ['2026-02-15', '2026-02-23', '春节'],
+    ['2026-04-04', '2026-04-06', '清明'],
+    ['2026-05-01', '2026-05-05', '劳动节'],
+    ['2026-06-19', '2026-06-21', '端午'],
+    ['2026-09-25', '2026-09-27', '中秋'],
+    ['2026-10-01', '2026-10-07', '国庆'],
+    ['2027-01-01', '2027-01-03', '元旦'],
+    ['2027-02-05', '2027-02-13', '春节'],
+    ['2027-04-03', '2027-04-05', '清明'],
+    ['2027-05-01', '2027-05-05', '劳动节'],
+    ['2027-06-09', '2027-06-09', '端午'],
+    ['2027-09-15', '2027-09-15', '中秋'],
+    ['2027-10-01', '2027-10-07', '国庆']
+  ];
+  const HOLIDAY_WORKDAYS = [
+    ['2024-02-04', '春节调休'], ['2024-02-18', '春节调休'], ['2024-04-07', '清明调休'],
+    ['2024-04-28', '劳动节调休'], ['2024-05-11', '劳动节调休'], ['2024-09-14', '中秋调休'],
+    ['2024-09-29', '国庆调休'], ['2024-10-12', '国庆调休'],
+    ['2025-01-26', '春节调休'], ['2025-02-08', '春节调休'], ['2025-04-27', '劳动节调休'],
+    ['2025-09-28', '国庆调休'], ['2025-10-11', '国庆调休'],
+    ['2026-01-04', '元旦调休'], ['2026-02-14', '春节调休'], ['2026-02-28', '春节调休'],
+    ['2026-05-09', '劳动节调休'], ['2026-09-20', '国庆调休'], ['2026-10-10', '国庆调休'],
+    ['2027-01-31', '春节调休'], ['2027-02-14', '春节调休'], ['2027-05-08', '劳动节调休'],
+    ['2027-09-26', '国庆调休'], ['2027-10-09', '国庆调休']
+  ];
+  let holidayMap = null;
+
+  function buildHolidayMap() {
+    const map = {};
+    HOLIDAY_RANGES.forEach(function (r) {
+      let key = r[0];
+      while (key <= r[1]) {
+        map[key] = { type: 'holiday', name: r[2] };
+        key = addDays(key, 1);
+      }
+    });
+    HOLIDAY_WORKDAYS.forEach(function (w) {
+      map[w[0]] = { type: 'workday', name: w[1] };
+    });
+    return map;
+  }
+
+  // 节假日标记跟随「农历」开关：关掉农历就一并隐藏，不单独提供开关
+  function holidayInfo(key) {
+    if (!lunarVisible()) return null;
+    if (!holidayMap) holidayMap = buildHolidayMap();
+    return holidayMap[key] || null;
+  }
+
+  function holidayCoveredYear(year) {
+    return year >= 2024 && year <= 2027;
+  }
+
   // ==================== 渲染：日历 ====================
 
   function renderCalendar() {
@@ -1671,26 +1786,40 @@
       }
 
       const meta = dayMeta(key);
-      // 农历开关（默认开）：关掉后网格里不再出现农历文字；英文界面只要开关打开也显示中文农历
+      const hol = holidayInfo(key);
+      // 农历开关（默认开）统一管辖：农历日期、二十四节气、中国传统节日、假/班标记。
+      // 公历/国际节日（元旦、情人节、母亲节等）不受影响，始终显示。
       const showLunar = lunarVisible();
+      const tradFestival = showLunar && meta.festivalKind === 'lunar' ? meta.festival : '';
+      const solarFestival = meta.festivalKind === 'solar' ? meta.festival : '';
+      const mainFestival = tradFestival || solarFestival;
       const subText = isEn()
-        ? (meta.festival ? T(meta.festival) : (showLunar ? meta.lunarText : ''))
-        : (meta.festival || meta.term || (showLunar ? meta.lunarText : ''));
-      const subClass = isEn() ? (meta.festival ? ' is-festival' : '')
-        : (meta.festival ? ' is-festival' : (meta.term ? ' is-term' : ''));
+        ? (mainFestival ? T(mainFestival) : (showLunar ? meta.lunarText : ''))
+        : (mainFestival || (showLunar ? meta.term : '') || (showLunar ? meta.lunarText : ''));
+      const subClass = mainFestival ? ' is-festival'
+        : ((showLunar && meta.term) ? ' is-term' : '');
 
       const ariaTextBase = isEn()
         ? monthDay(key) + ' ' + weekdayOf(key) +
           (showLunar ? ' ' + meta.lunarFull : '') +
-          (meta.festival ? ', ' + T(meta.festival) : '') +
+          (mainFestival ? ', ' + T(mainFestival) : '') +
           ', ' + T('{n} 项安排', { n: dayItems.length })
         : monthDay(key) + ' ' + weekdayOf(key) + ' ' + (showLunar ? meta.lunarFull : '') +
-          (meta.term ? ' ' + meta.term : '') + (meta.festival ? ' ' + meta.festival : '') +
+          (showLunar && meta.term ? ' ' + meta.term : '') + (mainFestival ? ' ' + mainFestival : '') +
           '，' + dayItems.length + ' 项安排';
-      const ariaText = ariaTextBase + (diaryDates[key] ? (isEn() ? ', journal entry' : '，有日记') : '');
+      const ariaText = ariaTextBase + (diaryDates[key] ? (isEn() ? ', journal entry' : '，有日记') : '') +
+        (hol ? (isEn() ? ', ' + (hol.type === 'workday' ? 'make-up workday' : 'public holiday')
+          : '，' + (hol.type === 'workday' ? '调休上班' : hol.name + '假期')) : '');
+
+      // 「假 / 班」标记固定在内层日期格右下角内侧，绘制在文字下层，不遮日期数字
+      const holBadge = hol
+        ? '<span class="cal-holiday ' + hol.type + '" aria-hidden="true">' +
+          (hol.type === 'workday' ? '班' : '假') + '</span>'
+        : '';
 
       html += '<button class="' + classes + '" type="button" data-date="' + key +
         '" aria-label="' + esc(ariaText) + '">' +
+        holBadge +
         '<span class="dnum">' + d.getDate() + '</span>' +
         '<span class="cal-lunar' + subClass + '">' + esc(subText) + '</span>' +
         '<span class="dots">' + dots + '</span>' +
@@ -1716,169 +1845,181 @@
     $('#calTip').hidden = isEmpty;
     // 只保留当前浏览窗口前后的换算缓存，翻到别的年月也不会无限累积
     pruneDateCaches(dateKey(state.month));
-    renderWeekStrip();
+  }
+
+  // ==================== 年历：双指捏合进出，12 个月一屏平铺 ====================
+  function renderYearView() {
+    const grid = $('#yearGrid');
+    if (!grid) return;
+    const y = state.yearViewYear;
+    const title = $('#yearTitle');
+    if (title) title.textContent = isEn() ? String(y) : y + ' 年';
+    const today = todayKey();
+    const selMonth = state.month.getFullYear() === y ? state.month.getMonth() : -1;
+    let html = '';
+    for (let m = 0; m < 12; m++) {
+      const days = new Date(y, m + 1, 0).getDate();
+      const lead = (new Date(y, m, 1).getDay() + 6) % 7;
+      let cells = '';
+      for (let i = 0; i < lead; i++) cells += '<span class="ym-day out"></span>';
+      for (let d = 1; d <= days; d++) {
+        const key = y + '-' + pad2(m + 1) + '-' + pad2(d);
+        const hol = holidayInfo(key);
+        cells += '<span class="ym-day' + (key === today ? ' today' : '') + '">' + d +
+          (hol ? '<i class="ym-holiday-dot' + (hol.type === 'workday' ? ' work' : '') + '"></i>' : '') +
+          '</span>';
+      }
+      html += '<button class="ym-card' + (m === selMonth ? ' current' : '') + '" type="button" data-month="' + m + '">' +
+        '<span class="ym-name">' + esc(isEn() ? MONTH_EN[m] : (m + 1) + ' 月') + '</span>' +
+        '<span class="ym-days">' + cells + '</span>' +
+      '</button>';
+    }
+    grid.innerHTML = html;
+  }
+
+  function openYearView() {
+    if (state.view !== 'calendar' || state.yearView) return;
+    state.yearView = true;
+    state.yearViewYear = state.month.getFullYear();
+    $('#calMonth').hidden = true;
+    $('#yearView').hidden = false;
+    renderYearView();
+    $('#content').scrollTop = 0;
+    haptic(8);
+  }
+
+  function closeYearView() {
+    if (!state.yearView) return;
+    state.yearView = false;
+    $('#yearView').hidden = true;
+    $('#calMonth').hidden = false;
+    haptic(6);
+  }
+
+  function shiftYearView(dir) {
+    state.yearViewYear += dir;
+    renderYearView();
+    haptic(6);
+  }
+
+  // 点某个月：进入该月月历
+  function pickYearMonth(m) {
+    state.month = new Date(state.yearViewYear, m, 1);
+    state.selectedDate = '';
+    closeYearView();
+    renderCalendar();
+    updateTopbar();
+    $('#content').scrollTop = 0;
+  }
+
+  function bindPinchYear() {
+    const month = $('#calMonth');
+    const year = $('#yearView');
+    if (!month || !year) return;
+
+    const MIN_MOVE = 8;
+    const PINCH_IN = 1.18;   // 两指张开 18% 才进入年历，避免误触
+    const PINCH_OUT = 0.84;  // 在年历里捏合到 84% 才回到月历
+    let startDist = 0;
+    let pinching = false;
+
+    function distance(touches) {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.hypot(dx, dy);
+    }
+
+    function onStart(e) {
+      if (e.touches.length !== 2) return;
+      startDist = distance(e.touches);
+      pinching = false;
+      state.pinchActive = true;
+    }
+
+    function onMove(e) {
+      if (e.touches.length !== 2 || !startDist) return;
+      const ratio = distance(e.touches) / startDist;
+      if (!pinching && ratio >= PINCH_IN && !state.yearView) {
+        pinching = true;
+        openYearView();
+        return;
+      }
+      if (!pinching && ratio <= PINCH_OUT && state.yearView) {
+        pinching = true;
+        closeYearView();
+      }
+    }
+
+    function onEnd(e) {
+      if (e.touches.length === 0) {
+        startDist = 0;
+        pinching = false;
+        state.pinchActive = false;
+      }
+    }
+
+    [month, year].forEach(function (el) {
+      el.addEventListener('touchstart', onStart, { passive: true });
+      el.addEventListener('touchmove', onMove, { passive: true });
+      el.addEventListener('touchend', onEnd, { passive: true });
+      el.addEventListener('touchcancel', onEnd, { passive: true });
+    });
+
+    // 年历：点月份进入；左右滑（单指）切年份
+    let pid = null;
+    let sx = 0;
+    let sy = 0;
+    let lock = '';
+    year.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      pid = e.pointerId;
+      sx = e.clientX;
+      sy = e.clientY;
+      lock = '';
+    });
+    year.addEventListener('pointermove', function (e) {
+      if (pid === null || e.pointerId !== pid) return;
+      const mx = e.clientX - sx;
+      const my = e.clientY - sy;
+      if (!lock) {
+        if (Math.abs(mx) < MIN_MOVE && Math.abs(my) < MIN_MOVE) return;
+        lock = Math.abs(mx) > Math.abs(my) * 1.2 ? 'h' : 'v';
+        if (lock === 'h') {
+          try { year.setPointerCapture(pid); } catch (err) { /* 忽略 */ }
+        }
+      }
+    }, { passive: true });
+    year.addEventListener('pointerup', function (e) {
+      if (pid === null || e.pointerId !== pid) return;
+      const mx = e.clientX - sx;
+      pid = null;
+      if (lock === 'h' && Math.abs(mx) > Math.min(56, (year.clientWidth || 360) * 0.16)) {
+        shiftYearView(mx < 0 ? 1 : -1);
+      }
+      lock = '';
+    });
+    year.addEventListener('click', function (e) {
+      const card = e.target.closest('.ym-card');
+      if (!card) return;
+      pickYearMonth(Number(card.dataset.month));
+    });
   }
 
   function lunarVisible() {
     return state.meta.lunarVisible !== false;
   }
 
-  // ==================== 粘顶「当前周」横条 ====================
-  // 整月日历不参与收起，它随内容正常滚出视口；滚动到「整月底边离开内容区顶部」时，
-  // 才把 52px 周条展开并粘住（展开比收起多留 32px 滞回，临界不抖）。
-  // 月历高度随月份行数变化，所以阈值按 #calMonth 的实时高度算，不写死。
-  const CAL_EXPAND_GAP = 32; // 整月底边回到 32px 以内才展开
-  let calCollapsed = false;
-  let calScrollRaf = 0;
-  // 横条切日期后，列表高度变化可能让浏览器把 scrollTop 夹到 0；短暂忽略滚动事件，避免误展开
-  let calScrollLockUntil = 0;
-  // 日期切换后的归位校正（取消上一轮挂起的任务用）
-  let calSettleTimer = 0;
-
-  function sameMonth(key, d) {
-    const k = keyToDate(key);
-    return k.getFullYear() === d.getFullYear() && k.getMonth() === d.getMonth();
-  }
-
-  function monthFirstKey(d) {
-    return dateKey(new Date(d.getFullYear(), d.getMonth(), 1));
-  }
-
-  function weekStartOf(key) {
-    const dow = keyToDate(key).getDay();
-    return addDays(key, -((dow + 6) % 7));
-  }
-
-  // 横条以选中日期为准；选中日期不在当前显示月时，退回该月 1 号所在周
-  function stripAnchor() {
-    const anchor = state.selectedDate || todayKey();
-    if (sameMonth(anchor, state.month)) return anchor;
-    return monthFirstKey(state.month);
-  }
-
-  function stripWeekStart() {
-    return weekStartOf(stripAnchor());
-  }
-
-  function stripSubText(key) {
-    const meta = dayMeta(key);
-    if (isEn()) {
-      if (meta.festival) return T(meta.festival);
-      return lunarVisible() ? meta.lunarText : '';
-    }
-    return meta.festival || meta.term || (lunarVisible() ? meta.lunarText : '');
-  }
-
-  function renderWeekStrip() {
-    const track = $('#wsTrack');
-    if (!track) return;
-    const start = stripWeekStart();
-    const t = todayKey();
-    let html = '';
-    for (let i = 0; i < 7; i++) {
-      const key = addDays(start, i);
-      const cls = 'ws-cell' + (key === t ? ' today' : '') + (key === state.selectedDate ? ' selected' : '');
-      html += '<button class="' + cls + '" type="button" data-date="' + key + '">' +
-        '<span class="ws-wday">' + esc(weekdayOf(key)) + '</span>' +
-        '<span class="ws-num">' + keyToDate(key).getDate() + '</span>' +
-        '<span class="ws-sub">' + esc(stripSubText(key)) + '</span>' +
-      '</button>';
-    }
-    track.innerHTML = html;
-  }
-
-  function setCalCollapsed(next) {
-    if (next === calCollapsed) return;
-    calCollapsed = next;
-    const view = $('#viewCalendar');
-    if (view) view.classList.toggle('cal-collapsed', next);
-    const strip = $('#weekStrip');
-    if (strip) strip.setAttribute('aria-hidden', next ? 'false' : 'true');
-    if (next) renderWeekStrip();
-  }
-
-  function syncCalendarCollapse() {
+  // 选中日期后把内容区滚回顶部：月历在正常文档流里，详情紧跟在下方。
+  // （原来的粘顶周条与收起逻辑已整体移除）
+  function revealDayDetail() {
+    if (state.view !== 'calendar') return;
     const scroller = $('#content');
     if (!scroller) return;
-    if (state.view !== 'calendar') { setCalCollapsed(false); return; }
-    if (Date.now() < calScrollLockUntil) return;
-    const month = $('#calMonth');
-    if (!month) return;
-    // 用相对内容区顶边的位置判断：整月底边 <= 0 才收起，回到 32px 以内才展开。
-    // 这样不受月历行数（5/6 行）与内容区 padding 影响。
-    const bottom = month.getBoundingClientRect().bottom - scroller.getBoundingClientRect().top;
-    if (!calCollapsed) {
-      // 整月还没完全离开内容区顶部：继续随内容滚动，周条不出现
-      if (bottom > 0) return;
-      setCalCollapsed(true);
-    } else if (bottom >= CAL_EXPAND_GAP) {
-      setCalCollapsed(false);
-    }
-  }
-
-  // 任何日期切换入口收尾都走这里：只允许「完全展开」或「完全收起」两种稳态。
-  // origin: 'grid' | 'strip' | 'jump' | 'today'
-  function settleCalendarAfterDateChange(origin) {
-    const scroller = $('#content');
-    if (!scroller) return;
-    // 取消挂起的收起判定与上一轮归位任务
-    if (calScrollRaf) { cancelAnimationFrame(calScrollRaf); calScrollRaf = 0; }
-    clearTimeout(calSettleTimer);
-    calScrollLockUntil = Date.now() + 420;
-
-    if (state.view !== 'calendar') {
-      setCalCollapsed(false);
-      return;
-    }
-
-    if (origin === 'strip') {
-      // 从周条切日期：保持收起，并把滚动位置推到「月历完全离开内容区顶部」
-      setCalCollapsed(true);
-      const pin = function () {
-        const sc = $('#content');
-        const month = $('#calMonth');
-        if (!sc || !month) return;
-        const bottom = month.getBoundingClientRect().bottom - sc.getBoundingClientRect().top;
-        if (bottom > 0) sc.scrollTop += bottom;
-      };
-      pin();
-      requestAnimationFrame(pin);
-      // 列表高度变化可能把 scrollTop 夹回去，动画结束后再校正一次
-      calSettleTimer = setTimeout(function () {
-        calScrollLockUntil = 0;
-        if (state.view === 'calendar' && calCollapsed) pin();
-      }, 320);
-      return;
-    }
-
-    // 月历 / 跳转 / 回到今天：完全展开，滚动回到顶部，不存在中间态
-    setCalCollapsed(false);
     scroller.scrollTop = 0;
     requestAnimationFrame(function () {
       const sc = $('#content');
       if (sc) sc.scrollTop = 0;
     });
-    calSettleTimer = setTimeout(function () {
-      calScrollLockUntil = 0;
-      syncCalendarCollapse();
-    }, 180);
-  }
-
-  // 横条翻周：选中日期跟着换到同一星期几，月份同步，横条与下方列表永远一致
-  function shiftWeek(dir) {
-    const anchor = stripAnchor();
-    const offset = (keyToDate(anchor).getDay() + 6) % 7;
-    const key = addDays(addDays(stripWeekStart(), dir * 7), offset);
-    commitStripDate(key);
-  }
-
-  function commitStripDate(key) {
-    state.selectedDate = key;
-    const d = keyToDate(key);
-    if (!sameMonth(key, state.month)) state.month = new Date(d.getFullYear(), d.getMonth(), 1);
-    renderAll();
-    // 周条是「收起态」入口：切完必须保持完全收起，不能露半截月历
-    settleCalendarAfterDateChange('strip');
   }
 
   // ==================== 黄历卡片（纯离线推算，不联网、不新增权限） ====================
@@ -2054,9 +2195,20 @@
     const total = items.length;
 
     const subParts = [];
-    if (lunarVisible()) subParts.push(meta.lunarFull);
-    if (!isEn() && meta.term && meta.term !== meta.festival) subParts.push(meta.term);
-    if (meta.festival) subParts.push(isEn() ? T(meta.festival) : meta.festival);
+    // 农历关闭时，农历、节气、传统节日、节假日信息一起隐藏；公历/国际节日照常
+    const showLunar = lunarVisible();
+    if (showLunar) subParts.push(meta.lunarFull);
+    if (showLunar && !isEn() && meta.term && meta.term !== meta.festival) subParts.push(meta.term);
+    if (meta.festival && (showLunar || meta.festivalKind === 'solar')) {
+      subParts.push(isEn() ? T(meta.festival) : meta.festival);
+    }
+    // 节假日：与公历/农历/节气/节日同一行补充「国庆假期 · 放假」或「调休 · 上班」
+    const hol = showLunar ? holidayInfo(key) : null;
+    if (hol) {
+      subParts.push(isEn()
+        ? (hol.type === 'workday' ? T('调休 · 上班') : T(hol.name) + ' · ' + T('放假'))
+        : (hol.type === 'workday' ? '调休 · 上班' : hol.name + '假期 · 放假'));
+    }
 
     const order = ['event', 'todo'];
     const groups = [];
@@ -2242,6 +2394,8 @@
 
     grid.addEventListener('pointerdown', function (e) {
       if (animating) return;
+      // 双指捏合进年历时，单指横滑必须让位，否则会同时翻月
+      if (state.pinchActive || state.yearView) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       pid = e.pointerId;
       active = true;
@@ -2293,132 +2447,6 @@
     grid.addEventListener('pointercancel', function (e) { release(e.pointerId); });
     grid.addEventListener('lostpointercapture', function (e) {
       if (active && e.pointerId === pid) release(e.pointerId);
-    });
-  }
-
-  // ==================== 粘顶横条：收起/展开与周翻页 ====================
-
-  function bindCalendarCollapse() {
-    const scroller = $('#content');
-    if (!scroller) return;
-    scroller.addEventListener('scroll', function () {
-      if (calScrollRaf) return;
-      calScrollRaf = requestAnimationFrame(function () {
-        calScrollRaf = 0;
-        syncCalendarCollapse();
-      });
-    }, { passive: true });
-    renderWeekStrip();
-  }
-
-  function bindWeekStrip() {
-    const strip = $('#weekStrip');
-    const track = $('#wsTrack');
-    if (!strip || !track) return;
-
-    const MIN_MOVE = 6;        // 方向判定位移
-    const VELOCITY = 0.22;     // px/ms，轻扫也翻周
-    let pid = null;
-    let sx = 0;
-    let sy = 0;
-    let dx = 0;
-    let lock = '';             // '' | 'h' | 'v'
-    let lastX = 0;
-    let lastT = 0;
-    let vx = 0;
-    let animating = false;
-    let clickLock = 0;
-
-    strip.addEventListener('pointerdown', function (e) {
-      if (!calCollapsed || animating) return;
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      pid = e.pointerId;
-      sx = e.clientX;
-      sy = e.clientY;
-      dx = 0;
-      lock = '';
-      vx = 0;
-      lastX = e.clientX;
-      lastT = Date.now();
-    });
-
-    strip.addEventListener('pointermove', function (e) {
-      if (pid === null || e.pointerId !== pid) return;
-      const mx = e.clientX - sx;
-      const my = e.clientY - sy;
-      if (!lock) {
-        if (Math.abs(mx) < MIN_MOVE && Math.abs(my) < MIN_MOVE) return;
-        // 方向锁：横向占优才接管，纵向占优直接还给页面滚动
-        if (Math.abs(mx) > Math.abs(my)) {
-          lock = 'h';
-          try { strip.setPointerCapture(pid); } catch (err) { /* 忽略 */ }
-          track.style.transition = '';
-        } else {
-          lock = 'v';
-          pid = null;
-          return;
-        }
-      }
-      if (lock !== 'h') return;
-      const now = Date.now();
-      const dt = Math.max(1, now - lastT);
-      vx = vx * 0.5 + ((e.clientX - lastX) / dt) * 0.5;
-      lastX = e.clientX;
-      lastT = now;
-      dx = mx;
-      track.style.transform = 'translate3d(' + dx.toFixed(1) + 'px,0,0)';
-    }, { passive: true });
-
-    function settle() {
-      if (pid === null) return;
-      pid = null;
-      if (lock !== 'h') return;
-      const w = strip.clientWidth || 360;
-      const threshold = Math.min(48, w * 0.16);
-      const flick = Math.abs(vx) > VELOCITY && Math.abs(dx) > 4 && (vx < 0) === (dx < 0);
-      const dir = dx < 0 ? 1 : -1;
-      animating = true;
-
-      if (!(Math.abs(dx) >= threshold || flick)) {
-        track.style.transition = 'transform .22s cubic-bezier(.22,.61,.36,1)';
-        track.style.transform = 'translate3d(0,0,0)';
-        setTimeout(function () { track.style.transition = ''; animating = false; }, 240);
-        return;
-      }
-
-      clickLock = Date.now() + 320;
-      // 旧的一周整体滑出 → 换周 → 新的一周从另一侧滑入
-      track.style.transition = 'transform .16s ease-out';
-      track.style.transform = 'translate3d(' + (-dir * w) + 'px,0,0)';
-      setTimeout(function () {
-        shiftWeek(dir);
-        track.style.transition = '';
-        track.style.transform = 'translate3d(' + (dir * w) + 'px,0,0)';
-        requestAnimationFrame(function () {
-          requestAnimationFrame(function () {
-            track.style.transition = 'transform .22s cubic-bezier(.22,.61,.36,1)';
-            track.style.transform = 'translate3d(0,0,0)';
-            setTimeout(function () { track.style.transition = ''; animating = false; }, 240);
-          });
-        });
-      }, 160);
-    }
-
-    // 方向锁生效后拦住纵向滚动：斜向手势也不会把页面带着一起动
-    strip.addEventListener('touchmove', function (e) {
-      if (lock === 'h') e.preventDefault();
-    }, { passive: false });
-
-    strip.addEventListener('pointerup', settle);
-    strip.addEventListener('pointercancel', settle);
-    strip.addEventListener('lostpointercapture', settle);
-
-    // 点日期只切换选中，不改变滚动位置，因此不会误触发整月展开
-    track.addEventListener('click', function (e) {
-      if (Date.now() < clickLock) return;
-      const btn = e.target.closest('[data-date]');
-      if (!btn) return;
-      commitStripDate(btn.dataset.date);
     });
   }
 
@@ -4039,8 +4067,8 @@
     $('#viewSchedule').hidden = view !== 'schedule';
     $('#viewDiary').hidden = view !== 'diary';
     $('#content').scrollTop = 0;
-    // 回到顶部即恢复整月：切换视图时不残留收起态
-    setCalCollapsed(false);
+    // 离开日历视图时收起年历，避免回来时还停在年历
+    if (view !== 'calendar') closeYearView();
     // 切换视图时退出批量模式并清空已选
     if (state.batchMode) clearBatchState();
     renderAll();
@@ -4062,11 +4090,27 @@
     return state.meta.theme === 'dark' ? 'dark' : 'light';
   }
 
+  // 状态栏跟随应用主题：浅色主题用浅底 + 深色图标，深色主题用深底 + 浅色图标。
+  // 页面通过 env(safe-area-inset-top) 把内容让到状态栏下方，所以这里开 overlay
+  // 让背景色延伸到状态栏，而不是留一条系统默认的黑条。
+  function syncStatusBar(dark) {
+    const StatusBar = plugin('StatusBar');
+    if (!StatusBar) return;
+    const bg = dark ? '#0F1117' : '#F3F5FA';
+    try {
+      Promise.resolve(StatusBar.setOverlaysWebView({ overlay: true })).catch(function () {});
+      Promise.resolve(StatusBar.setBackgroundColor({ color: bg })).catch(function () {});
+      // 注意 Capacitor 的语义：DARK = 浅色文字（暗背景），LIGHT = 深色文字（亮背景）
+      Promise.resolve(StatusBar.setStyle({ style: dark ? 'DARK' : 'LIGHT' })).catch(function () {});
+    } catch (err) { /* 网页版没有状态栏，忽略 */ }
+  }
+
   function applyTheme() {
     const dark = preferredTheme() === 'dark';
     document.documentElement.classList.toggle('dark', dark);
     const meta = $('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', dark ? '#0F1117' : '#4C6FFF');
+    if (meta) meta.setAttribute('content', dark ? '#0F1117' : '#F3F5FA');
+    syncStatusBar(dark);
   }
 
   // ==================== Toast / Snackbar ====================
@@ -4475,6 +4519,7 @@
 
   const yearPicker = {
     open: false,
+    mode: 'calendar',
     year: 0,
     month: 0,
     day: 1
@@ -4485,13 +4530,27 @@
     $('#detailNoteCount').textContent = value.length + ' / 500';
   }
 
-  function detailRowsHTML(rows, address) {
-    let html = rows.map(function (pair) {
+  // 详情页统一结构：
+  //   标题（最重要）→ 日期时间 / 分类 / 提醒（主信息）→ 地址 → 备注（在 body 外）
+  //   类型 / 重复 / 优先级等次要字段收进折叠区，避免一屏全是等宽小行
+  function detailRowsHTML(opts) {
+    const rows = opts.rows || [];
+    const foldRows = opts.foldRows || [];
+    const renderRow = function (pair) {
       // 第三项为 'html' 时值已由调用方转义并拼好（如带图标的分类）
       const value = pair[2] === 'html' ? pair[1] : esc(pair[1]);
       return '<div class="detail-row"><span class="detail-label">' + pair[0] +
         '</span><span class="detail-value">' + value + '</span></div>';
-    }).join('');
+    };
+
+    let html = '<div class="detail-hero">' +
+      '<h3 class="detail-hero-title">' + esc(opts.title) + '</h3>' +
+      (opts.badge ? '<span class="detail-hero-badge">' + esc(opts.badge) + '</span>' : '') +
+      '</div>';
+
+    html += '<div class="detail-facts">' + rows.map(renderRow).join('') + '</div>';
+
+    const address = opts.address;
     if (address && address.label) {
       html += '<div class="detail-row detail-addr">' +
         '<span class="detail-label">' + esc(T('地址')) + '</span>' +
@@ -4500,7 +4559,31 @@
           '<button class="detail-map-link" id="detailMapBtn" type="button">' + esc(T('打开地图')) + '</button>' +
         '</span></div>';
     }
+
+    if (foldRows.length) {
+      html += '<details class="detail-more"><summary>' + esc(T('更多信息')) + '</summary>' +
+        foldRows.map(renderRow).join('') + '</details>';
+    }
     return html;
+  }
+
+  // 该条目在最近一次排程里的真实状态（已排程 / 跳过原因 / 失败原因）
+  function reminderStatusOf(id, key) {
+    const report = Array.isArray(state.reminderReport) ? state.reminderReport : [];
+    const rows = report.filter(function (r) { return r.key.indexOf(String(id) + '|') === 0; });
+    if (!rows.length) return '';
+    const hit = (key && rows.filter(function (r) { return r.key === String(id) + '|' + key; })[0]) || rows[0];
+    if (!hit) return '';
+    const label = {
+      ok: T('已排程'), queued: T('排程中'), timer: T('前台计时器'),
+      skip: T('已跳过'), fail: T('排程失败')
+    }[hit.status] || '';
+    if (hit.status === 'ok') {
+      // 精确闹钟不可用时系统只能延迟投递，详情里必须写明，不能静默
+      return label + ' · ' + hit.fireText +
+        (state.exactAlarmStatus === 'denied' ? ' · ' + T('可能延迟') : '');
+    }
+    return label + (hit.reason ? ' · ' + hit.reason : '');
   }
 
   function showDetailSheet(rowsHTML, note) {
@@ -4537,18 +4620,25 @@
     const cat = getCategory(base.categoryId);
     // 分类一栏带图标；未设置图标时只显示名称，不留空白
     const catCell = cat ? (categoryGlyphHTML(cat) + esc(cat.name)) : esc(T('未分类'));
+    const remindStatus = reminderStatusOf(base.id, inst.date);
     const rows = [
-      ['标题', inst.title],
-      ['类型', T(TYPE_META[inst.type].label)],
-      ['日期', monthDay(inst.date) + ' · ' + weekdayOf(inst.date)],
-      ['时间', inst.time || T('全天')],
-      ['重复', repeatDetailText(inst)],
+      ['日期时间', monthDay(inst.date) + ' · ' + weekdayOf(inst.date) + ' · ' + (inst.time || T('全天'))],
       ['分类', catCell, 'html'],
-      ['提醒', remindTextOf(inst.remindBefore)],
+      ['提醒', remindTextOf(inst.remindBefore) + (remindStatus ? ' · ' + remindStatus : '')]
+    ];
+    const foldRows = [
+      ['类型', T(TYPE_META[inst.type].label)],
+      ['重复', repeatDetailText(inst)],
       ['优先级', (base.priority === 'high') ? T('高优先级') : T('普通')]
     ];
 
-    showDetailSheet(detailRowsHTML(rows, base.address), base.note);
+    showDetailSheet(detailRowsHTML({
+      title: inst.title,
+      badge: T(TYPE_META[inst.type].label),
+      rows: rows,
+      foldRows: foldRows,
+      address: base.address
+    }), base.note);
   }
 
   function openPlanDetail(id) {
@@ -4559,17 +4649,25 @@
     detail.date = '';
     const cat = getCategory(plan.categoryId);
     const catCell = cat ? (categoryGlyphHTML(cat) + esc(cat.name)) : esc(T('未分类'));
+    const remindStatus = reminderStatusOf(plan.id, plan.periodStart);
     const rows = [
-      ['标题', plan.title],
-      ['类型', T(PLAN_KINDS[plan.kind])],
       ['周期', planPeriodLabel(plan.kind, plan.periodStart)],
-      ['时间', plan.time || T('全天')],
+      ['时间', plan.time || T('全天') + ' · ' + T('基准') + ' ' + REMIND_DEFAULT_TIME],
       ['分类', catCell, 'html'],
-      ['提醒', remindTextOf(plan.remindBefore)],
+      ['提醒', remindTextOf(plan.remindBefore) + (remindStatus ? ' · ' + remindStatus : '')]
+    ];
+    const foldRows = [
+      ['类型', T(PLAN_KINDS[plan.kind])],
       ['优先级', plan.priority === 'high' ? T('高优先级') : T('普通')]
     ];
 
-    showDetailSheet(detailRowsHTML(rows, plan.address), plan.note);
+    showDetailSheet(detailRowsHTML({
+      title: plan.title,
+      badge: T(PLAN_KINDS[plan.kind]),
+      rows: rows,
+      foldRows: foldRows,
+      address: plan.address
+    }), plan.note);
   }
 
   function closeDetail() {
@@ -4872,12 +4970,19 @@
     fillWheel('day', wheelValues('day'), yearPicker.day - 1);
   }
 
-  function openYearPicker() {
-    const base = jumpBaseDate();
+  // mode: 'calendar' 日历跳转；'diary' 日记补写日期（默认停在当前编辑的日期）
+  function openYearPicker(mode) {
+    const useDiary = mode === 'diary' && state.diaryEditorOpen && state.diaryDraft;
+    const base = useDiary ? keyToDate(state.diaryDraft.date) : jumpBaseDate();
+    yearPicker.mode = useDiary ? 'diary' : 'calendar';
     yearPicker.year = base.getFullYear();
     yearPicker.month = base.getMonth() + 1;
     yearPicker.day = base.getDate();
     yearPicker.open = true;
+    const title = $('#yearSheetTitle');
+    if (title) title.textContent = useDiary ? T('选择日期') : T('跳转到');
+    const go = $('#yearGo');
+    if (go) go.textContent = useDiary ? T('确定') : T('跳转');
     $('#yearBackdrop').hidden = false;
     $('#yearSheet').hidden = false;
     syncJumpPanel();
@@ -4912,13 +5017,23 @@
   }
 
   function jumpToDate() {
+    const key = yearPicker.year + '-' + pad2(yearPicker.month) + '-' +
+      pad2(Math.min(yearPicker.day, daysInMonth(yearPicker.year, yearPicker.month)));
+    // 日记模式：只切换写作页的日期，不跳日历；该日已有日记则进入编辑（同一天仍只有一篇）
+    if (yearPicker.mode === 'diary' && state.diaryEditorOpen) {
+      const had = !!diaryByDate(key);
+      closeYearPicker();
+      if (state.diaryDraft && state.diaryDraft.date !== key) openDiaryEditor(key);
+      if (had) showToast(T('这天已有日记，已进入编辑'));
+      return;
+    }
     applyJump(yearPicker.year, yearPicker.month, yearPicker.day);
     closeYearPicker();
     renderAll();
     if (state.view === 'agenda') {
       requestAnimationFrame(function () { agendaScrollTo(state.agendaAnchor, false); });
     } else {
-      settleCalendarAfterDateChange('jump');
+      revealDayDetail();
     }
   }
 
@@ -5035,7 +5150,10 @@
 
     buildDpWheel('#wheelHour', 24);
     buildDpWheel('#wheelMinute', 60);
-    const parsed = parseDpTime(subject.time) || parseDpTime(dateSheet.lastTime) || { h: 9, m: 0 };
+    // 没有已设时间时，滚轮默认停在当前设备时间（而不是 00:00 / 09:00），并居中高亮
+    const now = new Date();
+    const parsed = parseDpTime(subject.time) || parseDpTime(dateSheet.lastTime) ||
+      { h: now.getHours(), m: now.getMinutes() };
     if (subject.time) dateSheet.lastTime = subject.time;
 
     clearTimeout(dateCloseTimer);
@@ -5121,7 +5239,9 @@
     $('#saveBtn').textContent = T('保存');
     draft.type = 'event';
     draft.date = preset || (state.view === 'agenda' && anchor >= t ? anchor : t);
-    draft.time = '09:00';
+    // 新建条目默认用当前设备时间，与时间滚轮的默认位置一致
+    const nowClock = new Date();
+    draft.time = pad2(nowClock.getHours()) + ':' + pad2(nowClock.getMinutes());
 
     // 只筛了一个分类时，新条目默认归到它，省一步
     draft.categoryId = state.view === 'agenda' && state.agendaFilters.length === 1 &&
@@ -5234,6 +5354,15 @@
     }
 
     const date = /^\d{4}-\d{2}-\d{2}$/.test(draft.date) ? draft.date : todayKey();
+    // 用户可能已经输入分钟数、但没点「确定」就直接保存：这里兜底提交，
+    // 否则 remindBefore 仍是 null，界面看着有值而提醒永远不会排程。
+    if ($('#remindEditor') && !$('#remindEditor').hidden) {
+      const pendingRemind = remindEditorValue();
+      if (pendingRemind !== null) {
+        draft.remindBefore = pendingRemind;
+        syncRemindChip();
+      }
+    }
     const base = state.editingId ? state.items.find(function (i) { return i.id === state.editingId; }) : null;
     // 重复条目的时间以 recurrence.time 为准；编辑后同步过去，详情页与编辑面板才不会显示两套
     const recurrence = draft.recurrence
@@ -5449,6 +5578,15 @@
       return;
     }
     const date = /^\d{4}-\d{2}-\d{2}$/.test(planDraft.date) ? planDraft.date : todayKey();
+    // 同条目：输入了分钟数但没点「确定」就保存时，兜底提交
+    if ($('#planRemindEditor') && !$('#planRemindEditor').hidden) {
+      const rawRemind = $('#planRemindInput').value.trim();
+      const nRemind = Number(rawRemind);
+      if (rawRemind && isFinite(nRemind) && Math.round(nRemind) === nRemind && nRemind >= 1 && nRemind <= 1440) {
+        planDraft.remindBefore = nRemind;
+        syncPlanRemindChip();
+      }
+    }
     const base = state.planEditingId ? state.plans.find(function (p) { return p.id === state.planEditingId; }) : null;
 
     const plan = normalizePlan({
@@ -6332,6 +6470,9 @@
     if (!page || !page.hidden) return;
     renderPermissionSheet();
     refreshAllPermissionStates();
+    // 打开面板时顺手重排一次：保证实例表里的触发时间/状态是最新的
+    scheduleReminders();
+    renderNotifyDiagnostics();
     $('#permBackdrop').hidden = false;
     page.hidden = false;
     requestAnimationFrame(function () {
@@ -6970,9 +7111,13 @@
   // 保存条目时就把提醒交给系统（LocalNotifications）按触发时刻预约，
   // 这样 App 退到后台、锁屏、甚至被关掉也能按时弹出；前台仍保留页面内提示作为兜底。
 
-  const REMIND_HORIZON_DAYS = 14;
-  const REMIND_PER_ITEM = 14;
-  const REMIND_MAX = 80;
+  // 排程窗口覆盖 60 天：原来只看「今天起 14 天」，明天以后的条目也不会漏。
+  const REMIND_HORIZON_DAYS = 60;
+  const REMIND_PER_ITEM = 60;
+  const REMIND_MAX = 180;
+  // 全天 / 未设时间的条目没有基准时刻，统一按当天 09:00 计算，
+  // 详情页会注明这一基准，避免「设了提醒却永远不响」。
+  const REMIND_DEFAULT_TIME = '09:00';
 
   function clearReminderTimers() {
     state.reminderTimers.forEach(function (timer) { clearTimeout(timer); });
@@ -6983,10 +7128,30 @@
     return typeof item.remindBefore === 'number' ? item.remindBefore : null;
   }
 
-  // 系统按整秒触发：向上取整到秒，避免算出来的时刻刚好落在过去而被直接丢弃。
-  function nextWholeSecond(ms) {
-    const sec = Math.ceil(ms / 1000) * 1000;
-    return sec > Date.now() ? sec : Math.ceil((Date.now() + 1000) / 1000) * 1000;
+  // 系统按整秒触发：只做向上取整。已经过去的时间必须如实返回过去值，
+  // 由调用方跳过并写进自查表；旧实现把它钳到「现在 +1 秒」，导致过期提醒被当成
+  // 立即提醒排进去，而真正要排的过去判断永远不会生效。
+  function wholeSecond(ms) {
+    return Math.ceil(ms / 1000) * 1000;
+  }
+
+  // 条目 / 计划在某一天的实际触发时刻。没有具体时间时用 REMIND_DEFAULT_TIME 作基准。
+  function reminderFireTime(item, key, before) {
+    const raw = (item.recurrence && item.recurrence.time) || item.time || '';
+    const timeText = raw || REMIND_DEFAULT_TIME;
+    const parts = timeText.split(':').map(Number);
+    const target = keyToDate(key);
+    target.setHours(parts[0] || 0, parts[1] || 0, 0, 0);
+    return {
+      at: wholeSecond(target.getTime() - before * 60000),
+      allDay: !raw,
+      timeText: timeText
+    };
+  }
+
+  function reminderClockText(ms) {
+    const d = new Date(ms);
+    return dateKey(d) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
   }
 
   // 每条排程都要带齐的四项：渠道、小图标、允许待机、点开自动消失。
@@ -6999,7 +7164,7 @@
       channelId: REMIND_CHANNEL_ID,
       smallIcon: REMIND_SMALL_ICON,
       autoCancel: true,
-      schedule: { at: new Date(nextWholeSecond(fireAt)), allowWhileIdle: true },
+      schedule: { at: new Date(wholeSecond(fireAt)), allowWhileIdle: true },
       extra: extra || {}
     };
   }
@@ -7015,59 +7180,140 @@
     const useNative = !!(notify && typeof notify.schedule === 'function' &&
       notifyState.status === 'granted');
     const pending = [];
+    // 诊断表：每一行对应「一个带提醒的实例」，记录它为什么排上或为什么没排上
+    const report = [];
+    const usedIds = {};
 
-    function consider(item, key, before) {
-      const timeText = (item.recurrence && item.recurrence.time) || item.time;
-      if (!timeText) return false;
-      const target = keyToDate(key);
-      const parts = timeText.split(':').map(Number);
-      target.setHours(parts[0], parts[1], 0, 0);
-      const fireAt = nextWholeSecond(target.getTime() - before * 60000);
-      const diff = fireAt - now;
-      if (diff <= 0) return false;
+    function pushRow(row) {
+      report.push(row);
+      return row;
+    }
+
+    function baseRow(item, key, before, info) {
+      return {
+        key: String(item.id) + '|' + key,
+        title: item.title || '',
+        when: key + ' ' + (info.allDay
+          ? T('未设时间') + '（' + T('基准') + ' ' + REMIND_DEFAULT_TIME + '）'
+          : info.timeText),
+        before: before,
+        fireText: reminderClockText(info.at),
+        status: 'queued',
+        numericId: '',
+        reason: ''
+      };
+    }
+
+    function skipRow(item, key, before, info, reason) {
+      const row = baseRow(item, key, before, info);
+      row.status = 'skip';
+      row.reason = reason;
+      return pushRow(row);
+    }
+
+    function consider(item, key, before, kind) {
+      const info = reminderFireTime(item, key, before);
+      const row = baseRow(item, key, before, info);
+      const diff = info.at - now;
+      if (diff <= 0) {
+        row.status = 'skip';
+        row.reason = T('触发时间已过去');
+        pushRow(row);
+        return false;
+      }
       // 网页端只留 24 小时内的页面计时器；原生端按较长的日历窗口预约
-      if (!useNative && diff >= 24 * 60 * 60 * 1000) return false;
-      pending.push({ item: item, key: key, fireAt: fireAt, diff: diff });
+      if (!useNative && diff >= 24 * 60 * 60 * 1000) {
+        row.status = 'skip';
+        row.reason = T('网页版只排 24 小时内');
+        pushRow(row);
+        return false;
+      }
+      // 通知 id 按「条目 + 日期」生成；万一两条撞到同一个 id，就顺延到下一个空位，
+      // 避免后一条把前一条覆盖掉（同一个 id 在系统里只会保留最后一条）。
+      let numericId = reminderNumericId(item, key);
+      let guard = 0;
+      while (usedIds[numericId] && guard < 16) {
+        numericId = (numericId % 2147483646) + 1;
+        guard += 1;
+      }
+      usedIds[numericId] = true;
+      row.status = 'queued';
+      row.numericId = String(numericId);
+      if (guard > 0) row.reason = T('id 碰撞，已顺延');
+      pushRow(row);
+      pending.push({ item: item, key: key, fireAt: info.at, diff: diff, kind: kind, numericId: numericId, row: row });
       return true;
     }
 
     state.items.forEach(function (item) {
       const before = effectiveRemind(item);
       if (before === null) return;
-      if (!item.recurrence && item.done) return;
+      if (!item.recurrence && item.done) {
+        skipRow(item, item.date, before, reminderFireTime(item, item.date, before), T('条目已完成，不再提醒'));
+        return;
+      }
+
+      const keys = occurrenceDatesIn(item, t, windowEnd);
+      if (!keys.length) {
+        if (!item.recurrence) {
+          skipRow(item, item.date, before, reminderFireTime(item, item.date, before),
+            item.date < t ? T('条目日期已过去') : T('超出 {n} 天排程窗口').replace('{n}', REMIND_HORIZON_DAYS));
+        }
+        return;
+      }
 
       let added = 0;
-      occurrenceDatesIn(item, t, windowEnd).some(function (key) {
+      keys.some(function (key) {
         if (item.recurrence && item.completions[key]) return false;
-        if (consider(item, key, before)) added += 1;
+        if (consider(item, key, before, 'item')) added += 1;
         return added >= REMIND_PER_ITEM;
       });
     });
 
-    // 计划提醒：以周期首日 + 设定时间触发
+    // 计划提醒：以周期首日 + 设定时间（未设时用 REMIND_DEFAULT_TIME）触发
     state.plans.forEach(function (plan) {
       const before = effectiveRemind(plan);
-      if (before === null || !plan.time || plan.done) return;
-      const key = plan.periodStart;
-      if (key < t || key > windowEnd) return;
-      consider(plan, key, before);
+      if (before === null) return;
+      const key = plan.periodStart || '';
+      if (plan.done) {
+        skipRow(plan, key, before, reminderFireTime(plan, key, before), T('计划已完成，不再提醒'));
+        return;
+      }
+      if (!key || key < t) {
+        skipRow(plan, key, before, reminderFireTime(plan, key, before), T('周期已过去'));
+        return;
+      }
+      if (key > windowEnd) {
+        skipRow(plan, key, before, reminderFireTime(plan, key, before),
+          T('超出 {n} 天排程窗口').replace('{n}', REMIND_HORIZON_DAYS));
+        return;
+      }
+      consider(plan, key, before, 'plan');
     });
 
+    state.reminderReport = report;
+
     if (useNative) {
-      const notifications = pending
-        .sort(function (a, b) { return a.fireAt - b.fireAt; })
+      const ordered = pending.slice().sort(function (a, b) { return a.fireAt - b.fireAt; });
+      // 超出单轮上限的实例如实标出来，而不是悄悄丢掉
+      ordered.slice(REMIND_MAX).forEach(function (p) {
+        p.row.status = 'skip';
+        p.row.reason = T('超出本轮排程上限 {n} 条').replace('{n}', REMIND_MAX);
+      });
+
+      const notifications = ordered
         .slice(0, REMIND_MAX)
         .map(function (p) {
           const timeText = (p.item.recurrence && p.item.recurrence.time) || p.item.time || '';
           return nativeNotificationPayload(
-            reminderNumericId(p.item, p.key),
+            p.numericId,
             T('氢计划提醒'),
             (timeText || T('全天')) + ' · ' + monthDay(p.key) + ' · ' + p.item.title,
             p.fireAt,
             {
               itemId: p.item.id,
               date: p.key,
-              kind: state.plans.indexOf(p.item) === -1 ? 'item' : 'plan',
+              kind: p.kind,
               // 记录本条是按精确还是允许延迟排的，排查时可以对照系统设置
               exact: state.exactAlarmStatus !== 'denied'
             }
@@ -7097,20 +7343,40 @@
         .then(function (channelOk) {
           if (gen !== state.nativeReminderGen) return null;
           if (!channelOk) throw new Error('notification channel unavailable');
-          if (!notifications.length) return null;
-          return notify.schedule({ notifications: notifications });
+          if (!notifications.length) return { ids: [] };
+          return Promise.resolve(notify.schedule({ notifications: notifications }))
+            .then(function () {
+              // 回读系统里的排程：排程调用成功但被系统丢掉时，自查表能直接看出来
+              return Promise.resolve(notify.getPending()).then(function (res) {
+                return { ids: ((res && res.notifications) || []).map(function (n) { return n.id; }) };
+              }).catch(function () { return { ids: null }; });
+            });
         })
-        .then(function () {
+        .then(function (result) {
           if (gen !== state.nativeReminderGen) return;
           // 只有排程成功才改写 meta，失败时保留上一轮 id 以便下次继续清理
           state.meta.reminderIds = notifications.length ? newIds : [];
           state.nativeReminderIds = state.meta.reminderIds.slice();
           persistMeta();
+          const readback = result && result.ids;
+          const missing = readback ? newIds.filter(function (id) { return readback.indexOf(id) === -1; }) : [];
+          notifications.forEach(function (n) {
+            const p = pending.filter(function (row) { return row.numericId === n.id; })[0];
+            if (!p) return;
+            p.row.status = 'ok';
+            if (readback && readback.indexOf(n.id) === -1) {
+              p.row.status = 'fail';
+              p.row.reason = T('系统未接受该排程');
+            }
+          });
+          state.nativeScheduleError = missing.length
+            ? T('系统未回读 {n} 条排程，可能被省电策略拦截').replace('{n}', missing.length)
+            : '';
           return cancelIds(stale);
         })
         .then(function () {
           if (gen !== state.nativeReminderGen) return;
-          state.nativeScheduleError = '';
+          state.reminderReport = report;
           renderNotifyDiagnostics();
         })
         .catch(function (err) {
@@ -7118,8 +7384,17 @@
           // 系统拒绝排程时不再“装作已排程”：记录原因，并保留前台页面计时器兜底
           state.nativeScheduleError = pluginErrorText(err);
           console.warn('本地通知排程失败：', err);
+          pending.forEach(function (p) {
+            if (p.row.status === 'queued') {
+              p.row.status = 'fail';
+              p.row.reason = state.nativeScheduleError || T('排程失败');
+            }
+          });
+          state.reminderReport = report;
           renderNotifyDiagnostics();
           pending.forEach(function (p) {
+            // setTimeout 超过 2^31ms 会溢出成立即触发，只兜底 24 小时内的
+            if (p.diff >= 24 * 60 * 60 * 1000) return;
             const timer = setTimeout(function () {
               fireReminder(p.item, p.key);
             }, p.diff);
@@ -7129,12 +7404,22 @@
       return;
     }
 
+    // 网页版：没有系统排程，只能用页面计时器兜底，表格里标明
     pending.forEach(function (p) {
+      // 原生环境里权限没给：连系统排程都不会发生，如实写进表里，方便用户对照
+      if (!useNative && notify && notifyState.status !== 'granted') {
+        p.row.status = 'skip';
+        p.row.reason = T('通知权限未允许');
+        return;
+      }
+      p.row.status = p.row.status === 'queued' ? 'timer' : p.row.status;
       const timer = setTimeout(function () {
         fireReminder(p.item, p.key);
       }, p.diff);
       state.reminderTimers.push(timer);
     });
+    state.reminderReport = report;
+    renderNotifyDiagnostics();
   }
 
   // 申请通知权限；Android 12+ 再检查「精确闹钟」权限。返回是否已授权
@@ -7294,7 +7579,6 @@
     rows.push([L('本轮记录的排程', 'Recorded this round'), String(recorded) + L(' 条', '')]);
 
     if (state.nativeScheduleError) rows.push([L('最近排程错误', 'Last schedule error'), state.nativeScheduleError]);
-    if (state.lastTestNotify) rows.push([L('最近一次测试', 'Last test'), state.lastTestNotify]);
     return rows;
   }
 
@@ -7311,51 +7595,56 @@
     const hint = isEn()
       ? 'If permission is allowed, the channel exists and pending count > 0 but still nothing pops, the system is blocking background delivery — allow autostart / background activity / battery unrestricted for this app.'
       : '权限已允许、渠道已创建、排程数量大于 0，但仍然不响时，多半是系统后台限制：请在系统设置里允许本应用「自启动 / 后台运行」，并把省电策略设为「不限制」。';
+
+    const statusText = function (status) {
+      const map = {
+        ok: ['已排程', 'Scheduled'],
+        queued: ['排程中', 'Queued'],
+        timer: ['前台计时器', 'In-page timer'],
+        skip: ['已跳过', 'Skipped'],
+        fail: ['排程失败', 'Failed']
+      };
+      const pair = map[status] || [status, status];
+      return isEn() ? pair[1] : pair[0];
+    };
+
+    const report = Array.isArray(state.reminderReport) ? state.reminderReport : null;
+    let tableHTML = '';
+    if (report) {
+      const tHead = isEn()
+        ? ['Instance', 'Title', 'Item time', 'Before', 'Fires at', 'Scheduled', 'id', 'Reason']
+        : ['实例 keys', '标题', '条目时间', '提前', '触发时间', '是否已排程', '排程 id', '失败原因'];
+      if (!report.length) {
+        tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Reminder instances' : '带提醒的实例') + '</div>' +
+          '<p class="diag-empty">' + esc(isEn() ? 'No entry has a reminder yet.' : '当前没有设置提醒的条目。') + '</p>';
+      } else {
+        tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Reminder instances' : '带提醒的实例') + '</div>' +
+          '<div class="diag-table-wrap"><table class="diag-table"><thead><tr>' +
+          tHead.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
+          '</tr></thead><tbody>' +
+          report.map(function (r) {
+            return '<tr class="diag-' + esc(r.status) + '">' +
+              '<td class="diag-mono">' + esc(r.key) + '</td>' +
+              '<td>' + esc(r.title) + '</td>' +
+              '<td>' + esc(r.when) + '</td>' +
+              '<td>' + esc(r.before + ' ' + (isEn() ? 'min' : '分钟')) + '</td>' +
+              '<td class="diag-mono">' + esc(r.fireText) + '</td>' +
+              '<td>' + esc(statusText(r.status)) + '</td>' +
+              '<td class="diag-mono">' + esc(r.numericId || '—') + '</td>' +
+              '<td>' + esc(r.reason || '—') + '</td>' +
+              '</tr>';
+          }).join('') +
+          '</tbody></table></div>';
+      }
+    }
+
     box.innerHTML = '<div class="diag-title">' + esc(head) + '</div>' +
       rows.map(function (r) {
         return '<div class="diag-row"><span class="diag-key">' + esc(r[0]) + '</span>' +
           '<span class="diag-value">' + esc(r[1]) + '</span></div>';
       }).join('') +
-      '<p class="diag-hint">' + esc(hint) + '</p>';
+      '<p class="diag-hint">' + esc(hint) + '</p>' + tableHTML;
     box.hidden = false;
-  }
-
-  // 测试通知：立刻排一条 5 秒后的通知，成功后用户应当马上看到横幅/提示音
-  async function runNotificationTest() {
-    const notify = localNotifyPlugin();
-    if (!notify) {
-      showInfo(T('测试通知'), T('当前是网页版，无法排程系统通知。'));
-      return;
-    }
-    const status = await refreshNotifyState();
-    if (status !== 'granted') await askNotifyPermission();
-    if (notifyState.status !== 'granted') {
-      await renderNotifyDiagnostics();
-      openPermissionSheet();
-      return;
-    }
-
-    const testId = 987654321;
-    try {
-      await ensureReminderChannel(notify);
-      await refreshExactAlarmStatus(notify);
-      await Promise.resolve(notify.cancel({ notifications: [{ id: testId }] })).catch(function () {});
-      // 测试通知走和正式提醒完全相同的渠道与参数，验证的才有意义
-      await notify.schedule({
-        notifications: [nativeNotificationPayload(
-          testId,
-          T('测试提醒'),
-          T('看到这条通知，说明通知权限、渠道和排程都正常。'),
-          Date.now() + 5000,
-          { test: true }
-        )]
-      });
-      state.lastTestNotify = T('已排程，5 秒后应弹出');
-    } catch (err) {
-      state.lastTestNotify = T('排程失败：') + pluginErrorText(err);
-    }
-    await renderNotifyDiagnostics();
-    openPermissionSheet();
   }
 
   // 系统通知真正弹出 / 用户点开通知时：把后续重复条目继续往后排
@@ -7515,6 +7804,11 @@
   function bindEvents() {
     $('#prevBtn').addEventListener('click', function () {
       if (state.view === 'calendar') {
+        if (state.yearView) {
+          shiftYearView(-1);
+          updateTopbar();
+          return;
+        }
         if (!shiftMonthBy(-1)) return;
         renderCalendar();
         updateTopbar();
@@ -7533,6 +7827,11 @@
 
     $('#nextBtn').addEventListener('click', function () {
       if (state.view === 'calendar') {
+        if (state.yearView) {
+          shiftYearView(1);
+          updateTopbar();
+          return;
+        }
         if (!shiftMonthBy(1)) return;
         renderCalendar();
         updateTopbar();
@@ -7564,10 +7863,12 @@
         setView('agenda');
         requestAnimationFrame(function () { agendaScrollTo(t, true); });
       } else {
+        // 年历里点今天：回到月历的今天
+        closeYearView();
         state.month = new Date(d.getFullYear(), d.getMonth(), 1);
         state.selectedDate = t;
         renderAll();
-        settleCalendarAfterDateChange('today');
+        revealDayDetail();
         showToast(T('已回到今天'));
       }
     });
@@ -7586,8 +7887,8 @@
       state.selectedDate = state.selectedDate === key ? '' : key;
       renderCalendar();
       updateTopbar();
-      // 统一归位：取消平滑滚动 / 挂起的收起判定，只留完全展开
-      settleCalendarAfterDateChange('grid');
+      // 统一归位：选中后滚回顶部，详情紧跟在月历下方
+      revealDayDetail();
     });
 
     $('#summaryBtn').addEventListener('click', function () {
@@ -7618,9 +7919,7 @@
     $('#batchCancel').addEventListener('click', function () { exitBatchMode(); });
     $('#batchDelete').addEventListener('click', askBatchDelete);
     bindMonthSwipe();
-    bindCalendarCollapse();
-    bindWeekStrip();
-
+    bindPinchYear();
     $('#scheduleGrid').addEventListener('click', function (e) {
       const chip = e.target.closest('.sch-chip');
       if (chip) openDetail(chip.dataset.id, chip.dataset.date || '');
@@ -7909,7 +8208,8 @@
       draft.type = chip.dataset.type;
       syncTypeChips();
       if (draft.type !== 'todo' && !draft.time) {
-        draft.time = '09:00';
+        const nowClock = new Date();
+        draft.time = pad2(nowClock.getHours()) + ':' + pad2(nowClock.getMinutes());
         syncDateChip();
       }
     });
@@ -8183,9 +8483,7 @@
     $('#permLater').addEventListener('click', finishPermissionIntro);
     $('#permAllow').addEventListener('click', function () { askNotifyPermission(); });
     $('#permRecheck').addEventListener('click', function () { refreshAllPermissionStates(); });
-    $('#notifyTestBtn').addEventListener('click', function () { runNotificationTest(); });
     $('#notifyDiagRefresh').addEventListener('click', function () { renderNotifyDiagnostics(); });
-    $('#notifyTestRowBtn').addEventListener('click', function () { openPermissionSheet(); });
 
     $('#themeToggle').addEventListener('change', function () {
       state.meta.theme = $('#themeToggle').checked ? 'dark' : 'light';
@@ -8198,6 +8496,8 @@
       state.meta.lunarVisible = $('#lunarToggle').checked;
       persistMeta();
       renderAll();
+      // 节假日标记跟随农历开关，年历也要同步重绘
+      if (state.yearView) renderYearView();
     });
 
     $('#almanacToggle').addEventListener('change', function () {
@@ -8360,6 +8660,7 @@
   // 不再让系统直接把 Activity 结束掉。
   function handleBackGesture() {
     if (yearPicker.open) { closeYearPicker(); return true; }
+    if (regionPicker.open) { closeRegionSheet(); return true; }
     if (repDraft.open) { closeRepSheet(); return true; }
     if (dateSheet.open) { closeDateSheet(); return true; }
     if (addressSheet.open) { closeAddressSheet(); return true; }
@@ -8386,6 +8687,8 @@
       return true;
     }
     if (state.settingsOpen) { closeSettings(); return true; }
+    // 年历：返回键先回到月历
+    if (state.yearView) { closeYearView(); return true; }
 
     if (state.view !== 'calendar') {
       setView('calendar');
@@ -8437,6 +8740,7 @@
 
     if (detail.open) closeDetail();
     if (yearPicker.open) closeYearPicker();
+    if (regionPicker.open) closeRegionSheet();
     if (repDraft.open) closeRepSheet();
     if (state.planSheetOpen) closePlanSheet();
     if (state.sheetOpen) closeSheet();
@@ -8494,12 +8798,29 @@
   // 写作页与分组标题共用的「星期 · 节日/节气 · 农历」
   function diarySubText(key) {
     const meta = dayMeta(key);
-    const lunar = (isEn() ? '' : '农历') + meta.lunarFull;
+    const showLunar = lunarVisible();
     const bits = [weekdayFullOf(key)];
-    if (meta.festival) bits.push(T(meta.festival));
-    else if (meta.term) bits.push(T(meta.term));
-    bits.push(lunar);
+    if (meta.festival && (showLunar || meta.festivalKind === 'solar')) bits.push(T(meta.festival));
+    else if (showLunar && meta.term) bits.push(T(meta.term));
+    if (showLunar) bits.push((isEn() ? '' : '农历') + meta.lunarFull);
     return bits.join(' · ');
+  }
+
+  // 卡片上的位置只到市：省 · 市，缺一项就只显示另一项；具体位置只在写作页与详情里出现
+  function diaryLocationBrief(entry) {
+    const loc = entry && entry.location;
+    if (!loc) return '';
+    if (loc.province && loc.city) return loc.province + ' · ' + loc.city;
+    return loc.city || loc.province || '';
+  }
+
+  // 详情用完整位置：省市 + 手写的具体位置
+  function diaryLocationFull(entry) {
+    const loc = entry && entry.location;
+    if (!loc) return '';
+    const brief = diaryLocationBrief(entry);
+    if (loc.text && brief) return brief + ' · ' + loc.text;
+    return brief || loc.text || '';
   }
 
   function diaryDateTitle(key) {
@@ -8534,7 +8855,12 @@
   function diaryMatches(entry, query) {
     if (!query) return true;
     const q = query.toLowerCase();
+    if (String(entry.title || '').toLowerCase().indexOf(q) !== -1) return true;
     if (String(entry.text || '').toLowerCase().indexOf(q) !== -1) return true;
+    if (entry.location) {
+      const loc = [entry.location.province, entry.location.city, entry.location.text].join(' ').toLowerCase();
+      if (loc.indexOf(q) !== -1) return true;
+    }
     if ((entry.tags || []).some(function (t) { return t.toLowerCase().indexOf(q) !== -1; })) return true;
     if ((entry.attachments || []).some(function (a) {
       return String(a.name || '').toLowerCase().indexOf(q) !== -1;
@@ -8542,13 +8868,51 @@
     return false;
   }
 
-  function diaryFiltered() {
-    const query = state.diaryQuery.trim();
+  // 日期查询解析：
+  //   2026-11-07 / 2026/11/7 / 2026.11.7 → 指定某一天
+  //   11月7日 / 11-07 / 11/7             → 不带年份，按所有年份列出
+  function diaryParseDateQuery(query) {
+    const q = String(query || '').trim();
+    if (!q) return null;
+    let m = q.match(/^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?$/);
+    if (m) {
+      const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+      if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+        return { year: y, month: mo, day: d, key: y + '-' + pad2(mo) + '-' + pad2(d) };
+      }
+      return null;
+    }
+    m = q.match(/^(\d{1,2})[-/.月](\d{1,2})日?$/);
+    if (m) {
+      const mo = Number(m[1]), d = Number(m[2]);
+      if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return { year: 0, month: mo, day: d, key: '' };
+    }
+    return null;
+  }
+
+  function diaryDateQueryMatch(entry, dq) {
+    if (!dq) return false;
+    const parts = entry.date.split('-').map(Number);
+    if (parts[1] !== dq.month || parts[2] !== dq.day) return false;
+    return dq.year ? parts[0] === dq.year : true;
+  }
+
+  // 只应用筛选器（心情/附件/月份），不参与文本匹配
+  function diaryFilterBase() {
     return state.diary.filter(function (entry) {
       if (state.diaryFilter === 'attach' && !diaryHasFiles(entry)) return false;
       if (state.diaryFilter === 'mood' && !entry.mood) return false;
       if (state.diaryMonth && entry.date.slice(0, 7) !== state.diaryMonth) return false;
-      return diaryMatches(entry, query);
+      return true;
+    });
+  }
+
+  function diaryFiltered() {
+    const query = state.diaryQuery.trim();
+    const dq = diaryParseDateQuery(query);
+    return diaryFilterBase().filter(function (entry) {
+      // 识别成日期查询时，日期命中优先展示；同一条仍可因正文命中出现在第二组
+      return diaryMatches(entry, query) || diaryDateQueryMatch(entry, dq);
     });
   }
 
@@ -8570,14 +8934,45 @@
     return out + esc(src.slice(from));
   }
 
+  // 卡片标题：有标题用标题；没有就回退正文首行摘要（样式略弱）
+  function diaryCardTitle(entry, query) {
+    const title = (entry.title || '').trim();
+    if (title) return { html: diaryHighlight(title.slice(0, DIARY_TITLE_MAX), query), weak: false };
+    const firstLine = (entry.text || '').trim().split(/\r?\n/)[0].trim();
+    if (firstLine) {
+      const brief = firstLine.length > 40 ? firstLine.slice(0, 40) + '…' : firstLine;
+      return { html: diaryHighlight(brief, query), weak: true };
+    }
+    return { html: esc(T('这篇只有心情和附件')), weak: true };
+  }
+
+  // 卡片日期时间：本年内省略年份，跨年份带上年份
+  function diaryCardDate(key) {
+    const d = keyToDate(key);
+    const sameYear = d.getFullYear() === keyToDate(todayKey()).getFullYear();
+    const md = monthDay(key);
+    const head = sameYear ? md : (isEn() ? d.getFullYear() + ' ' + md : d.getFullYear() + '年' + md);
+    return head + ' ' + weekdayOf(key);
+  }
+
   function diaryCardHTML(entry) {
     const query = state.diaryQuery.trim();
-    const text = entry.text.trim();
-    const body = text
-      ? '<p class="dc-text">' + diaryHighlight(text.slice(0, 180), query) + '</p>'
-      : '<p class="dc-text dc-text-empty">' + esc(T('这篇只有心情和附件')) + '</p>';
+    const title = diaryCardTitle(entry, query);
+    const text = (entry.text || '').trim();
+    let body = '';
+    if (text) {
+      const shown = entry.title ? text : text.split(/\r?\n/).slice(1).join(' ').trim();
+      if (shown) body = '<p class="dc-text">' + diaryHighlight(shown.slice(0, 180), query) + '</p>';
+    }
+    const future = entry.date > todayKey();
+    const moodText = moodLabel(entry.mood);
     const mood = entry.mood
-      ? '<span class="dc-mood">' + moodIconHTML(entry.mood, 'dc-face') + esc(moodLabel(entry.mood)) + '</span>'
+      ? '<span class="dc-mood">' + moodIconHTML(entry.mood, 'dc-face') + esc(moodText) + '</span>'
+      : '';
+    // 位置在卡片上只到市，具体位置留给详情
+    const locBrief = diaryLocationBrief(entry);
+    const loc = locBrief
+      ? '<span class="dc-loc">' + esc(locBrief) + '</span>'
       : '';
     const tags = entry.tags.length
       ? '<div class="dc-tags">' + entry.tags.map(function (t) {
@@ -8595,14 +8990,22 @@
           '<span>' + attachCount + '</span></span>'
       : '';
     const selected = state.diaryManage && state.diarySel.has(entry.date);
-    return '<article class="diary-card' + (selected ? ' selected' : '') + '"' +
+    return '<article class="diary-card' + (selected ? ' selected' : '') + (future ? ' is-future' : '') + '"' +
       ' data-diary-open="' + entry.date + '" data-diary-card="' + entry.date + '"' +
       ' role="button" tabindex="0">' +
-      '<div class="dc-top">' + mood +
+      '<div class="dc-head">' +
+        '<h3 class="dc-title' + (title.weak ? ' is-weak' : '') + '">' + title.html + '</h3>' +
+        '<div class="dc-meta">' +
+          '<span class="dc-date">' + esc(diaryCardDate(entry.date)) + '</span>' +
+          (future ? '<span class="dc-ahead">' + esc(T('预告')) + '</span>' : '') +
+          mood + loc +
+        '</div>' +
+      '</div>' +
+      body + tags +
+      '<div class="dc-top">' +
         (counts.length ? '<span class="dc-counts">' + esc(counts.join(' · ')) + '</span>' : '') +
         attach +
       '</div>' +
-      body + tags +
       '<span class="dc-check" aria-hidden="true"></span>' +
     '</article>';
   }
@@ -8628,26 +9031,51 @@
     let html = '<div class="diary-grid">';
     list.forEach(function (entry) {
       const cover = diaryCoverAttachment(entry);
+      const title = diaryCardTitle(entry, query);
       const selected = state.diaryManage && state.diarySel.has(entry.date);
+      const locBrief = diaryLocationBrief(entry);
+      const future = entry.date > todayKey();
       const inner = cover
-        ? '<span class="dcard-cover"><img data-diary-cover="' + cover.id + '" alt=""></span>' +
+        ? '<span class="dcard-cover"><img data-diary-cover="' + cover.id + '" alt="">' +
+            (cover.kind === 'video'
+              ? '<span class="dcard-play" aria-hidden="true">' +
+                  '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>' +
+                  (cover.duration ? '<span class="dcard-dur">' + esc(diaryDurationText(cover.duration)) + '</span>' : '') +
+                '</span>'
+              : '') +
+          '</span>' +
           '<span class="dcard-shade" aria-hidden="true"></span>'
         : '<span class="dcard-text">' +
             diaryHighlight(entry.text.trim().slice(0, 140) || T('这篇只有心情和附件'), query) +
           '</span>';
-      html += '<article class="dcard' + (cover ? ' has-cover' : '') + (selected ? ' selected' : '') + '"' +
+      html += '<article class="dcard' + (cover ? ' has-cover' : '') + (selected ? ' selected' : '') +
+        (future ? ' is-future' : '') + '"' +
         ' data-diary-open="' + entry.date + '" data-diary-card="' + entry.date + '"' +
         ' role="button" tabindex="0">' +
+        '<span class="dcard-head">' +
+          '<span class="dcard-title' + (title.weak ? ' is-weak' : '') + '">' + title.html + '</span>' +
+          '<span class="dcard-meta">' +
+            '<span class="dcard-date">' + esc(diaryCardDate(entry.date)) + '</span>' +
+            (future ? '<span class="dcard-ahead">' + esc(T('预告')) + '</span>' : '') +
+            (entry.mood ? moodIconHTML(entry.mood, 'dcard-face') : '') +
+            (locBrief ? '<span class="dcard-loc">' + esc(locBrief) + '</span>' : '') +
+          '</span>' +
+        '</span>' +
         inner +
         '<span class="dcard-foot">' +
-          '<span class="dcard-date">' + esc(monthDay(entry.date)) + '</span>' +
-          (entry.mood ? moodIconHTML(entry.mood, 'dcard-face') : '') +
           (entry.attachments.length ? '<span class="dcard-files">' + entry.attachments.length + '</span>' : '') +
         '</span>' +
         '<span class="dc-check" aria-hidden="true"></span>' +
       '</article>';
     });
     return html + '</div>';
+  }
+
+  function diaryDurationText(sec) {
+    const s = Math.max(0, Math.round(Number(sec) || 0));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return m + ':' + (r < 10 ? '0' + r : String(r));
   }
 
   function hydrateDiaryThumbs() {
@@ -8732,9 +9160,31 @@
 
     const list = diaryFiltered();
     const body = $('#diaryBody');
-    body.innerHTML = list.length
-      ? (state.diaryMode === 'grid' ? renderDiaryGrid(list) : renderDiaryTimeline(list))
-      : '';
+    const dq = diaryParseDateQuery(state.diaryQuery.trim());
+    let html = '';
+    if (list.length) {
+      if (dq && state.diaryMode !== 'grid') {
+        // 日期命中与文本命中分组展示：先「日期」，再「正文 / 标签」
+        const base = diaryFilterBase();
+        const dateList = base.filter(function (e) { return diaryDateQueryMatch(e, dq); });
+        const textList = base.filter(function (e) {
+          return !diaryDateQueryMatch(e, dq) && diaryMatches(e, state.diaryQuery.trim());
+        });
+        if (dateList.length) {
+          html += '<div class="diary-sec"><div class="diary-sec-head">' + esc(T('日期')) +
+            '<span class="diary-sec-n">' + dateList.length + '</span></div>' +
+            renderDiaryTimeline(dateList) + '</div>';
+        }
+        if (textList.length) {
+          html += '<div class="diary-sec"><div class="diary-sec-head">' + esc(T('正文 / 标签')) +
+            '<span class="diary-sec-n">' + textList.length + '</span></div>' +
+            renderDiaryTimeline(textList) + '</div>';
+        }
+      } else {
+        html = state.diaryMode === 'grid' ? renderDiaryGrid(list) : renderDiaryTimeline(list);
+      }
+    }
+    body.innerHTML = html;
     body.hidden = !list.length;
 
     const empty = $('#diaryEmpty');
@@ -8790,13 +9240,15 @@
     state.diaryDraft = entry
       ? {
           date: key,
+          title: entry.title || '',
           text: entry.text,
           mood: entry.mood,
           tags: entry.tags.slice(),
+          location: entry.location ? Object.assign({}, entry.location) : null,
           attachments: entry.attachments.map(function (a) { return Object.assign({}, a); }),
           createdAt: entry.createdAt
         }
-      : { date: key, text: '', mood: '', tags: [], attachments: [], createdAt: Date.now() };
+      : { date: key, title: '', text: '', mood: '', tags: [], location: null, attachments: [], createdAt: Date.now() };
     state.diaryEditorOpen = true;
     state.diaryEditingDate = key;
     state.diaryDirty = false;
@@ -8841,12 +9293,147 @@
     if (!draft) return;
     $('#deDate').textContent = diaryDateTitle(draft.date);
     $('#deSub').textContent = diarySubText(draft.date);
+    $('#diaryTitle').value = draft.title || '';
     $('#diaryText').value = draft.text;
+    $('#deLocText').value = (draft.location && draft.location.text) || '';
+    renderDiaryLocation();
     $('#deSaved').hidden = true;
     $('#diaryDeleteBtn').hidden = !diaryByDate(draft.date);
     renderDiaryMoods();
     renderDiaryTags();
     renderDiaryAttachments();
+  }
+
+  // 位置栏整栏可选：省市与具体位置都为空时只是空输入框，不提示「未设置」
+  function renderDiaryLocation() {
+    const draft = state.diaryDraft;
+    if (!draft) return;
+    const loc = normalizeDiaryLocation(draft.location);
+    draft.location = loc;
+    const brief = loc ? diaryLocationBrief({ location: loc }) : '';
+    const summary = $('#deLocSummary');
+    if (summary) {
+      summary.textContent = brief;
+      summary.hidden = !brief;
+    }
+    const pick = $('#deLocPick');
+    if (pick) pick.textContent = brief ? T('修改省市') : T('选择省市');
+    const clear = $('#deLocClear');
+    if (clear) clear.hidden = !loc;
+  }
+
+  function diarySetLocation(next) {
+    const draft = state.diaryDraft;
+    if (!draft) return;
+    draft.location = normalizeDiaryLocation(next);
+    renderDiaryLocation();
+    state.diaryDirty = true;
+    scheduleDiarySave();
+  }
+
+  // ---------- 省市滚轮（regions.js 内置表，完全离线）----------
+  const regionPicker = { open: false, province: 0, city: 0 };
+
+  function regionData() {
+    return Array.isArray(window.CN_REGIONS) ? window.CN_REGIONS : [];
+  }
+
+  function buildRegionWheel(el, values, index, onPick) {
+    if (!el) return;
+    const at = Math.max(0, Math.min(values.length - 1, index || 0));
+    el.innerHTML = values.map(function (v) {
+      return '<div class="wheel-item">' + esc(v) + '</div>';
+    }).join('');
+    if (!el.dataset.bound) {
+      el.dataset.bound = '1';
+      let timer = null;
+      el.addEventListener('scroll', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () {
+          if (!el.children.length) return;
+          const idx = Math.max(0, Math.min(el.children.length - 1, Math.round(el.scrollTop / 40)));
+          el.scrollTo({ top: idx * 40, behavior: 'smooth' });
+          Array.prototype.forEach.call(el.children, function (c, i) {
+            c.classList.toggle('active', i === idx);
+          });
+          if (el._onPick) el._onPick(idx);
+        }, 140);
+      }, { passive: true });
+    }
+    el._onPick = onPick;
+    Array.prototype.forEach.call(el.children, function (c, i) {
+      c.classList.toggle('active', i === at);
+    });
+    el.scrollTop = at * 40;
+  }
+
+  function renderRegionWheels() {
+    const data = regionData();
+    if (!data.length) return;
+    const pi = Math.max(0, Math.min(data.length - 1, regionPicker.province));
+    const provinceEl = $('#regionProvince');
+    buildRegionWheel(provinceEl, data.map(function (p) { return p.province; }), pi, function (idx) {
+      if (idx === regionPicker.province) return;
+      regionPicker.province = idx;
+      regionPicker.city = 0;
+      const cities = (data[idx] || data[0]).cities;
+      buildRegionWheel($('#regionCity'), cities, 0, function (i) { regionPicker.city = i; });
+    });
+    const cities = (data[pi] || data[0]).cities;
+    buildRegionWheel($('#regionCity'), cities, regionPicker.city, function (i) { regionPicker.city = i; });
+  }
+
+  function openRegionSheet() {
+    const data = regionData();
+    if (!data.length) return;
+    const draft = state.diaryDraft;
+    const loc = draft && draft.location ? draft.location : null;
+    let pi = 0;
+    let ci = 0;
+    if (loc && loc.province) {
+      const found = data.findIndex(function (p) { return p.province === loc.province; });
+      if (found !== -1) pi = found;
+    }
+    if (loc && loc.city) {
+      const found = (data[pi] || data[0]).cities.indexOf(loc.city);
+      if (found !== -1) ci = found;
+    }
+    regionPicker.province = pi;
+    regionPicker.city = ci;
+    regionPicker.open = true;
+    renderRegionWheels();
+    $('#regionBackdrop').hidden = false;
+    $('#regionSheet').hidden = false;
+    requestAnimationFrame(function () {
+      $('#regionBackdrop').classList.add('open');
+      $('#regionSheet').classList.add('open');
+      renderRegionWheels();
+    });
+  }
+
+  function closeRegionSheet() {
+    if (!regionPicker.open) return;
+    regionPicker.open = false;
+    $('#regionSheet').classList.remove('open');
+    $('#regionBackdrop').classList.remove('open');
+    setTimeout(function () {
+      if (!regionPicker.open) {
+        $('#regionSheet').hidden = true;
+        $('#regionBackdrop').hidden = true;
+      }
+    }, 300);
+  }
+
+  function commitRegion() {
+    const data = regionData();
+    if (!data.length) return;
+    const p = data[Math.max(0, Math.min(data.length - 1, regionPicker.province))] || data[0];
+    const city = p.cities[Math.max(0, Math.min(p.cities.length - 1, regionPicker.city))] || '';
+    const draft = state.diaryDraft;
+    const text = draft && draft.location ? draft.location.text : '';
+    diarySetLocation({ province: p.province, city: city, text: text });
+    closeRegionSheet();
+    haptic(8);
   }
 
   function renderDiaryMoods() {
@@ -8931,6 +9518,14 @@
       if (a.kind === 'image') {
         return '<div class="de-file de-image" data-attach-open="' + a.id + '" role="button" tabindex="0">' +
           '<img data-attach-thumb="' + a.id + '" alt="' + esc(a.name) + '">' + del + '</div>';
+      }
+      if (a.kind === 'video') {
+        return '<div class="de-file de-video" data-attach-open="' + a.id + '" role="button" tabindex="0">' +
+          '<img data-attach-thumb="' + a.id + '" alt="' + esc(a.name) + '">' +
+          '<span class="de-play" aria-hidden="true"><svg viewBox="0 0 24 24">' +
+            '<path d="M8 5.5v13l11-6.5z"/></svg></span>' +
+          (a.duration ? '<span class="de-dur">' + esc(diaryDurationText(a.duration)) + '</span>' : '') +
+          del + '</div>';
       }
       return '<div class="de-file de-doc" data-attach-open="' + a.id + '" role="button" tabindex="0">' +
         '<span class="de-doc-ico"><svg viewBox="0 0 24 24" aria-hidden="true">' +
@@ -9018,6 +9613,58 @@
     return { data: data, thumb: thumb, w: w, h: h };
   }
 
+  // 视频不转码：读元数据 → 跳到 0.1s → 画到 ≤320px 的 canvas 生成封面。
+  // 任何一步失败都返回空封面，视频本体仍照常入库。
+  function videoCoverOf(file) {
+    return new Promise(function (resolve) {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      let settled = false;
+      function finish(result) {
+        if (settled) return;
+        settled = true;
+        try { URL.revokeObjectURL(url); } catch (err) { /* 忽略 */ }
+        resolve(result);
+      }
+      function grab() {
+        try {
+          const sw = video.videoWidth || 0;
+          const sh = video.videoHeight || 0;
+          if (!sw || !sh) { finish({ thumb: null, w: 0, h: 0, duration: video.duration || 0 }); return; }
+          const scale = Math.min(1, DIARY_VIDEO_COVER_MAX / Math.max(sw, sh));
+          const w = Math.max(1, Math.round(sw * scale));
+          const h = Math.max(1, Math.round(sh * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0, w, h);
+          canvas.toBlob(function (blob) {
+            finish({ thumb: blob, w: w, h: h, duration: video.duration || 0 });
+          }, 'image/jpeg', 0.75);
+        } catch (err) {
+          finish({ thumb: null, w: 0, h: 0, duration: video.duration || 0 });
+        }
+      }
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      video.onloadedmetadata = function () {
+        const dur = video.duration || 0;
+        // 有些视频第 0 帧是黑屏，取 0.1s 更稳；短视频取时长的 1/10
+        const target = dur > 0 ? Math.min(0.1, dur / 10) : 0.1;
+        try { video.currentTime = target; } catch (err) { grab(); }
+      };
+      video.onseeked = grab;
+      video.onerror = function () { finish({ thumb: null, w: 0, h: 0, duration: 0 }); };
+      // 兜底：个别编码在 WebView 里拿不到 seek 事件，8 秒后放弃封面
+      setTimeout(function () {
+        finish({ thumb: null, w: 0, h: 0, duration: video.duration || 0 });
+      }, 8000);
+      video.src = url;
+    });
+  }
+
   async function addDiaryAttachments(fileList) {
     const files = Array.prototype.slice.call(fileList || []);
     if (!files.length) return;
@@ -9043,11 +9690,27 @@
     let overflow = 0;
     let failed = 0;
     let overQuota = false;
+    let videoNoted = false;
 
     for (let i = 0; i < files.length; i++) {
       if (added >= room) { overflow += 1; continue; }
       const file = files[i];
-      if (file.size > DIARY_MAX_FILE_BYTES) { tooBig += 1; continue; }
+      const isVideo = /^video\//.test(file.type || '');
+      if (isVideo) {
+        const vCount = draft.attachments.filter(function (a) { return a.kind === 'video'; }).length;
+        // 视频限制单独提示（每轮只提示一次，避免批量选择时刷屏）
+        if (vCount >= DIARY_MAX_VIDEOS) {
+          if (!videoNoted) { showToast(T('每篇最多 1 个视频')); videoNoted = true; }
+          continue;
+        }
+        if (file.size > DIARY_VIDEO_MAX_BYTES) {
+          if (!videoNoted) { showToast(T('视频超过 50MB，无法添加')); videoNoted = true; }
+          continue;
+        }
+      } else if (file.size > DIARY_MAX_FILE_BYTES) {
+        tooBig += 1;
+        continue;
+      }
       if (diaryUsedBytesForDraft() + file.size > DIARY_STORE_LIMIT) { overQuota = true; break; }
       const isImage = /^image\//.test(file.type || '');
       const id = uid();
@@ -9056,12 +9719,20 @@
         let thumb = null;
         let w = 0;
         let h = 0;
+        let duration = 0;
         if (isImage) {
           const out = await compressDiaryImage(file);
           data = out.data;
           thumb = out.thumb;
           w = out.w;
           h = out.h;
+        } else if (isVideo) {
+          // 视频原样入库（WebView 无法转码），只抽第一帧做封面
+          const out = await videoCoverOf(file);
+          thumb = out.thumb;
+          w = out.w;
+          h = out.h;
+          duration = out.duration;
         }
         if (diaryUsedBytesForDraft() + data.size + (thumb ? thumb.size : 0) > DIARY_STORE_LIMIT) {
           overQuota = true;
@@ -9077,12 +9748,13 @@
         });
         draft.attachments.push({
           id: id,
-          name: file.name || (isImage ? 'image.jpg' : 'file'),
+          name: file.name || (isImage ? 'image.jpg' : (isVideo ? 'video.mp4' : 'file')),
           type: data.type || file.type || '',
           size: data.size,
-          kind: isImage ? 'image' : 'file',
+          kind: isImage ? 'image' : (isVideo ? 'video' : 'file'),
           w: w,
-          h: h
+          h: h,
+          duration: duration
         });
         added += 1;
       } catch (err) {
@@ -9145,9 +9817,28 @@
       });
       return;
     }
+    if (meta.kind === 'video') {
+      const viewer = $('#diaryViewer');
+      const vid = $('#diaryViewerVideo');
+      const img = $('#diaryViewerImg');
+      if (img) { img.hidden = true; img.removeAttribute('src'); }
+      if (vid.dataset.url) {
+        try { URL.revokeObjectURL(vid.dataset.url); } catch (err) { /* 忽略 */ }
+      }
+      const url = URL.createObjectURL(rec.data);
+      vid.dataset.url = url;
+      vid.src = url;
+      vid.hidden = false;
+      $('#diaryViewerName').textContent = meta.name;
+      viewer.hidden = false;
+      requestAnimationFrame(function () { viewer.classList.add('open'); });
+      return;
+    }
     if (meta.kind === 'image') {
       const viewer = $('#diaryViewer');
       const img = $('#diaryViewerImg');
+      const vid = $('#diaryViewerVideo');
+      if (vid) { vid.hidden = true; vid.pause(); vid.removeAttribute('src'); }
       if (img.dataset.url) {
         try { URL.revokeObjectURL(img.dataset.url); } catch (err) { /* 忽略 */ }
       }
@@ -9179,6 +9870,16 @@
       try { URL.revokeObjectURL(img.dataset.url); } catch (err) { /* 忽略 */ }
       img.dataset.url = '';
       img.removeAttribute('src');
+    }
+    const vid = $('#diaryViewerVideo');
+    if (vid) {
+      try { vid.pause(); } catch (err) { /* 忽略 */ }
+      if (vid.dataset.url) {
+        try { URL.revokeObjectURL(vid.dataset.url); } catch (err) { /* 忽略 */ }
+        vid.dataset.url = '';
+      }
+      vid.removeAttribute('src');
+      vid.hidden = true;
     }
     viewer.classList.remove('open');
     viewer.hidden = true;
@@ -9238,7 +9939,13 @@
     const draft = state.diaryDraft;
     if (!draft) return;
     const text = draft.text || '';
-    const empty = !text.trim() && !draft.mood && !draft.tags.length && !draft.attachments.length;
+    const title = String(draft.title || '').trim().slice(0, DIARY_TITLE_MAX);
+    draft.title = title;
+    const location = normalizeDiaryLocation(draft.location);
+    draft.location = location;
+    // 只有标题、只有位置也算有效记录，避免「写了标题却保存不了」
+    const empty = !text.trim() && !title && !draft.mood && !draft.tags.length &&
+      !draft.attachments.length && !location;
     const existing = diaryByDate(draft.date);
 
     // 首次输入前不落空记录；把已有日记清空后，记录本身也一并移除
@@ -9254,9 +9961,11 @@
 
     const record = {
       date: draft.date,
+      title: title,
       text: text,
       mood: draft.mood,
       tags: draft.tags.slice(),
+      location: location ? Object.assign({}, location) : null,
       attachments: draft.attachments.map(function (a) { return Object.assign({}, a); }),
       createdAt: existing ? existing.createdAt : (draft.createdAt || Date.now()),
       updatedAt: Date.now()
@@ -9330,8 +10039,8 @@
     if (!dates.length) return;
     openModal({
       kind: 'diary-batch-del',
-      title: T('删除 {n} 篇日记？', { n: dates.length }),
-      text: T('这 {n} 篇日记和它们的附件会一起删除，无法恢复。', { n: dates.length }),
+      title: T('将删除 {n} 篇日记', { n: dates.length }),
+      text: T('附件原图、缩略图与视频会一并清除，无法恢复。', { n: dates.length }),
       confirmText: T('删除'),
       danger: true,
       onConfirm: function () {
@@ -9345,16 +10054,26 @@
   // ---------- 备份：是否包含附件 ----------
 
   function diaryBackupEstimate() {
-    // 缩略图按原图约 1 成估，base64 比原始字节大约多 37%
+    // 缩略图按原图约 1 成估，base64 比原始字节大约多 37%；视频原样入库，同样计入
     return Math.round(diaryUsedBytes() * 1.1 * 1.37);
+  }
+
+  function diaryHasVideo() {
+    return state.diary.some(function (entry) {
+      return entry.attachments.some(function (a) { return a.kind === 'video'; });
+    });
   }
 
   function openExportSheet() {
     const est = diaryBackupEstimate();
+    const hasVideo = diaryHasVideo();
     $('#exportSizeHint').textContent = est
-      ? T('图片与文件合计约 {size}', { size: formatBytes(est) })
+      ? T('图片、视频与文件合计约 {size}', { size: formatBytes(est) }) +
+        (hasVideo ? ' · ' + T('含视频，备份可能达到数百 MB') : '')
       : T('当前没有附件，文件不会变大');
-    $('#exportSheetNote').textContent = T('导出的是未加密的 JSON 文件，请存到可信位置；含附件时体积很大。');
+    $('#exportSheetNote').textContent = hasVideo
+      ? T('导出的是未加密的 JSON 文件，请存到可信位置；视频会让备份达到数百 MB，请确认存储空间充足。')
+      : T('导出的是未加密的 JSON 文件，请存到可信位置；含附件时体积很大。');
     const sheet = $('#exportSheet');
     const back = $('#exportSheetBackdrop');
     back.hidden = false;
@@ -9439,7 +10158,11 @@
 
     $('#diaryBody').addEventListener('click', function (e) {
       const card = e.target.closest('[data-diary-open]');
-      if (!card) return;
+      if (!card) {
+        // 管理态点内容区空白：退出管理且不删除
+        if (state.diaryManage) exitDiaryManage();
+        return;
+      }
       const date = card.dataset.diaryOpen;
       if (state.diaryManage) { toggleDiarySel(date, card); return; }
       openDiaryEditor(date);
@@ -9464,6 +10187,34 @@
     $('#diaryText').addEventListener('blur', function () {
       if (state.diaryDraft) saveDiaryDraft(true);
     });
+
+    $('#diaryTitle').addEventListener('input', function (e) {
+      if (!state.diaryDraft) return;
+      state.diaryDraft.title = e.target.value.slice(0, DIARY_TITLE_MAX);
+      scheduleDiarySave();
+    });
+
+    // 点日期打开滚轮，默认停在当前编辑的日期，可补写过去的日记
+    $('#deDate').addEventListener('click', function () {
+      openYearPicker('diary');
+    });
+
+    $('#deLocText').addEventListener('input', function (e) {
+      if (!state.diaryDraft) return;
+      const loc = state.diaryDraft.location ? Object.assign({}, state.diaryDraft.location) : {};
+      loc.text = e.target.value.slice(0, 60);
+      diarySetLocation(loc);
+    });
+    $('#deLocPick').addEventListener('click', openRegionSheet);
+    $('#deLocClear').addEventListener('click', function () {
+      diarySetLocation(null);
+      const input = $('#deLocText');
+      if (input) input.value = '';
+      haptic(8);
+    });
+    $('#regionDone').addEventListener('click', commitRegion);
+    $('#regionClose').addEventListener('click', closeRegionSheet);
+    $('#regionBackdrop').addEventListener('click', closeRegionSheet);
 
     $('#deMoods').addEventListener('click', function (e) {
       const btn = e.target.closest('[data-mood]');
@@ -9517,12 +10268,16 @@
       closeAttachSheet();
       $('#diaryImageInput').click();
     });
+    $('#attachPickVideo').addEventListener('click', function () {
+      closeAttachSheet();
+      $('#diaryVideoInput').click();
+    });
     $('#attachPickFile').addEventListener('click', function () {
       closeAttachSheet();
       $('#diaryFileInput').click();
     });
 
-    ['#diaryImageInput', '#diaryFileInput'].forEach(function (sel) {
+    ['#diaryImageInput', '#diaryVideoInput', '#diaryFileInput'].forEach(function (sel) {
       const input = $(sel);
       if (!input) return;
       input.addEventListener('change', function () {
@@ -9641,6 +10396,11 @@
     registerSW();
     scheduleNextMidnight();
     setInterval(onTick, 30000);
+    // 回到前台时重排一次：把后台期间新增/修改的提醒补进系统，
+    // 也顺手把已经过去的实例从排程里剔除
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') scheduleReminders();
+    });
 
     // 渠道必须在第一次排程之前建好：Android 8+ 的通知按渠道投递，缺渠道会被静默丢弃。
     // 先删掉旧 id 的渠道（参数不可改，重建同 id 无效），再幂等创建 v2 渠道。

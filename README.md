@@ -56,8 +56,9 @@
 - `0.7.0` → `versionCode 700`
 - `0.8.0` → `versionCode 800`
 - `0.9.0` → `versionCode 900`
+- `0.9.1` → `versionCode 901`
 
-APK 文件名也会自动变成 `qingjihua-0.9.0.apk`，不需要手改任何地方。
+APK 文件名也会自动变成 `qingjihua-0.9.1.apk`，不需要手改任何地方。
 
 ## 签名密钥（已迁出仓库）
 

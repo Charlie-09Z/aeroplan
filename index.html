@@ -9,7 +9,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=39">
+  <link rel="stylesheet" href="./styles.css?v=40">
 </head>
 <body>
   <div class="phone">
@@ -62,7 +62,6 @@
 
       <main class="content" id="content">
         <section class="view" id="viewCalendar">
-          <!-- 整月日历留在正常文档流里，随内容滚出视口；只有下面的周条粘顶 -->
           <div class="cal-month" id="calMonth">
             <div class="cal-month-inner">
               <div class="weekdays">
@@ -71,8 +70,13 @@
               <div class="cal-grid" id="calGrid"></div>
             </div>
           </div>
-          <div class="week-strip" id="weekStrip" aria-hidden="true">
-            <div class="ws-track" id="wsTrack"></div>
+          <!-- 年历：双指捏合展开，12 个月一屏平铺 -->
+          <div class="year-view" id="yearView" hidden>
+            <div class="year-head">
+              <span class="year-title" id="yearTitle">2026</span>
+              <span class="year-tip" id="yearTip">左右滑动切换年份 · 捏合或返回回到月历</span>
+            </div>
+            <div class="year-grid" id="yearGrid"></div>
           </div>
           <div class="cal-head-block">
             <div class="cal-foot">
@@ -128,7 +132,7 @@
                   <circle cx="10.8" cy="10.8" r="6.2"/>
                   <path d="M15.4 15.4 20 20"/>
                 </svg>
-                <input id="diarySearch" type="search" autocomplete="off" placeholder="搜索日记" aria-label="搜索日记">
+                <input id="diarySearch" type="search" autocomplete="off" placeholder="搜索日记、标签或日期" aria-label="搜索日记、标签或日期">
                 <button class="diary-search-clear" id="diarySearchClear" type="button" aria-label="清空搜索" hidden>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
                 </button>
@@ -145,12 +149,10 @@
             </div>
           </div>
 
-          <div class="diary-manage-bar" id="diaryManageBar" hidden>
-            <span class="dmb-count" id="diaryManageCount">已选 0 篇</span>
-            <div class="dmb-actions">
-              <button class="text-btn" id="diaryManageCancel" type="button">取消</button>
-              <button class="danger-btn" id="diaryManageDelete" type="button">删除</button>
-            </div>
+          <div class="batch-bar diary-batch-bar" id="diaryManageBar" hidden>
+            <span class="batch-count" id="diaryManageCount">已选 0 篇</span>
+            <button class="batch-btn" id="diaryManageCancel" type="button">取消</button>
+            <button class="batch-btn danger" id="diaryManageDelete" type="button" disabled>删除</button>
           </div>
 
           <div class="diary-body" id="diaryBody"></div>
@@ -414,10 +416,10 @@
       </div>
 
       <div class="year-backdrop" id="yearBackdrop" hidden></div>
-      <div class="year-sheet" id="yearSheet" role="dialog" aria-modal="true" aria-labelledby="yearTitle" hidden>
+      <div class="year-sheet" id="yearSheet" role="dialog" aria-modal="true" aria-labelledby="yearSheetTitle" hidden>
         <div class="sheet-grabber"></div>
         <div class="sheet-head">
-          <h2 id="yearTitle">跳转到</h2>
+          <h2 id="yearSheetTitle">跳转到</h2>
           <button class="icon-btn" id="yearClose" type="button" aria-label="关闭">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
           </button>
@@ -433,6 +435,30 @@
         </div>
         <div class="sheet-actions">
           <button class="primary-btn" id="yearGo" type="button">跳转</button>
+        </div>
+      </div>
+
+      <!-- 日记位置：内置省市两级滚轮（完全离线） -->
+      <div class="year-backdrop" id="regionBackdrop" hidden></div>
+      <div class="year-sheet region-sheet" id="regionSheet" role="dialog" aria-modal="true" aria-labelledby="regionTitle" hidden>
+        <div class="sheet-grabber"></div>
+        <div class="sheet-head">
+          <h2 id="regionTitle">选择省市</h2>
+          <button class="icon-btn" id="regionClose" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+          </button>
+        </div>
+        <div class="jump-wheels">
+          <div class="wheel-caption" aria-hidden="true"><span>省</span><span>市</span></div>
+          <div class="wheel-row region-wheels">
+            <div class="wheel" id="regionProvince" role="listbox" aria-label="省份"></div>
+            <div class="wheel" id="regionCity" role="listbox" aria-label="城市"></div>
+            <div class="wheel-band" aria-hidden="true"></div>
+          </div>
+        </div>
+        <p class="region-note">省市列表来自应用内置，完全离线，不联网、不定位、不上传。</p>
+        <div class="sheet-actions">
+          <button class="primary-btn" id="regionDone" type="button">确定</button>
         </div>
       </div>
 
@@ -490,7 +516,7 @@
       <div class="diary-editor" id="diaryEditor" role="dialog" aria-modal="true" aria-labelledby="deDate" hidden>
         <div class="de-head">
           <div class="de-head-main">
-            <h2 id="deDate">10 月 1 日</h2>
+            <h2><button class="de-date-btn" id="deDate" type="button" aria-label="选择日期">10 月 1 日</button></h2>
             <p class="de-sub" id="deSub">星期三 · 农历八月廿九</p>
           </div>
           <div class="de-head-actions">
@@ -499,9 +525,19 @@
           </div>
         </div>
         <div class="de-scroll">
+          <input class="de-title" id="diaryTitle" type="text" maxlength="60" autocomplete="off" placeholder="今天想记什么">
           <textarea class="de-text" id="diaryText" placeholder="今天发生了什么…" spellcheck="false"></textarea>
           <div class="de-moods" id="deMoods" role="group" aria-label="心情"></div>
           <div class="de-tags" id="deTags"></div>
+          <div class="de-loc">
+            <div class="de-loc-head">
+              <span class="de-loc-title">位置</span>
+              <button class="de-loc-pick" id="deLocPick" type="button">选择省市</button>
+              <button class="de-loc-clear" id="deLocClear" type="button" hidden>清除</button>
+            </div>
+            <p class="de-loc-summary" id="deLocSummary"></p>
+            <input class="de-loc-text" id="deLocText" type="text" maxlength="60" autocomplete="off" placeholder="具体位置（可选），如街道、店铺、楼栋">
+          </div>
           <div class="de-attach">
             <div class="de-attach-head">
               <span class="de-attach-title">附件</span>
@@ -515,15 +551,17 @@
           </div>
         </div>
         <input id="diaryImageInput" type="file" accept="image/*" multiple hidden>
+        <input id="diaryVideoInput" type="file" accept="video/*" hidden>
         <input id="diaryFileInput" type="file" multiple hidden>
       </div>
 
-      <!-- 日记：图片全屏预览 -->
+      <!-- 日记：图片 / 视频全屏预览 -->
       <div class="diary-viewer" id="diaryViewer" hidden>
         <button class="dv-close" id="diaryViewerClose" type="button" aria-label="关闭">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
         <img id="diaryViewerImg" alt="">
+        <video id="diaryViewerVideo" playsinline controls hidden></video>
         <p class="dv-name" id="diaryViewerName"></p>
       </div>
 
@@ -549,6 +587,7 @@
       <div class="modal attach-sheet" id="attachSheet" hidden>
         <h3 class="modal-title" id="attachSheetTitle">添加附件</h3>
         <button class="row-btn" id="attachPickImage" type="button"><span>添加图片</span><span class="row-arrow">›</span></button>
+        <button class="row-btn" id="attachPickVideo" type="button"><span>添加视频（单个 50MB）</span><span class="row-arrow">›</span></button>
         <button class="row-btn" id="attachPickFile" type="button"><span>添加文件</span><span class="row-arrow">›</span></button>
         <button class="text-btn" id="attachCancel" type="button">取消</button>
       </div>
@@ -631,11 +670,6 @@
               <span class="toggle" aria-hidden="true"></span>
             </label>
             <label class="setting-row toggle-row">
-              <span>黄历卡片</span>
-              <input type="checkbox" id="almanacToggle">
-              <span class="toggle" aria-hidden="true"></span>
-            </label>
-            <label class="setting-row toggle-row">
               <span>天气</span>
               <input type="checkbox" id="weatherToggle">
               <span class="toggle" aria-hidden="true"></span>
@@ -677,6 +711,11 @@
                 <button class="lang-chip" type="button" data-lang="en">English</button>
               </div>
             </div>
+            <label class="setting-row toggle-row">
+              <span>黄历卡片</span>
+              <input type="checkbox" id="almanacToggle">
+              <span class="toggle" aria-hidden="true"></span>
+            </label>
             <div class="setting-row cat-setting">
               <span>分类管理</span>
             </div>
@@ -690,11 +729,6 @@
               <b id="notifyState">检测中…</b>
               <span class="row-arrow">›</span>
             </button>
-            <button class="row-btn" id="notifyTestRowBtn" type="button">
-              <span>测试通知</span>
-              <span class="loc-value">5 秒后 · 含状态自查</span>
-              <span class="row-arrow">›</span>
-            </button>
           </section>
 
           <section class="setting-group">
@@ -706,7 +740,7 @@
           </section>
 
           <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
-          <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.9.0</div>
+          <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.9.1</div>
         </div>
       </div>
 
@@ -796,7 +830,7 @@
             <p>请通过你获取本应用的渠道联系我们：应用商店页面、发布页面或仓库 Issue。</p>
           </section>
 
-          <p class="about-version">0.9.0</p>
+          <p class="about-version">0.9.1</p>
         </div>
 
         <div class="agreement-actions" id="agreementActions" hidden>
@@ -832,7 +866,6 @@
             </div>
             <p class="perm-item-text">提醒由系统排程，关掉应用或锁屏后也会按时通知。权限、通知渠道、精确闹钟与排程数量可以在下面自查。</p>
             <button class="secondary-btn perm-item-btn" id="permAllow" type="button">允许通知</button>
-            <button class="secondary-btn perm-item-btn" id="notifyTestBtn" type="button">测试通知（5 秒后）</button>
             <div class="perm-denied" id="permDenied" hidden>
               <p>系统拒绝了通知权限。可以打开手机「设置 → 应用 → 氢计划 → 通知」把通知打开，再回到这里点下面的按钮重新检查。</p>
             </div>
@@ -854,8 +887,9 @@
 
     </div>
   </div>
-  <script src="./i18n.js?v=39"></script>
-  <script src="./weather.js?v=39"></script>
-  <script src="./app.js?v=39"></script>
+  <script src="./i18n.js?v=40"></script>
+  <script src="./regions.js?v=40"></script>
+  <script src="./weather.js?v=40"></script>
+  <script src="./app.js?v=40"></script>
 </body>
 </html>

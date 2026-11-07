@@ -265,6 +265,66 @@ if (fs.existsSync(manifestPath)) {
   console.log('没有找到 AndroidManifest.xml，跳过权限写入');
 }
 
+// ---------- 3.2 状态栏：浅色主题白底深色图标，深色主题深底浅色图标 ----------
+// 运行时会通过 @capacitor/status-bar 按应用主题再设一次；这里写原生主题是为了
+// 首帧（JS 还没执行时）不出现系统默认的黑色状态栏。
+const resDir = path.join(androidDir, 'app', 'src', 'main', 'res');
+const valuesDir = path.join(resDir, 'values');
+fs.mkdirSync(valuesDir, { recursive: true });
+
+function writeIfChanged(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === content) return false;
+  fs.writeFileSync(file, content);
+  return true;
+}
+
+writeIfChanged(
+  path.join(valuesDir, 'colors.xml'),
+  '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n' +
+  '    <color name="status_bar">#F3F5FA</color>\n</resources>\n'
+);
+writeIfChanged(
+  path.join(resDir, 'values-night', 'colors.xml'),
+  '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n' +
+  '    <color name="status_bar">#0F1117</color>\n</resources>\n'
+);
+
+const stylesPath = path.join(valuesDir, 'styles.xml');
+if (fs.existsSync(stylesPath)) {
+  let styles = fs.readFileSync(stylesPath, 'utf8');
+  const styleBlock = styles.match(/<style name="AppTheme\.NoActionBar"[^>]*>[\s\S]*?<\/style>/);
+  if (styleBlock) {
+    let block = styleBlock[0];
+    const ensureItem = function (xml, name, value) {
+      const re = new RegExp('(\\s*)<item name="' + name.replace(/\./g, '\\.') + '">[\\s\\S]*?</item>');
+      if (re.test(xml)) return xml.replace(re, '<item name="' + name + '">' + value + '</item>');
+      return xml.replace('</style>', '    <item name="' + name + '">' + value + '</item>\n    </style>');
+    };
+    block = ensureItem(block, 'android:statusBarColor', '@color/status_bar');
+    block = ensureItem(block, 'android:navigationBarColor', '@color/status_bar');
+    block = ensureItem(block, 'android:windowLightStatusBar', 'true');
+    block = ensureItem(block, 'android:windowDrawsSystemBarBackgrounds', 'true');
+    styles = styles.replace(styleBlock[0], block);
+    writeIfChanged(stylesPath, styles);
+
+    // 深色模式：同一份样式，只把图标改为浅色
+    const nightBlock = block.replace(
+      /<item name="android:windowLightStatusBar">[^<]*<\/item>/,
+      '<item name="android:windowLightStatusBar">false</item>'
+    );
+    writeIfChanged(
+      path.join(resDir, 'values-night', 'styles.xml'),
+      '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    ' + nightBlock + '\n</resources>\n'
+    );
+    console.log('已写入状态栏主题（浅色：白底深色图标；深色：深底浅色图标）');
+  } else {
+    console.log('警告：styles.xml 里没有找到 AppTheme.NoActionBar，跳过了状态栏主题');
+  }
+} else {
+  console.log('警告：没有找到 styles.xml，跳过了状态栏主题');
+}
+
 // ---------- 3.1 关闭 WebView 调试 ----------
 const mainActivityPath = path.join(
   androidDir, 'app', 'src', 'main', 'java', 'com', 'qingricheng', 'app', 'MainActivity.java'
