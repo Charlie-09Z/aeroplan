@@ -1,8 +1,9 @@
 // 在 CI 生成 Android 工程之后、编译之前，写入这些内容：
-//   1. 发布签名（固定 keystore，PKCS12）
+//   1. 发布签名（keystore 由工作流从 GitHub Secrets 还原；口令只从环境变量读取，不进仓库）
 //   2. 版本号（读 package.json，自动换算 versionCode）
-//   3. 应用显示名与联网/通知权限
-//   4. 应用图标与浅色启动图（用 sharp 从 icons 生成）
+//   3. 应用显示名与联网/通知/存储权限（本版本不申请定位权限）
+//   4. R8 压缩/混淆 与 WebView 调试关闭
+//   5. 应用图标与浅色启动图（用 sharp 从 icons 生成）
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,9 +22,13 @@ const VERSION_NAME = String(pkg.version || '0.0.1');
 const parts = VERSION_NAME.split('.').map(function (n) { return Number(n) || 0; });
 const VERSION_CODE = parts[0] * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
 
-const KEY_ALIAS = 'qingricheng';
-const KEY_PASSWORD = 'qingricheng';
-const KEY_PATH = '../../keystore/light-schedule-release.keystore';
+// keystore 由工作流从 Secrets 还原到 keystore/release.keystore；
+// 口令与别名通过环境变量传入，仓库里不保存任何明文。
+const KEYSTORE_PATH = '../../keystore/release.keystore';
+const KEYSTORE_PASSWORD = process.env.KEYSTORE_PASSWORD || '';
+const KEY_ALIAS = process.env.KEY_ALIAS || 'qingjihua';
+const KEY_PASSWORD = process.env.KEY_PASSWORD || KEYSTORE_PASSWORD;
+const HAS_SIGNING = !!KEYSTORE_PASSWORD;
 
 // ---------- 2. 改 build.gradle ----------
 const gradlePath = path.join(androidDir, 'app', 'build.gradle');
@@ -38,39 +43,84 @@ const beforeVersion = gradle.match(/versionName\s+"[^"]*"/);
 gradle = gradle.replace(/versionCode\s+\d+/, 'versionCode ' + VERSION_CODE);
 gradle = gradle.replace(/versionName\s+"[^"]*"/, 'versionName "' + VERSION_NAME + '"');
 
-// 先在 buildTypes.release 里挂上签名（必须在插入 signingConfigs 之前做，
-// 否则下面的正则可能先匹配到 signingConfigs 里的 release 块）
-if (!/signingConfig\s+signingConfigs\.release/.test(gradle)) {
-  const releaseAnchor = /(buildTypes\s*{[\s\S]*?\n\s*release\s*{)/;
-  if (!releaseAnchor.test(gradle)) {
-    console.error('build.gradle 里没有找到 buildTypes.release，无法写入签名');
-    process.exit(1);
+if (HAS_SIGNING) {
+  // 先在 buildTypes.release 里挂上签名（必须在插入 signingConfigs 之前做，
+  // 否则下面的正则可能先匹配到 signingConfigs 里的 release 块）
+  if (!/signingConfig\s+signingConfigs\.release/.test(gradle)) {
+    const releaseAnchor = /(buildTypes\s*{[\s\S]*?\n\s*release\s*{)/;
+    if (!releaseAnchor.test(gradle)) {
+      console.error('build.gradle 里没有找到 buildTypes.release，无法写入签名');
+      process.exit(1);
+    }
+    gradle = gradle.replace(releaseAnchor, '$1\n            signingConfig signingConfigs.release');
   }
-  gradle = gradle.replace(releaseAnchor, '$1\n            signingConfig signingConfigs.release');
+
+  if (!/signingConfigs\s*{/.test(gradle)) {
+    const signingBlock = [
+      '    signingConfigs {',
+      '        release {',
+      '            storeFile file("' + KEYSTORE_PATH + '")',
+      '            storePassword System.getenv("KEYSTORE_PASSWORD")',
+      '            keyAlias System.getenv("KEY_ALIAS")',
+      '            keyPassword System.getenv("KEY_PASSWORD")',
+      '            storeType "PKCS12"',
+      '        }',
+      '    }',
+      ''
+    ].join('\n');
+    if (!gradle.includes('buildTypes')) {
+      console.error('build.gradle 里没有找到 buildTypes，无法写入签名配置');
+      process.exit(1);
+    }
+    gradle = gradle.replace(/(\n\s*buildTypes\s*{)/, '\n' + signingBlock + '$1');
+  }
+} else {
+  console.log('警告：没有提供 KEYSTORE_PASSWORD，跳过发布签名；产出的 APK 不能安装');
 }
 
-if (!/signingConfigs\s*{/.test(gradle)) {
-  const signingBlock = [
-    '    signingConfigs {',
-    '        release {',
-    '            storeFile file("' + KEY_PATH + '")',
-    '            storePassword "' + KEY_PASSWORD + '"',
-    '            keyAlias "' + KEY_ALIAS + '"',
-    '            keyPassword "' + KEY_PASSWORD + '"',
-    '            storeType "PKCS12"',
-    '        }',
-    '    }',
-    ''
-  ].join('\n');
-  if (!gradle.includes('buildTypes')) {
-    console.error('build.gradle 里没有找到 buildTypes，无法写入签名配置');
-    process.exit(1);
+// ---------- 2.1 R8：压缩资源、混淆代码 ----------
+gradle = gradle.replace(/(buildTypes\s*{[\s\S]*?\n\s*release\s*{)([\s\S]*?)(\n\s*})/, function (whole, head, body, tail) {
+  if (!/minifyEnabled\s+true/.test(body)) {
+    if (/minifyEnabled\s+false/.test(body)) {
+      body = body.replace(/minifyEnabled\s+false/, 'minifyEnabled true');
+    } else {
+      body += '\n            minifyEnabled true';
+    }
   }
-  gradle = gradle.replace(/(\n\s*buildTypes\s*{)/, '\n' + signingBlock + '$1');
-}
+  if (!/shrinkResources\s+true/.test(body)) {
+    body += '\n            shrinkResources true';
+  }
+  return head + body + tail;
+});
+
+const proguardPath = path.join(androidDir, 'app', 'proguard-rules.pro');
+fs.writeFileSync(proguardPath, [
+  '# Capacitor 运行时通过反射加载插件，这些规则不能删。',
+  '-keep class com.getcapacitor.** { *; }',
+  '-keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }',
+  '-keep class * extends com.getcapacitor.Plugin { *; }',
+  '-keepclassmembers class * extends com.getcapacitor.Plugin { *; }',
+  '-keepclassmembers class * {',
+  '    @android.webkit.JavascriptInterface <methods>;',
+  '}',
+  '-keep class com.qingricheng.app.** { *; }',
+  '-dontwarn com.getcapacitor.**',
+  ''
+].join('\n'));
+console.log('已开启 R8 压缩与混淆，并写入 Capacitor 的 keep 规则');
+
+// shrinkResources 会误删「只在字符串里按名字引用」的资源（通知小图标、启动图）
+const rawResDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'raw');
+fs.mkdirSync(rawResDir, { recursive: true });
+fs.writeFileSync(path.join(rawResDir, 'keep.xml'), [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<resources xmlns:tools="http://schemas.android.com/tools"',
+  '    tools:keep="@drawable/ic_stat_icon,@drawable/splash" />',
+  ''
+].join('\n'));
 
 fs.writeFileSync(gradlePath, gradle);
-console.log('已写入签名配置与版本号：versionName ' + VERSION_NAME +
+console.log('已写入' + (HAS_SIGNING ? '签名配置' : '（无签名）') + '与版本号：versionName ' + VERSION_NAME +
   '（原来是 ' + (beforeVersion ? beforeVersion[0] : '未知') + '），versionCode ' + VERSION_CODE);
 
 // ---------- 3. 应用显示名与通知权限 ----------
@@ -109,22 +159,17 @@ if (fs.existsSync(manifestPath)) {
     {
       name: 'android.permission.SCHEDULE_EXACT_ALARM',
       attrs: '',
-      note: '精确闹钟：让到点提醒尽量准时（系统可能要求用户手动允许）'
+      note: '精确闹钟：让到点提醒尽量准时（Android 12 起可能要求用户手动允许）'
     },
     {
       name: 'android.permission.RECEIVE_BOOT_COMPLETED',
       attrs: '',
-      note: '开机广播：重启后恢复已排程的提醒'
+      note: '开机广播：重启后由本地通知插件恢复已排程的提醒'
     },
     {
-      name: 'android.permission.ACCESS_COARSE_LOCATION',
+      name: 'android.permission.VIBRATE',
       attrs: '',
-      note: '大致定位：拒绝精确位置时的兜底；只用于天气城市与减少搜索范围，不后台追踪'
-    },
-    {
-      name: 'android.permission.ACCESS_FINE_LOCATION',
-      attrs: '',
-      note: '精确位置：只在用户点「使用当前位置」时读取一次，用于天气与条目地址，不记录轨迹'
+      note: '振动：日期/时间滚轮吸附时的触觉反馈'
     },
     {
       name: 'android.permission.READ_EXTERNAL_STORAGE',
@@ -134,9 +179,14 @@ if (fs.existsSync(manifestPath)) {
     {
       name: 'android.permission.WRITE_EXTERNAL_STORAGE',
       attrs: ' android:maxSdkVersion="28"',
-      note: '存储权限：Android 9 及以下用于写入备份文件；Android 10+ 使用应用专属目录'
+      note: '存储权限：Android 9 及以下用于选择备份文件的保存位置；Android 10+ 由系统面板处理'
     }
   ];
+  // 本版本没有定位能力：模板或插件的清单合并若带进定位权限，这里一并删掉。
+  manifest = manifest.replace(/\s*<!--[^>]*定位[^>]*-->/g, '');
+  manifest = manifest.replace(
+    /\s*<uses-permission[^>]*android:name="android\.permission\.ACCESS_(FINE|COARSE)_LOCATION"[^>]*\/>/g, ''
+  );
   for (const perm of needs) {
     if (manifest.includes('android:name="' + perm.name + '"')) continue;
     manifest = manifest.replace('<application',
@@ -144,12 +194,49 @@ if (fs.existsSync(manifestPath)) {
       '    <uses-permission android:name="' + perm.name + '"' + perm.attrs + ' />\n\n    <application');
   }
   fs.writeFileSync(manifestPath, manifest);
-  console.log('已确认联网、通知、定位、精确闹钟与存储权限');
+  console.log('已确认联网、通知、精确闹钟与存储权限（未申请任何定位权限）');
 } else {
   console.log('没有找到 AndroidManifest.xml，跳过权限写入');
 }
 
-// ---------- 4. 生成图标与启动图 ----------
+// ---------- 3.1 关闭 WebView 调试 ----------
+const mainActivityPath = path.join(
+  androidDir, 'app', 'src', 'main', 'java', 'com', 'qingricheng', 'app', 'MainActivity.java'
+);
+if (fs.existsSync(mainActivityPath)) {
+  let java = fs.readFileSync(mainActivityPath, 'utf8');
+  if (!/setWebContentsDebuggingEnabled/.test(java)) {
+    if (!/import android\.os\.Bundle;/.test(java)) {
+      java = java.replace(/(import com\.getcapacitor\.BridgeActivity;)/,
+        'import android.os.Bundle;\n$1');
+    }
+    if (!java.includes('import android.webkit.WebView;')) {
+      java = java.replace(/(import android\.os\.Bundle;)/, '$1\nimport android.webkit.WebView;');
+    }
+    java = java.replace(
+      /public class MainActivity extends BridgeActivity\s*\{\s*\}/,
+      'public class MainActivity extends BridgeActivity {\n' +
+      '    @Override\n' +
+      '    public void onCreate(Bundle savedInstanceState) {\n' +
+      '        WebView.setWebContentsDebuggingEnabled(false);\n' +
+      '        super.onCreate(savedInstanceState);\n' +
+      '    }\n' +
+      '}'
+    );
+  } else {
+    java = java.replace(/setWebContentsDebuggingEnabled\s*\([^)]*\)/, 'setWebContentsDebuggingEnabled(false)');
+  }
+  fs.writeFileSync(mainActivityPath, java);
+  if (/setWebContentsDebuggingEnabled\(false\)/.test(java)) {
+    console.log('已关闭 WebView 调试');
+  } else {
+    console.log('警告：MainActivity.java 结构未按预期匹配，未能关闭 WebView 调试');
+  }
+} else {
+  console.log('没有找到 MainActivity.java，跳过 WebView 调试开关');
+}
+
+// ---------- 5. 生成图标与启动图 ----------
 async function makeIcons() {
   const sharp = (await import('sharp')).default;
   const resDir = path.join(androidDir, 'app', 'src', 'main', 'res');
@@ -213,6 +300,22 @@ async function makeIcons() {
     .toBuffer();
   fs.writeFileSync(path.join(drawableDir, 'splash.png'), splash);
   console.log('启动图已生成（浅色底 + 图标）');
+
+  // 通知栏小图标：必须是纯白剪影，否则部分系统会显示成灰色方块或直接不显示。
+  // 取原图标的 alpha 通道，叠在纯白画布上，得到单色剪影。
+  const smallSizes = { mdpi: 24, hdpi: 36, xhdpi: 48, xxhdpi: 72, xxxhdpi: 96 };
+  for (const [dpi, size] of Object.entries(smallSizes)) {
+    const dir = path.join(resDir, 'drawable-' + dpi);
+    fs.mkdirSync(dir, { recursive: true });
+    const alpha = await sharp(icon512).resize(size, size, { fit: 'cover' })
+      .ensureAlpha().extractChannel('alpha').toBuffer();
+    const white = await sharp({
+      create: { width: size, height: size, channels: 3, background: { r: 255, g: 255, b: 255 } }
+    }).png().toBuffer();
+    const mono = await sharp(white).joinChannel(alpha).png().toBuffer();
+    fs.writeFileSync(path.join(dir, 'ic_stat_icon.png'), mono);
+  }
+  console.log('通知栏小图标已生成：ic_stat_icon');
 }
 
 try {

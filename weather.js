@@ -1,11 +1,11 @@
 /* =========================================================
-   氢计划 / AeroPlan · 天气模块（v0.5.0）
+   氢计划 / AeroPlan · 天气模块（v0.7.0）
    数据源：Open-Meteo（免费、无需 API key、无 cookie、无追踪）。
    只请求每日所需的三个字段，不做统计，也不加载任何第三方 SDK。
-   位置：优先使用设备定位（仅在已有授权时自动读取一次），
-   失败或被拒绝时由用户手动选择城市并记住；不后台追踪、不上传坐标。
-   区/县地名：坐标反查 BigDataCloud（优先）/ OpenStreetMap Nominatim（回落），
-   仅一次并只在内存缓存。
+   位置：只能由用户输入关键词搜索选择。应用不读取设备定位、
+   不申请定位权限，也没有后台追踪；所选地点的经纬度只用于查询天气。
+   搜索：当前只有 Photon（基于 OpenStreetMap，免密钥、可跨域）一个
+   provider，但调用点走 SEARCH_PROVIDERS 来源链，便于将来替换来源。
    图标：Lucide 图标集（ISC License），以 SVG 内联随应用本地打包。
    ========================================================= */
 
@@ -14,8 +14,6 @@
 
   var CACHE_MS = 45 * 60 * 1000;      // 45 分钟刷新一次，避免高频轮询
   var FORECAST_DAYS = 16;            // Open-Meteo 允许的上限
-  var GEO_TTL = 10 * 60 * 1000;      // 同一次会话内坐标最多复用 10 分钟
-  var PLACE_MIN_GAP = 1000;          // 反查地名遵守 1 次/秒的频率限制
 
   var opts = {
     t: function (s) { return s; },
@@ -25,17 +23,13 @@
   };
 
   var store = {
-    city: null,          // 手动选择的城市 {name, latitude, longitude}
+    city: null,          // 用户搜索并选择的地点 {name, latitude, longitude, label}
     data: null,          // {time:[], code:[], max:[], min:[], label:''}
     at: 0,               // 上次成功拉取的时间
     pending: null,
     gen: 0,              // 清理代号：丢弃清理前发出的请求结果
     el: null,
-    key: '',
-    geo: null,           // {latitude, longitude, at}，仅内存，不写入存储
-    geoBlocked: false,   // 定位不可用（拒绝 / 失败 / 不支持）
-    place: null,         // {key, label}：反查地名只保留当前坐标这一份
-    placeAt: 0           // 上次反查时间，用于遵守 1 次/秒
+    key: ''
   };
 
   // ---------- 图标（内联 SVG，currentColor 随主题变化） ----------
@@ -152,7 +146,7 @@
 
   function cityLabel() {
     if (store.city) return store.city.label || store.city.name;
-    return T('自动定位');
+    return T('未选择城市');
   }
 
   function saveCity(cityObj) {
@@ -166,7 +160,6 @@
     var c = normalizeCity(cityObj);
     if (!c) return false;
     store.city = c;
-    store.geoBlocked = false;
     saveCity(c);
     store.data = null;
     store.at = 0;
@@ -182,96 +175,18 @@
     return true;
   }
 
-  // ---------- 定位（只在需要更新天气时取一次） ----------
+  // ---------- 天气位置：只来自用户搜索选择的地点 ----------
 
-  function capGeo() {
-    if (!window.Capacitor) return null;
-    var plugins = window.Capacitor.Plugins || {};
-    return plugins.Geolocation || null;
-  }
-
-  function checkGeoPermission() {
-    var geo = capGeo();
-    if (geo && typeof geo.checkPermissions === 'function') {
-      return geo.checkPermissions().then(function (res) {
-        var v = res && (res.location || res.coarseLocation);
-        return v === 'granted' ? 'granted' : (v === 'denied' ? 'denied' : 'prompt');
-      }).catch(function () { return 'prompt'; });
-    }
-    if (navigator.permissions && typeof navigator.permissions.query === 'function') {
-      return navigator.permissions.query({ name: 'geolocation' }).then(function (res) {
-        return res.state === 'granted' ? 'granted' : (res.state === 'denied' ? 'denied' : 'prompt');
-      }).catch(function () { return 'prompt'; });
-    }
-    return Promise.resolve('prompt');
-  }
-
-  function readPosition() {
-    var geo = capGeo();
-    if (geo && typeof geo.getCurrentPosition === 'function') {
-      return geo.getCurrentPosition({ enableHighAccuracy: false, timeout: 10000, maximumAge: 0 })
-        .then(function (res) {
-          return { latitude: res.coords.latitude, longitude: res.coords.longitude };
-        });
-    }
-    return new Promise(function (resolve, reject) {
-      if (!navigator.geolocation) { reject(new Error('unsupported')); return; }
-      navigator.geolocation.getCurrentPosition(
-        function (pos) { resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }); },
-        function (err) { reject(err); },
-        { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
-      );
-    });
-  }
-
-  // 用户点了「使用当前位置」：会触发系统/浏览器授权，只读一次
-  function useCurrentLocation() {
-    store.geo = null;
-    return readPosition().then(function (pos) {
-      store.geo = { latitude: pos.latitude, longitude: pos.longitude, at: Date.now() };
-      store.geoBlocked = false;
-      if (store.city) {
-        store.city = null;
-        saveCity(null);
-      }
-      refresh(true);
-      return true;
-    }).catch(function () {
-      store.geoBlocked = true;
-      render();
-      return false;
+  function resolvePosition() {
+    if (!store.city) return Promise.reject(new Error('no-city'));
+    return Promise.resolve({
+      latitude: store.city.latitude,
+      longitude: store.city.longitude,
+      label: store.city.name
     });
   }
 
   // ---------- 拉取天气 ----------
-
-  function resolvePosition() {
-    if (store.city) {
-      return Promise.resolve({
-        latitude: store.city.latitude,
-        longitude: store.city.longitude,
-        label: store.city.name
-      });
-    }
-    if (store.geo && Date.now() - store.geo.at < GEO_TTL) {
-      return Promise.resolve({
-        latitude: store.geo.latitude,
-        longitude: store.geo.longitude,
-        label: T('当前定位')
-      });
-    }
-    return checkGeoPermission().then(function (state) {
-      if (state !== 'granted') {
-        store.geoBlocked = true;
-        throw new Error('geo-' + state);
-      }
-      return readPosition().then(function (pos) {
-        store.geo = { latitude: pos.latitude, longitude: pos.longitude, at: Date.now() };
-        store.geoBlocked = false;
-        return { latitude: pos.latitude, longitude: pos.longitude, label: T('当前定位') };
-      });
-    });
-  }
 
   function fetchForecast(pos) {
     var url = 'https://api.open-meteo.com/v1/forecast' +
@@ -332,10 +247,9 @@
         if (gen !== store.gen) return;
         store.data = data;
         store.at = Date.now();
-        store.geoBlocked = false;
       })
       .catch(function () {
-        // 静默降级：清掉旧数据，保留位置，不弹错误框
+        // 静默降级：清掉旧数据，保留用户选择的地点，不弹错误框
         if (gen !== store.gen) return;
         store.data = null;
         store.at = 0;
@@ -348,17 +262,12 @@
     return store.pending;
   }
 
-  // 清空数据 / 退出时调用：天气数据、定位与反查地名一并丢弃，回到首次安装状态
+  // 清空数据 / 退出时调用：天气数据与所选地点一并丢弃，回到首次安装状态
   function clearCache() {
     store.gen++;
     store.data = null;
     store.at = 0;
     store.pending = null;
-    store.place = null;
-    store.geo = null;
-    store.placeAt = 0;
-    store.geoBlocked = false;
-    // 手动选过的城市也属于可清理数据：一并清掉，避免清空后又去反查地名
     store.city = null;
     if (opts.meta && opts.meta.weatherCity) {
       delete opts.meta.weatherCity;
@@ -370,8 +279,6 @@
   function cacheStats() {
     return {
       forecastDays: (store.data && Array.isArray(store.data.time)) ? store.data.time.length : 0,
-      placeEntries: (store.place && store.place.key) ? 1 : 0,
-      geoEntries: store.geo ? 1 : 0,
       pending: store.pending ? 1 : 0
     };
   }
@@ -383,113 +290,9 @@
     store.key = key || '';
   }
 
-  // ---------- 反向地理编码：城市 + 区/县（可选街道），只反查一次并内存缓存 ----------
-
-  function currentCoords() {
-    if (store.city) return { latitude: store.city.latitude, longitude: store.city.longitude };
-    if (store.geo) return { latitude: store.geo.latitude, longitude: store.geo.longitude };
-    return null;
-  }
-
-  function placeKeyOf(lat, lon) {
-    return Number(lat).toFixed(3) + ',' + Number(lon).toFixed(3) + '|' + (isEn() ? 'en' : 'zh');
-  }
-
-  function placeLabelFromParts(partsIn) {
-    var parts = [];
-    partsIn.forEach(function (p) {
-      var s = String(p || '').trim();
-      if (!s || parts.indexOf(s) !== -1) return;
-      parts.push(s.slice(0, 24));
-    });
-    return parts.slice(0, 3).join(' · ');
-  }
-
-  function placeLabelFrom(addr) {
-    if (!addr) return '';
-    var city = addr.city || addr.town || addr.municipality || addr.county || addr.state_district || '';
-    var district = addr.city_district || addr.district || addr.borough || addr.county || addr.suburb || '';
-    // 街道/乡镇级只用接口确实返回的字段，缺失就不拼凑
-    var street = addr.road || addr.township || addr.hamlet || '';
-    return placeLabelFromParts([city, district, street]);
-  }
-
-  // 先用无需密钥、可直接跨域的 BigDataCloud；不可用时再回落到 OSM Nominatim
-  function requestPlace(lat, lon, signal) {
-    var lang = isEn() ? 'en' : 'zh';
-    var bdc = 'https://api.bigdatacloud.net/data/reverse-geocode-client' +
-      '?latitude=' + Number(lat).toFixed(4) +
-      '&longitude=' + Number(lon).toFixed(4) +
-      '&localityLanguage=' + lang;
-
-    return fetch(bdc, { method: 'GET', credentials: 'omit', signal: signal })
-      .then(function (res) {
-        if (!res.ok) throw new Error('bdc-' + res.status);
-        return res.json();
-      })
-      .then(function (json) {
-        // 只取确实存在的地名字段，不拼接近似地址
-        return placeLabelFromParts([json && json.city, json && json.locality]);
-      })
-      .catch(function () {
-        var osmLang = isEn() ? 'en' : 'zh-CN,zh';
-        var osm = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2' +
-          '&lat=' + Number(lat).toFixed(4) +
-          '&lon=' + Number(lon).toFixed(4) +
-          '&zoom=16&addressdetails=1&accept-language=' + encodeURIComponent(osmLang);
-        return fetch(osm, { method: 'GET', credentials: 'omit', signal: signal })
-          .then(function (res) {
-            if (!res.ok) throw new Error('osm-' + res.status);
-            return res.json();
-          })
-          .then(function (json) { return placeLabelFrom(json && json.address); })
-          .catch(function () { return ''; });
-      });
-  }
-
-  function fetchPlace(lat, lon) {
-    var key = placeKeyOf(lat, lon);
-    if (!key) return;
-    // 同一坐标（含语言）已经反查过：直接复用，不再请求
-    if (store.place && store.place.key === key) return;
-
-    // 坐标变化：旧地名立即替换，不保留多份
-    store.place = { key: key, label: '' };
-    render();
-
-    // 遵守开放地理服务的合理频率：两次请求至少间隔 1 秒
-    var wait = Math.max(0, PLACE_MIN_GAP - (Date.now() - store.placeAt));
-    setTimeout(function () {
-      if (!store.place || store.place.key !== key) return;
-      store.placeAt = Date.now();
-
-      var controller = typeof AbortController === 'function' ? new AbortController() : null;
-      var timer = controller ? setTimeout(function () { controller.abort(); }, 6000) : null;
-
-      requestPlace(lat, lon, controller ? controller.signal : undefined)
-        .then(function (label) {
-          if (timer) clearTimeout(timer);
-          if (store.place && store.place.key === key) {
-            store.place = { key: key, label: label };
-            render();
-          }
-        })
-        .catch(function () {
-          // 失败 / 离线 / 超时：这一行留空，天气照常显示
-          if (timer) clearTimeout(timer);
-          if (store.place && store.place.key === key) {
-            store.place = { key: key, label: '' };
-            render();
-          }
-        });
-    }, wait);
-  }
-
   function render() {
     var el = store.el;
     if (!el || !el.isConnected) return;
-    var pos = currentCoords();
-    if (pos) fetchPlace(pos.latitude, pos.longitude);
     paint(el, store.key);
   }
 
@@ -523,8 +326,8 @@
     var maxText = isFinite(Number(max)) ? Math.round(Number(max)) + '°' : '—';
     var minText = isFinite(Number(min)) ? Math.round(Number(min)) + '°' : '';
     var tip = desc + ' ' + maxText + (minText ? ' / ' + minText : '');
-    // 地名优先用反查结果；手动选的区县在反查失败时用选择时记下的层级兜底
-    var placeText = (store.place && store.place.label) || (store.city && store.city.label) || '';
+    // 地名只用用户选择时记录的城市 · 区县，不再反查坐标
+    var placeText = (store.city && (store.city.label || store.city.name)) || '';
     var place = placeText
       ? '<span class="wx-place" title="' + esc(placeText) + '">' + esc(placeText) + '</span>'
       : '';
@@ -543,20 +346,27 @@
   }
 
   function weatherPlaceholder() {
-    if (store.city || store.geo) {
+    if (store.city) {
       return '<span class="wx-placeholder">—</span>';
     }
-    // 没有城市、也没有可用的定位：给一个不打扰的手动入口
+    // 还没有选择地点：给一个不打扰的手动入口
     return '<button class="wx-city-btn" type="button" data-weather-city="1">' +
       esc(T('选择城市')) + '</button>';
   }
 
-  // ---------- 城市 / 区县搜索（Photon，基于 OpenStreetMap，免密钥、可跨域） ----------
+  // ---------- 地点搜索：按顺序尝试的来源链 ----------
+  // 目前只有 Photon 一个 provider。调用点不直接依赖具体服务，
+  // 将来换来源时只改 SEARCH_PROVIDERS。provider 约定：
+  //   (query) => Promise<Array<{name, latitude, longitude, label, region}>>
 
-  // 只查省 / 市 / 区县这类行政区；不含街道、村镇，避免同名地点挤掉区县结果
+  // 行政区 + 常见机构/地点。这样「西湖区」这类区县名和「剑桥大学」
+  // 这类机构名都能命中；结果仍会归到它所属的省/市/区县。
   var SEARCH_TAGS = [
-    'place:state', 'place:province', 'place:city',
-    'place:district', 'place:county', 'place:municipality'
+    'place:state', 'place:province', 'place:city', 'place:town', 'place:village',
+    'place:district', 'place:county', 'place:municipality',
+    'amenity:university', 'amenity:college', 'amenity:school',
+    'amenity:hospital', 'railway:station', 'aeroway:aerodrome',
+    'tourism:attraction', 'tourism:museum'
   ];
 
   function cleanPlaceName(raw) {
@@ -572,47 +382,59 @@
     return s.slice(0, 40);
   }
 
-  function adminRegion(p, name) { // 省 · 市 · 区县，用于区分同名地区
+  function cityOf(p) {
+    // 只用真正的「市 / 镇 / 村 / 直辖市」字段；不要把省当城市，
+    // 否则城市级结果的小字会显示成「浙江省」而不是「杭州市」。
+    return p.city || p.town || p.village || p.municipality || '';
+  }
+
+  function districtOf(p) {
+    return p.district || p.city_district || p.county || p.borough || p.suburb || '';
+  }
+
+  function adminRegion(p, name) { // 省 · 市 · 区县，用于区分同名地点
     var parts = [];
     var push = function (v) {
       var s = String(v || '').trim();
       if (!s || parts.indexOf(s) !== -1) return;
-      if (/^[A-Z]{2}$/.test(s)) return; // 部分条目只有省份缩写，不展示
+      if (/^[A-Z]{1,3}$/.test(s)) return; // 只有缩写/国家代码时不展示
       parts.push(s.slice(0, 24));
     };
     push(p.state);
-    push(p.city);
-    push(p.county && p.county !== p.city ? p.county : '');
-    push(p.district);
-    push(name);
+    push(cityOf(p));
+    push(districtOf(p));
     if (p.countrycode && p.countrycode !== 'CN') push(p.country);
+    if (!parts.length) push(name);
     return parts.join(' · ');
   }
 
-  function shortLabelOf(p, name) { // 天气下方小字：城市 + 区/县
+  function shortLabelOf(p, name) { // 天气下方小字：城市 · 区县
     var parts = [];
     var push = function (v) {
       var s = String(v || '').trim();
       if (!s || parts.indexOf(s) !== -1) return;
       parts.push(s.slice(0, 24));
     };
-    push(p.city);
-    if (!p.city) push(p.county);
-    push(p.district);
-    push(name);
-    return parts.slice(0, 3).join(' · ');
+    push(cityOf(p));
+    push(districtOf(p));
+    if (!parts.length) {
+      push(name);
+    } else if (parts.length === 1 && name && parts.indexOf(name) === -1) {
+      // 区县节点常常没有 district 字段（名字本身就是区县），用名字补齐第二段
+      push(name);
+    }
+    return parts.slice(0, 2).join(' · ');
   }
 
-  function search(query) {
-    var q = String(query || '').trim();
-    if (q.length < 2) return Promise.resolve([]);
-    var url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) + '&limit=8';
+  function photonSearch(q) {
+    var url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) + '&limit=10';
     if (isEn()) url += '&lang=en';
     SEARCH_TAGS.forEach(function (tag) { url += '&osm_tag=' + tag; });
 
-    // 一次只发一个请求；超时或失败由调用方给出简短提示
+    // 一次只发一个请求；8 秒没返回就放弃，由调用方给出简短提示
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
     var timer = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
+    function stop() { if (timer) clearTimeout(timer); }
 
     return fetch(url, {
       method: 'GET',
@@ -620,31 +442,145 @@
       referrerPolicy: 'no-referrer',
       signal: controller ? controller.signal : undefined
     }).then(function (res) {
-      if (timer) clearTimeout(timer);
+      stop();
       if (!res.ok) throw new Error('http-' + res.status);
       return res.json();
     }).then(function (json) {
       var features = (json && json.features) || [];
-      return features.map(function (f) {
+      var seen = {};
+      var list = [];
+      features.forEach(function (f) {
         var p = (f && f.properties) || {};
         var ll = (f && f.geometry && f.geometry.coordinates) || [];
         var name = cleanPlaceName(p.name);
         var lat = Number(ll[1]);
         var lon = Number(ll[0]);
-        if (!name || !isFinite(lat) || !isFinite(lon)) return null;
-        if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
-        return {
+        if (!name || !isFinite(lat) || !isFinite(lon)) return;
+        if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return;
+        var region = adminRegion(p, name);
+        var dedupe = name + '|' + region;
+        if (seen[dedupe]) return;
+        seen[dedupe] = 1;
+        list.push({
           name: name,
           latitude: lat,
           longitude: lon,
           label: shortLabelOf(p, name),
-          region: adminRegion(p, name)
-        };
-      }).filter(Boolean);
+          region: region
+        });
+      });
+      return list;
     }).catch(function (err) {
-      if (timer) clearTimeout(timer);
+      stop();
       throw err;
     });
+  }
+
+  var SEARCH_PROVIDERS = [photonSearch];
+
+  function search(query) {
+    var q = String(query || '').trim();
+    if (q.length < 2) return Promise.resolve([]);
+    // 按顺序尝试：某个来源没命中就换下一个，全部失败才把错误抛给调用方
+    function tryNext(i) {
+      if (i >= SEARCH_PROVIDERS.length) return Promise.resolve([]);
+      return SEARCH_PROVIDERS[i](q).then(function (list) {
+        if (list && list.length) return list;
+        return tryNext(i + 1);
+      }, function (err) {
+        if (i + 1 >= SEARCH_PROVIDERS.length) throw err;
+        return tryNext(i + 1);
+      });
+    }
+    return tryNext(0);
+  }
+
+  // ---------- 地址搜索：同样按来源链组织，调用点不写死具体服务 ----------
+  // provider 约定：(query) => Promise<Array<{name, region, label, lat, lon}>>
+
+  function joinAddrParts(parts) {
+    var out = [];
+    parts.forEach(function (part) {
+      var text = String(part || '').trim();
+      if (text && out.indexOf(text) === -1) out.push(text);
+    });
+    return out.join(' · ');
+  }
+
+  function photonMainName(p) {
+    if (p.street) return p.street;
+    if (p.name && p.osm_value !== 'postcode') return p.name;
+    return p.district || p.suburb || p.neighbourhood || p.city || p.town || p.village || '';
+  }
+
+  function photonAddressResult(feature) {
+    var p = (feature && feature.properties) || {};
+    var coords = feature && feature.geometry && feature.geometry.coordinates;
+    if (!coords || coords.length < 2) return null;
+    var main = photonMainName(p);
+    if (!main) return null;
+    var adminParts = [
+      p.city || p.town || p.village || p.municipality,
+      p.district || p.city_district || p.county || p.borough,
+      p.state,
+      p.country && p.country !== '中国' && p.country !== 'China' ? p.country : ''
+    ].map(function (part) {
+      var text = String(part || '').trim();
+      return /^[A-Z]{1,3}$/.test(text) ? '' : text;
+    });
+    var region = joinAddrParts(adminParts);
+    var label = joinAddrParts([main].concat(adminParts)).slice(0, 160);
+    return {
+      name: main.slice(0, 40),
+      region: region,
+      label: label,
+      lat: coords[1],
+      lon: coords[0]
+    };
+  }
+
+  function photonAddressSearch(q) {
+    var url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) + '&limit=8';
+    if (isEn()) url += '&lang=en';
+
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
+    function stop() { if (timer) clearTimeout(timer); }
+
+    return fetch(url, {
+      method: 'GET',
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      headers: { 'Accept': 'application/json', 'Accept-Language': isEn() ? 'en' : 'zh-CN' },
+      signal: controller ? controller.signal : undefined
+    }).then(function (res) {
+      stop();
+      if (!res.ok) throw new Error('http-' + res.status);
+      return res.json();
+    }).then(function (json) {
+      return ((json && json.features) || []).map(photonAddressResult).filter(Boolean);
+    }).catch(function (err) {
+      stop();
+      throw err;
+    });
+  }
+
+  var ADDRESS_PROVIDERS = [photonAddressSearch];
+
+  function searchAddress(query) {
+    var q = String(query || '').trim();
+    if (q.length < 2) return Promise.resolve([]);
+    function tryNext(i) {
+      if (i >= ADDRESS_PROVIDERS.length) return Promise.resolve([]);
+      return ADDRESS_PROVIDERS[i](q).then(function (list) {
+        if (list && list.length) return list;
+        return tryNext(i + 1);
+      }, function (err) {
+        if (i + 1 >= ADDRESS_PROVIDERS.length) throw err;
+        return tryNext(i + 1);
+      });
+    }
+    return tryNext(0);
   }
 
   window.Weather = {
@@ -653,9 +589,9 @@
     cityLabel: cityLabel,
     setCity: setCity,
     clearCity: clearCity,
-    useCurrentLocation: useCurrentLocation,
     refresh: refresh,
     search: search,
+    searchAddress: searchAddress,
     clearCache: clearCache,
     cacheStats: cacheStats,
     render: function (el, key) {

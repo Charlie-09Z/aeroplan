@@ -6,14 +6,13 @@
     "androidScheme": "https"
   },
   "android": {
-    "allowMixedContent": false
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
   },
   "plugins": {
     "LocalNotifications": {
-      "smallIcon": "ic_stat_icon"
-    },
-    "Geolocation": {
-      "androidPermissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
+      "smallIcon": "ic_stat_icon",
+      "iconColor": "#4C6FFF"
     },
     "Filesystem": {
       "androidPermissions": ["READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]

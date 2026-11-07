@@ -1,5 +1,5 @@
 /* =========================================================
-   氢计划 / AeroPlan · 双语文案（v0.5.2）
+   氢计划 / AeroPlan · 双语文案（v0.7.0）
    中文是源文案，英文在 DICT 里按「整句」对照。
    带 {n} 这类占位符的句子用 T('中文模板', {n: 3}) 生成。
    DOM 里新增的中文文本节点会被自动翻译，切回中文时恢复原文。
@@ -260,9 +260,8 @@
     '权限说明': 'Permissions',
     '字体与开源许可': 'Fonts & licenses',
     '联系方式': 'Contact',
-    '不需要账号，不上传任何内容，也没有统计或广告代码。': 'No account, no uploads, no analytics or ads.',
+    '不需要账号，也没有统计或广告代码。': 'No account, and no analytics or ad code.',
     '存储权限仅用于写入备份文件，以及读取你选择的备份文件来恢复数据。': 'Storage permission is used only to write backup files and to read the backup file you choose when restoring.',
-    '定位权限只用于更新天气时读取一次位置；不会后台持续定位，不上传也不记录坐标。拒绝授权时可以手动选择城市。': 'Location is read once only when updating weather; no background tracking, no upload and no stored coordinates. If denied, you can pick a city manually.',
     '首次打开时的授权说明，可以在「权限管理」里重新打开或申请。': 'The first-run permission guide. Reopen or request it under Permissions.',
     '通过你获取本应用的渠道反馈即可（应用商店、发布页面或仓库 Issue）。': 'Send feedback through the channel where you got this app (app store, release page, or repository issues).',
 
@@ -270,7 +269,6 @@
     '开始使用前': 'Before you start',
     '通知': 'Notifications',
     '存储': 'Storage',
-    '定位': 'Location',
     '允许通知': 'Allow notifications',
     '以后再说': 'Maybe later',
     '开始使用': 'Start using',
@@ -288,13 +286,10 @@
     '到点会通过系统通知提醒你；如果系统限制后台运行，可能略有延迟。': 'Due items notify you through the system; delays may occur if the system limits background activity.',
     '系统拒绝了通知权限。可以打开手机「设置 → 应用 → 氢计划 → 通知」把通知打开，再回到这里点下面的按钮重新检查。': 'Notifications were denied. Open Settings → Apps → AeroPlan → Notifications, turn them on, then come back and tap Check again.',
     '用于把备份文件写入手机，也用于读取你选择的备份文件来恢复数据。': 'Used to write backup files to your phone and to read the backup file you choose when restoring.',
-    '之后用于记录日程地点、以及显示当地天气；本版本只申请权限，不会读取你的位置。': 'Intended for recording event locations and showing local weather later. This version only requests the permission and never reads your location.',
     '当前是网页版：下载备份、选择文件都不需要额外授权。': 'Web version: downloading backups and picking files need no extra permission.',
     '当前是安装版：备份写在应用专属目录，不需要系统存储授权。': 'Installed app: backups go to the app\'s own folder, which needs no system storage permission.',
-    '定位权限只用于上面说明的用途，本版本不会读取坐标。': 'Location permission is only for the purposes above; this version never reads coordinates.',
     '存储与备份': 'Storage & backups',
     '通知与提醒': 'Notifications & reminders',
-    '定位用途': 'Location purpose',
 
     // ---------- 提示消息 ----------
     '已回到今天': 'Back to today',
@@ -376,14 +371,32 @@
     '应用专属目录 files/backups（可用下方按钮分享或另存到「下载」）': 'App folder files/backups (use the button below to share or save to Downloads)',
     '手机浏览器的「下载」目录（文件管理 → 下载）': 'Your browser\'s Downloads folder (Files → Downloads)',
     '打开手机「设置 → 应用 → 氢计划 → 权限」，手动打开对应权限后，再回到这里点「重新检查」。': 'Open Settings → Apps → AeroPlan → Permissions, turn on the permission, then come back and tap "Check again".',
-    '当前是网页版：定位权限由浏览器管理，可在浏览器的网站设置里查看或修改。': 'Web version: the browser manages location permission. You can review or change it in the site settings.',
     '网页版的备份会保存到手机的「下载」目录：打开「文件管理」→「下载」，按文件名「{name}」查找。如果找不到，可以点下面的「再备份一次」。': 'Backups in the web version go to your phone\'s Downloads folder: open Files → Downloads and look for "{name}". If it is missing, tap "Back up again".',
     '备份保存在应用专属目录 files/backups，系统不允许其它应用直接浏览。可以点「备份数据」重新生成，再通过分享另存到「下载」。': 'The backup is stored in the app folder files/backups, which other apps cannot browse. Tap "Back up data" to create it again, then share it to Downloads.',
     '氢计划备份': 'AeroPlan backup',
     '备份文件': 'Backup file',
     '氢计划 · AeroPlan': 'AeroPlan',
     '开屏字体：站酷小薇 ZCOOL XiaoWei（中文）、Cormorant Garamond（英文），均为 SIL Open Font License 1.1 授权；字体文件随应用本地打包，不联网加载。': 'Splash fonts: ZCOOL XiaoWei (Chinese) and Cormorant Garamond (English), both under the SIL Open Font License 1.1. Font files are bundled locally and never loaded from the network.',
-    '氢计划 · 版本V0.5.2': 'AeroPlan · V0.5.2',
+    '氢计划 · 版本V0.7.0': 'AeroPlan · V0.7.0',
+    '农历': 'Lunar calendar',
+    '提醒由系统排程，关掉应用或锁屏后也会按时通知；系统限制后台运行时可能略有延迟。': 'Reminders are scheduled by the system and still fire when the app is closed or the screen is locked. Strict background limits may delay them slightly.',
+    '备份不会写进应用私有目录：生成后交给系统的保存 / 分享面板，由你决定存到哪里；临时文件用完即删。': 'Backups never go into the app\'s private folder: the file is handed to the system save/share panel so you decide where it goes, and the temporary file is deleted afterwards.',
+    '备份时由你选择位置': 'You choose where to save the backup',
+    '备份已生成，请在系统面板里选择保存位置': 'Backup created — choose where to save it in the system panel',
+    '已备份，文件在手机的“下载”目录里': 'Backup saved to your phone\'s Downloads folder',
+    '备份文件不会留在应用里：点「备份数据」后会打开系统的保存 / 分享面板，由你选择存到「下载」、发到微信或传上网盘。想重新导出时，再点一次「备份数据」即可。\n\n最近一次文件名：{name}': 'No copy is kept inside the app. Tapping "Back up data" opens the system save/share panel, where you choose Downloads, WeChat, cloud storage, and so on. To export again, just tap "Back up data".\n\nLast file name: {name}',
+    '提醒由系统调度，关掉应用、锁屏之后也会按时通知；系统省电策略很严格时可能略有延迟。可以在「权限管理」里检查通知与精确闹钟权限。': 'Reminders are scheduled by the system and still fire when the app is closed or the screen is locked. Very strict battery policies may delay them slightly. You can check notification and exact-alarm permissions under Permission management.',
+    '备份不会写进应用私有目录：每次备份都会打开系统的保存/分享面板，由你选择存到「下载」、发到微信或传上网盘，临时文件用完即删。': 'Backups are never written into the app\'s private folder: each backup opens the system save/share panel so you can save it to Downloads, send it via WeChat, or upload it to cloud storage. Temporary files are deleted afterwards.',
+    '编辑条目': 'Edit item',
+    '编辑计划': 'Edit plan',
+    '保存修改': 'Save changes',
+    '已保存修改：{title}': 'Changes saved: {title}',
+    '已修改，但没能保存到本机': 'Changed, but could not save to this device',
+    '编辑这条安排': 'Edit this item',
+    '编辑这条计划': 'Edit this plan',
+    '允许精确提醒': 'Allow exact reminders',
+    'Android 12 起，系统需要「闹钟与提醒」权限，允许后提醒才能准点弹出；不允许时仍会提醒，但可能延迟几分钟。': 'Since Android 12, the system requires the "Alarms & reminders" permission for on-time notifications. Without it reminders still arrive, but may be a few minutes late.',
+    '去允许': 'Allow',
     '保存失败：{msg}': 'Save failed: {msg}',
     '计划保存失败，请重试': 'Could not save the plan. Please try again.',
     '分类保存失败：{msg}': 'Could not save the category: {msg}',
@@ -425,31 +438,18 @@
     // ---------- 天气 ----------
     '后天': 'Day after tomorrow',
     '选择城市': 'Choose city',
-    '自动定位': 'Auto (current location)',
-    '当前定位': 'Current location',
     '天气城市': 'Weather city',
     '天气城市已设为 {city}': 'Weather city set to {city}',
-    '已使用当前位置': 'Using current location',
-    '使用当前位置': 'Use current location',
-    '定位不可用，请选择城市': 'Location unavailable — choose a city',
-    '定位未开启': 'Location is off',
     '可以手动选择城市来显示天气。': 'You can choose a city manually for weather.',
     '正在搜索城市…': 'Searching cities…',
     '没有找到这个城市，换个名字试试。': 'No matching city. Try another name.',
-    '输入城市名，例如 杭州': 'Type a city, e.g. Hangzhou',
     '正在搜索城市或区县…': 'Searching cities and districts…',
     '没有找到匹配的城市或区县，换个名字试试。': 'No matching city or district. Try another name.',
     '搜索失败，请检查网络，已保留原来的城市。': 'Search failed. Check your connection — your current city is unchanged.',
-    '输入城市或区县，例如 杭州 / 西湖': 'Type a city or district, e.g. Hangzhou / Xihu',
-    '城市或区县只用于查询天气，保存在本机。定位只在更新天气时读取一次。': 'City or district is used only for weather and saved on this device. Location is read once per update.',
     '城市与区县搜索来自 Photon（基于 OpenStreetMap，数据 © OpenStreetMap 贡献者，ODbL），只在输入时即时查询，不保存搜索历史。': 'City and district search uses Photon (based on OpenStreetMap, data © OpenStreetMap contributors, ODbL). Lookups happen only as you type; no search history is stored.',
     '天气数据来自 Open-Meteo，只用于显示天气，不包含统计或广告代码。': 'Weather data comes from Open-Meteo and is used only to display the forecast; there is no analytics or ad code.',
-    '天气按定位坐标的区域网格取值，可到区/县级别。': 'Weather is read from the regional grid at your location, down to district/county level.',
-    '地名由无需密钥的开放地理服务（BigDataCloud / OpenStreetMap Nominatim）反查，仅在本次使用内缓存，不长期保存。': 'Place names are looked up once via keyless open geo services (BigDataCloud / OpenStreetMap Nominatim) and cached only for this session.',
+    '天气按所选地点的坐标取值，可到区/县级别。': 'Weather is read from the coordinates of the selected place, down to district/county level.',
     '天气图标：Lucide 图标集（ISC License，可商用）；图标以 SVG 内联随应用本地打包，不从网络加载。': 'Weather icons: Lucide (ISC License, free for commercial use), bundled locally as inline SVG and never loaded from the network.',
-    '定位权限只用于更新天气时读取一次位置；不会后台持续定位，不上传也不记录坐标。拒绝授权时可以手动选择城市。': 'Location is read once per weather update only. There is no background tracking, and coordinates are neither uploaded nor stored. If you decline, you can pick a city manually.',
-    '用于查询当地天气：只在更新天气时读取一次经纬度，不后台追踪、不上传。拒绝时也可以手动选择城市。': 'Used to look up local weather: coordinates are read once per weather update, with no background tracking and no upload. You can also pick a city manually.',
-    '定位只在需要更新天气时取一次，不做后台持续追踪，也不上传任何位置信息。': 'Location is read once only when weather needs updating, with no background tracking and no location upload.',
 
     // ---------- 条目地址 ----------
     '地址': 'Address',
@@ -460,13 +460,7 @@
     '清除地址': 'Clear address',
     '地址已清除': 'Address cleared',
     '地址已保存': 'Address saved',
-    '正在定位…': 'Locating…',
-    '正在查找地址…': 'Looking up the address…',
     '正在搜索地址…': 'Searching addresses…',
-    '当前地址：{label}': 'Current address: {label}',
-    '定位失败，可以手动搜索地址。': 'Location failed. Search for the address manually.',
-    '只获得了大致位置。可以手动搜索地址，或在系统设置里允许精确位置。': 'Only approximate location is available. Search for the address manually, or allow precise location in system settings.',
-    '没能获取位置对应的地址，可以手动搜索。': 'Could not find an address for this location. Search manually instead.',
     '没有找到匹配的地址，换个关键词试试。': 'No matching address. Try another keyword.',
     '地址搜索失败，请稍后再试。': 'Address search failed. Try again later.',
     '地址只随这条记录保存在本机，可随备份导出和恢复，不会上传。': 'The address is saved with this entry on this device, included in backups, and never uploaded.',
@@ -493,10 +487,84 @@
     '米雪': 'Snow grains',
     '阵雪': 'Snow showers',
     '雷阵雨': 'Thunderstorm',
-    '雷暴冰雹': 'Storm with hail'
+    '雷暴冰雹': 'Storm with hail',
+
+    // 关于页（v0.7.0）
+    '应用简介': 'Overview',
+    '数据存放': 'Where data lives',
+    '网络请求与数据去向': 'Network requests and where data goes',
+    '权限清单': 'Permissions',
+    '备份文件': 'Backup files',
+    '提醒的局限': 'Limits of reminders',
+    '同意记录': 'Consent record',
+    '签名与安装包': 'Signature and installers',
+    '协议条款': 'Terms',
+    '数据来源': 'Data sources',
+    '字体与图标许可': 'Fonts & icons',
+    '联系方式': 'Contact',
+    '氢计划是一个纯本地的日程与行程工具：日历、条目、计划、行程表和天气。没有账号，也没有服务端。': 'AeroPlan is a fully local schedule and planning tool: calendar, items, plans, timetable and weather. There are no accounts and no server.',
+    '提醒由系统本地通知调度，应用关闭或锁屏后仍会触发。': 'Reminders are scheduled through system local notifications and still fire when the app is closed or the screen is locked.',
+    '条目、计划、分类、设置和同意记录保存在本机：优先 IndexedDB（light-schedule-db），不可用时退回 localStorage。': 'Items, plans, categories, settings and the consent record stay on this device: IndexedDB (light-schedule-db) is preferred, with localStorage as a fallback.',
+    '没有服务器，我们不会持有你的数据副本。': 'There is no server, so we hold no copy of your data.',
+    '卸载应用或清除应用数据会删除全部本地内容。换机或清理前请先导出备份。': 'Uninstalling the app or clearing its data removes all local content. Export a backup before switching devices or cleaning up.',
+    '只有天气与地址搜索会联网。它们发出的是搜索关键词和所选地点的坐标，收件方只有下列服务。': 'Only weather and address search go online. They send search keywords and the coordinates of the place you picked, and only to the services listed below.',
+    '天气：只发送所选地点的经纬度（保留 3 位小数，约 100 米精度），发给 Open-Meteo。': 'Weather: sends only the coordinates of the place you selected (three decimal places, roughly 100 m) to Open-Meteo.',
+    '城市与地点搜索：只发送你输入的搜索关键词，发给 Photon（基于 OpenStreetMap 数据）。': 'City and place search: sends only the keywords you type to Photon, which uses OpenStreetMap data.',
+    '地址搜索：只发送你输入的搜索关键词，发给 Photon。': 'Address search: sends only the keywords you type to Photon.',
+    '不会发送日程正文、备注、分类、计划、备份文件内容、账号信息、通讯录、相片，也不会发送设备型号。': 'It does not send event titles, notes, categories, plans, backup contents, account details, contacts, photos or the device model.',
+    '所有请求都由设备用 HTTPS 直连上述服务，不经过本项目中转；应用没有统计、广告或崩溃上报 SDK。': 'Every request goes directly from the device to those services over HTTPS and is not proxied by this project. The app has no analytics, ads or crash-reporting SDK.',
+    '通知：用于到点提醒。拒绝后应用仍可使用，但收不到提醒。': 'Notifications: used for due reminders. If denied, the app still works but you will not receive reminders.',
+    '闹钟与提醒（Android 12 及以上）：用于准时触发提醒。拒绝后提醒可能延后或漏掉。': 'Alarms and reminders (Android 12+): keeps reminders on time. If denied, reminders may be delayed or missed.',
+    '存储（旧版 Android）：只用于导出备份和读取你选择的备份文件。拒绝后无法导出或恢复。': 'Storage (older Android): only used to export a backup and to read the backup file you choose. If denied, export and restore are unavailable.',
+    '振动：用于选择日期、时间时的轻触反馈。关闭后只是没有触感，不影响功能。': 'Vibration: light feedback when picking dates and times. Turning it off removes the feel but affects no feature.',
+    '本应用不申请定位权限，也不读取设备位置。': 'The app does not request location permission and does not read device location.',
+    '备份是 JSON 文件，当前未加密，含条目、计划、分类、设置和同意记录。': 'A backup is a JSON file. It is unencrypted and contains items, plans, categories, settings and the consent record.',
+    '备份生成后交给系统的保存或分享面板，应用内不留副本，临时文件用完即删。': 'After creation the file goes to the system save or share panel. No copy stays in the app, and temporary files are deleted right after use.',
+    '文件可能被网盘、聊天工具或他人看到，请存放到你可信的位置。': 'The file may be seen in cloud drives, chat apps or by other people. Keep it somewhere you trust.',
+    '系统清理后台、省电模式或权限关闭时，提醒可能延迟，甚至不触发。': 'Background cleanup, battery saving or revoked permissions may delay a reminder or stop it entirely.',
+    '重要事项请同时在系统闹钟里设一次提醒。这是本应用的真实边界。': 'For anything important, also set a system alarm. This is a real limit of the app.',
+    '本机尚未记录同意。': 'No consent record on this device yet.',
+    '这条记录只存在本机，清除应用数据或卸载会一并删除。': 'This record stays on this device only and is removed when you clear app data or uninstall.',
+    '天气与预报：Open-Meteo。请求只包含所选地点的经纬度。': 'Weather and forecast: Open-Meteo. Requests contain only the coordinates of the selected place.',
+    '城市与地点搜索：Photon，基于 OpenStreetMap 数据。': 'City and place search: Photon, based on OpenStreetMap data.',
+    '官方签名指纹：生成新密钥后填入（见 README）': 'Official signing fingerprint: to be filled after generating the new key (see README)',
+    '官方签名指纹：{fp}（可在系统应用信息中核对）': 'Official signing fingerprint: {fp} (check it in the system app info)',
+    '从非官方渠道获得、或签名指纹不一致的安装包，可能已被修改，请勿使用。': 'Installers from unofficial channels, or with a different signing fingerprint, may have been modified. Do not use them.',
+    '客户端没有「不可破解的加密」：混淆只提高改动成本，真正阻止第三方改包的是系统的签名校验。': 'No client-side encryption here is unbreakable: obfuscation only raises the cost of tampering; what actually stops modified packages is the system signature check.',
+    '生效日期：2026-11-07。': 'Effective date: 2026-11-07.',
+    '本页内容共同构成使用协议：数据存放、网络请求与数据去向、权限清单、备份文件、提醒的局限。': 'This page as a whole forms the terms of use: data storage, network requests and data, permissions, backup files and the limits of reminders.',
+    '协议更新时随新版本发布，并在本页标注新的生效日期；重大变更会在下次启动时再次提示确认。': 'Updated terms ship with a new version and carry a new effective date on this page; major changes prompt for confirmation again on the next launch.',
+    '继续使用即表示你已阅读并接受本协议。': 'Continuing to use the app means you have read and accept these terms.',
+    '请通过你获取本应用的渠道联系我们：应用商店页面、发布页面或仓库 Issue。': 'Contact us through the channel where you got the app: the app store page, release page or repository issues.',
+    '我已阅读并接受': 'I have read and accept',
+    '不同意': 'Do not accept',
+    '上次同意：{time} · 协议版本 {version}': 'Last consent: {time} · policy version {version}',
+    '本机存储不可用，同意记录未能保存，下次启动会再次询问': 'Local storage is unavailable, so the consent record could not be saved. You will be asked again on the next launch.',
+    '需要接受协议才能继续使用': 'You need to accept the terms to continue.',
+    '未选择城市': 'No city selected',
+    '输入城市、区县或地点，例如 杭州 / 西湖 / 剑桥大学': 'Search a city, district or place, e.g. Hangzhou / Xihu / University of Cambridge',
+    '搜索街道或地点，例如 西湖大道 / 剑桥大学': 'Search a street or place, e.g. Xihu Avenue / University of Cambridge',
+    '城市或区县由你搜索选择，只用于查询天气并保存在本机；应用不读取设备定位。': 'You pick a city or district by search. It is used only for weather and stored on this device; the app never reads device location.',
+    '地址由你搜索选择，只随这条记录保存在本机，可随备份导出和恢复，不会上传。': 'You pick an address by search. It is stored on this device with this record, can be exported and restored with a backup, and is never uploaded.',
+
+    // 删除所有数据
+    '删除所有数据': 'Delete all data',
+    '将删除 {items} 条安排、{plans} 条计划、{cats} 个分类，以及全部设置、本地缓存与已排程的提醒。\n\n删除后无法恢复，建议先备份。': 'This will delete {items} items, {plans} plans, {cats} categories, all settings, local caches and scheduled reminders.\n\nThis cannot be undone. Back up first if needed.',
+    '删除': 'Delete',
+    '已删除所有数据': 'All data deleted',
+    '已删除，但未能写入本机': 'Deleted, but could not write to this device'
   };
 
   var ATTRS = ['placeholder', 'aria-label', 'title', 'alt'];
+
+  // 字典键里有 \n 这类空白差异，查表前统一压成单空格，避免整句匹配失败后回落到中文
+  var NORM_DICT = (function () {
+    var map = {};
+    for (var key in DICT) {
+      if (Object.prototype.hasOwnProperty.call(DICT, key)) map[norm(key)] = DICT[key];
+    }
+    return map;
+  })();
   var WEEK_ZH = ['日', '一', '二', '三', '四', '五', '六'];
   var WEEK_EN = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
@@ -514,12 +582,12 @@
   function lookup(text) {
     var key = norm(text);
     if (!key) return null;
-    return DICT[key] || null;
+    return NORM_DICT[key] || null;
   }
 
   // 可在生成动态文案时调用：T('本月 {n} 项', { n: 3 })
   function T(template, vars) {
-    var out = lang === 'en' ? (DICT[norm(template)] || template) : template;
+    var out = lang === 'en' ? (NORM_DICT[norm(template)] || template) : template;
     if (vars) {
       out = out.replace(/\{(\w+)\}/g, function (m, k) {
         return vars[k] === undefined || vars[k] === null ? m : String(vars[k]);

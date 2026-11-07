@@ -9,7 +9,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=24">
+  <link rel="stylesheet" href="./styles.css?v=28">
 </head>
 <body>
   <div class="phone">
@@ -165,10 +165,22 @@
           <textarea class="inline-note" id="noteInput" rows="1" maxlength="500" placeholder="备注（可选）"></textarea>
 
           <div class="chip-flow">
-            <button class="soft-chip" id="dateChip" type="button">今天 09:00</button>
-            <button class="soft-chip" id="remindChip" type="button">提醒</button>
-            <button class="soft-chip" id="repeatChip" type="button">重复</button>
-            <button class="soft-chip" id="priorityChip" type="button">优先级</button>
+            <button class="soft-chip" id="dateChip" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12h3.9"/></svg>
+              <span class="chip-label">今天 09:00</span>
+            </button>
+            <button class="soft-chip" id="remindChip" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16.4H6l1.3-2V10a4.7 4.7 0 0 1 9.4 0v4.4Z"/><path d="M10.6 18.9a1.8 1.8 0 0 0 2.8 0"/></svg>
+              <span class="chip-label">提醒</span>
+            </button>
+            <button class="soft-chip" id="repeatChip" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.2 8.9H8.4a3 3 0 0 0-3 3v.6"/><path d="m14.8 6.5 2.4 2.4-2.4 2.4"/><path d="M6.8 15.1h8.8a3 3 0 0 0 3-3v-.6"/><path d="m9.2 17.5-2.4-2.4 2.4-2.4"/></svg>
+              <span class="chip-label">重复</span>
+            </button>
+            <button class="soft-chip" id="priorityChip" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 20.2V4.2"/><path d="M6.6 4.9h8.8l-1.6 3.1 1.6 3.1H6.6"/></svg>
+              <span class="chip-label">优先级</span>
+            </button>
             <button class="soft-chip" id="addressChip" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s6.5-5.4 6.5-10.2A6.5 6.5 0 0 0 5.5 10.8C5.5 15.6 12 21 12 21Z"/><circle cx="12" cy="10.7" r="2.3"/></svg>
               <span class="addr-chip-text">添加地址</span>
@@ -259,9 +271,18 @@
           <textarea class="inline-note" id="planNote" rows="1" maxlength="500" placeholder="备注（可选）"></textarea>
 
           <div class="chip-flow">
-            <button class="soft-chip" id="planDateChip" type="button">今天</button>
-            <button class="soft-chip" id="planRemindChip" type="button">提醒</button>
-            <button class="soft-chip" id="planPriorityChip" type="button">优先级</button>
+            <button class="soft-chip" id="planDateChip" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12h3.9"/></svg>
+              <span class="chip-label">今天</span>
+            </button>
+            <button class="soft-chip" id="planRemindChip" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16.4H6l1.3-2V10a4.7 4.7 0 0 1 9.4 0v4.4Z"/><path d="M10.6 18.9a1.8 1.8 0 0 0 2.8 0"/></svg>
+              <span class="chip-label">提醒</span>
+            </button>
+            <button class="soft-chip" id="planPriorityChip" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 20.2V4.2"/><path d="M6.6 4.9h8.8l-1.6 3.1 1.6 3.1H6.6"/></svg>
+              <span class="chip-label">优先级</span>
+            </button>
             <button class="soft-chip" id="planAddressChip" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s6.5-5.4 6.5-10.2A6.5 6.5 0 0 0 5.5 10.8C5.5 15.6 12 21 12 21Z"/><circle cx="12" cy="10.7" r="2.3"/></svg>
               <span class="addr-chip-text">添加地址</span>
@@ -351,10 +372,9 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
           </button>
         </div>
-        <input class="city-search" id="citySearch" type="search" autocomplete="off" placeholder="输入城市或区县，例如 杭州 / 西湖">
+        <input class="city-search" id="citySearch" type="search" autocomplete="off" placeholder="输入城市、区县或地点，例如 杭州 / 西湖 / 剑桥大学">
         <div class="city-results" id="cityResults"></div>
-        <button class="city-locate" id="cityLocate" type="button">使用当前位置</button>
-        <p class="city-hint">城市或区县只用于查询天气，保存在本机。定位只在更新天气时读取一次。</p>
+        <p class="city-hint">城市或区县由你搜索选择，只用于查询天气并保存在本机；应用不读取设备定位。</p>
       </div>
 
       <div class="sheet-backdrop address-backdrop" id="addressBackdrop" hidden></div>
@@ -366,12 +386,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
           </button>
         </div>
-        <input class="city-search" id="addressSearch" type="search" autocomplete="off" placeholder="搜索街道或地点，例如 西湖大道">
+        <input class="city-search" id="addressSearch" type="search" autocomplete="off" placeholder="搜索街道或地点，例如 西湖大道 / 剑桥大学">
         <div class="city-results" id="addressResults"></div>
-        <button class="city-locate address-locate" id="addressLocate" type="button">使用当前位置</button>
-        <p class="address-note" id="addressNote" hidden></p>
         <button class="address-clear" id="addressClear" type="button" hidden>清除地址</button>
-        <p class="city-hint">地址只随这条记录保存在本机，可随备份导出和恢复，不会上传。</p>
+        <p class="city-hint">地址由你搜索选择，只随这条记录保存在本机，可随备份导出和恢复，不会上传。</p>
       </div>
 
       <div class="detail-backdrop" id="detailBackdrop" hidden></div>
@@ -449,9 +467,14 @@
               <input type="checkbox" id="themeToggle">
               <span class="toggle" aria-hidden="true"></span>
             </label>
+            <label class="setting-row toggle-row">
+              <span>农历</span>
+              <input type="checkbox" id="lunarToggle">
+              <span class="toggle" aria-hidden="true"></span>
+            </label>
             <button class="row-btn" id="weatherCityBtn" type="button">
               <span>天气城市</span>
-              <span class="loc-value" id="weatherCityValue">自动定位</span>
+              <span class="loc-value" id="weatherCityValue">未选择城市</span>
               <span class="row-arrow">›</span>
             </button>
           </section>
@@ -475,15 +498,6 @@
                 <button class="text-btn" id="cancelImportBtn" type="button">取消</button>
               </div>
             </div>
-            <button class="row-btn loc-row" id="openLocationBtn" type="button">
-              <span>备份位置</span>
-              <span class="loc-value" id="backupLocation">正在读取…</span>
-              <span class="row-arrow">›</span>
-            </button>
-            <button class="row-btn danger-row" id="clearAllBtn" type="button">
-              <span>清空所有数据</span>
-              <span class="row-arrow">›</span>
-            </button>
           </section>
 
           <section class="setting-group">
@@ -518,7 +532,8 @@
             </button>
           </section>
 
-          <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.5.2</div>
+          <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
+          <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.7.0</div>
         </div>
       </div>
 
@@ -533,38 +548,97 @@
           <p class="about-name">氢计划 · AeroPlan</p>
 
           <section class="about-group">
-            <h3>隐私承诺</h3>
-            <p>不需要账号，不上传任何内容，也没有统计或广告代码。</p>
+            <h3>应用简介</h3>
+            <p>氢计划是一个纯本地的日程与行程工具：日历、条目、计划、行程表和天气。没有账号，也没有服务端。</p>
+            <p>提醒由系统本地通知调度，应用关闭或锁屏后仍会触发。</p>
           </section>
 
           <section class="about-group">
             <h3>数据存放</h3>
-            <p>数据只在你的手机里，卸载或清理会一并删除。</p>
-            <p>换手机或清理浏览器数据前，先备份。</p>
+            <p>条目、计划、分类、设置和同意记录保存在本机：优先 IndexedDB（light-schedule-db），不可用时退回 localStorage。</p>
+            <p>没有服务器，我们不会持有你的数据副本。</p>
+            <p>卸载应用或清除应用数据会删除全部本地内容。换机或清理前请先导出备份。</p>
           </section>
 
           <section class="about-group">
-            <h3>权限说明</h3>
-            <p>提醒只在应用打开时有效，重要的事请同时设手机闹钟。</p>
-            <p>存储权限仅用于写入备份文件，以及读取你选择的备份文件来恢复数据。</p>
-            <p>定位权限只用于更新天气时读取一次位置；不会后台持续定位，不上传也不记录坐标。拒绝授权时可以手动选择城市。</p>
-            <p>天气数据来自 Open-Meteo，只用于显示天气，不包含统计或广告代码。</p>
-            <p>天气按定位坐标的区域网格取值，可到区/县级别。</p>
-            <p>地名由无需密钥的开放地理服务（BigDataCloud / OpenStreetMap Nominatim）反查，仅在本次使用内缓存，不长期保存。</p>
-            <p>城市与区县搜索来自 Photon（基于 OpenStreetMap，数据 © OpenStreetMap 贡献者，ODbL），只在输入时即时查询，不保存搜索历史。</p>
-            <p>首次打开时的授权说明，可以在「权限管理」里重新打开或申请。</p>
+            <h3>网络请求与数据去向</h3>
+            <p>只有天气与地址搜索会联网。它们发出的是搜索关键词和所选地点的坐标，收件方只有下列服务。</p>
+            <p>天气：只发送所选地点的经纬度（保留 3 位小数，约 100 米精度），发给 Open-Meteo。</p>
+            <p>城市与地点搜索：只发送你输入的搜索关键词，发给 Photon（基于 OpenStreetMap 数据）。</p>
+            <p>地址搜索：只发送你输入的搜索关键词，发给 Photon。</p>
+            <p>不会发送日程正文、备注、分类、计划、备份文件内容、账号信息、通讯录、相片，也不会发送设备型号。</p>
+            <p>所有请求都由设备用 HTTPS 直连上述服务，不经过本项目中转；应用没有统计、广告或崩溃上报 SDK。</p>
           </section>
 
           <section class="about-group">
-            <h3>字体与开源许可</h3>
-            <p class="font-credit">开屏字体：站酷小薇 ZCOOL XiaoWei（中文）、Cormorant Garamond（英文），均为 SIL Open Font License 1.1 授权；字体文件随应用本地打包，不联网加载。</p>
-            <p class="font-credit">天气图标：Lucide 图标集（ISC License，可商用）；图标以 SVG 内联随应用本地打包，不从网络加载。</p>
+            <h3>权限清单</h3>
+            <p>通知：用于到点提醒。拒绝后应用仍可使用，但收不到提醒。</p>
+            <p>闹钟与提醒（Android 12 及以上）：用于准时触发提醒。拒绝后提醒可能延后或漏掉。</p>
+            <p>存储（旧版 Android）：只用于导出备份和读取你选择的备份文件。拒绝后无法导出或恢复。</p>
+            <p>振动：用于选择日期、时间时的轻触反馈。关闭后只是没有触感，不影响功能。</p>
+            <p>本应用不申请定位权限，也不读取设备位置。</p>
+          </section>
+
+          <section class="about-group">
+            <h3>备份文件</h3>
+            <p>备份是 JSON 文件，当前未加密，含条目、计划、分类、设置和同意记录。</p>
+            <p>备份生成后交给系统的保存或分享面板，应用内不留副本，临时文件用完即删。</p>
+            <p>文件可能被网盘、聊天工具或他人看到，请存放到你可信的位置。</p>
+          </section>
+
+          <section class="about-group">
+            <h3>提醒的局限</h3>
+            <p>系统清理后台、省电模式或权限关闭时，提醒可能延迟，甚至不触发。</p>
+            <p>重要事项请同时在系统闹钟里设一次提醒。这是本应用的真实边界。</p>
+          </section>
+
+          <section class="about-group">
+            <h3>同意记录</h3>
+            <p id="consentInfo">本机尚未记录同意。</p>
+            <p>这条记录只存在本机，清除应用数据或卸载会一并删除。</p>
+          </section>
+
+          <section class="about-group about-sources">
+            <h3>数据来源</h3>
+            <p>天气与预报：Open-Meteo。请求只包含所选地点的经纬度。</p>
+            <p>城市与地点搜索：Photon，基于 OpenStreetMap 数据。</p>
+            <p>OpenStreetMap 数据版权归 OpenStreetMap 贡献者，许可 ODbL。</p>
+            <p>以上请求都由设备直接发起，不经过本项目中转。</p>
+          </section>
+
+          <section class="about-group">
+            <h3>字体与图标许可</h3>
+            <p class="font-credit">站酷小薇 ZCOOL XiaoWei（中文）与 Cormorant Garamond（英文）：SIL Open Font License 1.1，随应用本地打包。</p>
+            <p class="font-credit">Lucide 图标集：ISC License，SVG 内联，随应用本地打包。</p>
+            <p class="font-credit">应用图标与启动图随应用本地打包。字体和图标都不从网络加载。</p>
+          </section>
+
+          <section class="about-group">
+            <h3>签名与安装包</h3>
+            <p id="officialFingerprint">官方签名指纹：生成新密钥后填入（见 README）</p>
+            <p>从非官方渠道获得、或签名指纹不一致的安装包，可能已被修改，请勿使用。</p>
+            <p>客户端没有「不可破解的加密」：混淆只提高改动成本，真正阻止第三方改包的是系统的签名校验。</p>
+          </section>
+
+          <section class="about-group about-agreement">
+            <h3>协议条款</h3>
+            <p>生效日期：2026-11-07。</p>
+            <p>本页内容共同构成使用协议：数据存放、网络请求与数据去向、权限清单、备份文件、提醒的局限。</p>
+            <p>协议更新时随新版本发布，并在本页标注新的生效日期；重大变更会在下次启动时再次提示确认。</p>
+            <p>继续使用即表示你已阅读并接受本协议。</p>
           </section>
 
           <section class="about-group">
             <h3>联系方式</h3>
-            <p>通过你获取本应用的渠道反馈即可（应用商店、发布页面或仓库 Issue）。</p>
+            <p>请通过你获取本应用的渠道联系我们：应用商店页面、发布页面或仓库 Issue。</p>
           </section>
+
+          <p class="about-version">0.7.0</p>
+        </div>
+
+        <div class="agreement-actions" id="agreementActions" hidden>
+          <button class="primary-btn" id="agreementAccept" type="button">我已阅读并接受</button>
+          <button class="text-btn" id="agreementDecline" type="button">不同意</button>
         </div>
       </div>
 
@@ -593,7 +667,7 @@
               <span class="perm-item-name">通知与提醒</span>
               <b class="perm-badge" id="permNotifyState">检测中…</b>
             </div>
-            <p class="perm-item-text">到点会通过系统通知提醒你；如果系统限制后台运行，可能略有延迟。</p>
+            <p class="perm-item-text">提醒由系统排程，关掉应用或锁屏后也会按时通知；系统限制后台运行时可能略有延迟。</p>
             <button class="secondary-btn perm-item-btn" id="permAllow" type="button">允许通知</button>
             <div class="perm-denied" id="permDenied" hidden>
               <p>系统拒绝了通知权限。可以打开手机「设置 → 应用 → 氢计划 → 通知」把通知打开，再回到这里点下面的按钮重新检查。</p>
@@ -605,21 +679,13 @@
               <span class="perm-item-name">存储与备份</span>
               <b class="perm-badge" id="permStorageState">检测中…</b>
             </div>
-            <p class="perm-item-text">用于把备份文件写入手机，也用于读取你选择的备份文件来恢复数据。</p>
+            <p class="perm-item-text">备份不会写进应用私有目录：生成后交给系统的保存 / 分享面板，由你决定存到哪里；临时文件用完即删。</p>
             <button class="secondary-btn perm-item-btn" id="permStorageBtn" type="button">申请权限</button>
           </div>
 
-          <div class="perm-item">
-            <div class="perm-item-head">
-              <span class="perm-item-name">定位用途</span>
-              <b class="perm-badge" id="permLocationState">检测中…</b>
-            </div>
-            <p class="perm-item-text">用于查询当地天气：只在更新天气时读取一次经纬度，不后台追踪、不上传。拒绝时也可以手动选择城市。</p>
-            <button class="secondary-btn perm-item-btn" id="permLocationBtn" type="button">申请权限</button>
-          </div>
         </div>
 
-        <p class="perm-note" id="permNote">定位只在需要更新天气时取一次，不做后台持续追踪，也不上传任何位置信息。</p>
+        <p class="perm-note" id="permNote">提醒可能因系统限制后台运行而略有延迟；重要事项请同时在系统闹钟里设一次。</p>
 
         <div class="perm-actions">
           <button class="primary-btn" id="permLater" type="button">开始使用</button>
@@ -629,8 +695,8 @@
 
     </div>
   </div>
-  <script src="./i18n.js?v=24"></script>
-  <script src="./weather.js?v=24"></script>
-  <script src="./app.js?v=24"></script>
+  <script src="./i18n.js?v=28"></script>
+  <script src="./weather.js?v=28"></script>
+  <script src="./app.js?v=28"></script>
 </body>
 </html>

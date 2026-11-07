@@ -1496,6 +1496,24 @@ input:focus-visible + .toggle {
   transition: color .16s, background .16s, transform .12s;
 }
 
+/* 新建面板气泡的前置图标：尺寸与线条沿用地址气泡那一套，颜色随文字走 */
+.soft-chip > svg {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.soft-chip > .chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .soft-chip:active { transform: scale(.97); }
 
 .soft-chip.active {
@@ -2221,21 +2239,27 @@ html.dark .detail-sheet {
 
 .settings-body::-webkit-scrollbar { width: 0; }
 
+/* 设置分组各自成卡片：圆角、低对比底色、清晰间距，深色模式同一套结构 */
 .setting-group {
-  margin: 0 0 22px;
-  padding: 0;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
+  margin: 0 0 14px;
+  padding: 6px 14px 8px;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow-soft);
 }
 
 .setting-group h3 {
-  margin: 0 0 2px;
-  padding: 0 2px;
+  margin: 4px 0 6px;
+  padding: 0;
   font-size: 11.5px;
   font-weight: 650;
   letter-spacing: .5px;
   color: var(--muted);
+}
+
+html.dark .setting-group {
+  background: #1E222C;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .045);
 }
 
 .storage-summary {
@@ -2924,11 +2948,46 @@ html.dark { --festival: #F0A48F; --today-red: #E8897F; }
 
 .swipe.revealed .row { opacity: .84; }
 
-/* 折叠（未展开）时整组不提供左滑删除：不显示删除层，也不响应拖动 */
-.swipe.swipe-locked .swipe-del { display: none; }
+/* 折叠（未展开）时整组不提供左滑删除：不显示操作层，也不响应拖动 */
+.swipe.swipe-locked .swipe-del,
+.swipe.swipe-locked .swipe-edit { display: none; }
 
-.swipe-stack .swipe-del {
+.swipe-stack .swipe-del,
+.swipe-stack .swipe-edit {
   top: calc(50% - 6px);
+}
+
+.swipe-edit {
+  position: absolute;
+  top: 50%;
+  right: 61px;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-soft, rgba(76, 111, 255, .14));
+  color: var(--accent, #4C6FFF);
+  opacity: .9;
+  transition: opacity .16s ease, transform .12s ease, background .16s ease;
+}
+
+.swipe-edit svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.swipe-edit:active {
+  transform: translateY(-50%) scale(.88);
+  background: rgba(76, 111, 255, .26);
 }
 
 .swipe-del {
@@ -2964,7 +3023,8 @@ html.dark { --festival: #F0A48F; --today-red: #E8897F; }
   background: rgba(217, 105, 76, .2);
 }
 
-.swipe.revealed .swipe-del { opacity: 1; }
+.swipe.revealed .swipe-del,
+.swipe.revealed .swipe-edit { opacity: 1; }
 
 /* ---------- 跳转面板滚轮 ---------- */
 .jump-wheels { margin-top: 6px; }
@@ -3078,6 +3138,7 @@ html.dark .modal { box-shadow: 0 0 0 1px rgba(255, 255, 255, .06); }
 
 .modal-text {
   margin-top: 8px;
+  white-space: pre-line;
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--muted);
@@ -3528,35 +3589,112 @@ html[lang="en"] .splash-sub {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.font-credit { margin: 0 0 7px !important; padding: 0 2px; font-size: 12.5px; line-height: 1.75; color: var(--text-2); }
+.font-credit { margin: 0 0 7px !important; padding: 0 2px; font-size: 13.2px; line-height: 1.75; color: var(--text-2); }
 
 /* ---------- 关于页 ---------- */
 .about-page { z-index: var(--z-about); }
+.about-page .settings-topbar h2 { font-size: 19px; }
 .about-body { padding-top: 2px; }
 .about-name {
   margin: 0 0 20px;
   padding: 0 2px;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: -.2px;
+  letter-spacing: -.1px;
   color: var(--text);
 }
 .about-group { margin: 0 0 20px; }
 .about-group h3 {
   margin: 0 0 6px;
   padding: 0 2px;
-  font-size: 11.5px;
+  font-size: 14px;
   font-weight: 650;
-  letter-spacing: .5px;
-  color: var(--muted);
+  letter-spacing: .2px;
+  color: var(--text);
 }
 .about-group p {
   margin: 0 0 7px;
   padding: 0 2px;
-  font-size: 12.5px;
+  font-size: 13.2px;
   line-height: 1.75;
   color: var(--text-2);
 }
+.about-version {
+  margin: 26px 0 4px;
+  padding: 0 2px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  color: var(--muted);
+  opacity: .8;
+}
+
+/* 协议条款与说明性内容在视觉上分开：条款用独立卡片承载 */
+.about-agreement {
+  padding: 14px 14px 10px;
+  border-radius: 16px;
+  background: var(--card-soft);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.about-agreement h3 { margin-bottom: 8px; }
+.about-agreement p { margin-bottom: 6px; }
+
+#officialFingerprint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+/* 首次启动的协议页：隐藏返回导航，底部固定同意 / 不同意 */
+.about-page.agreement-mode .settings-topbar { display: none; }
+.about-page.agreement-mode .settings-body {
+  padding-bottom: calc(152px + env(safe-area-inset-bottom));
+}
+.agreement-actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 20px calc(14px + env(safe-area-inset-bottom));
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+.agreement-actions .primary-btn { width: 100%; }
+.agreement-actions .text-btn {
+  align-self: center;
+  padding: 6px 12px;
+  color: var(--muted);
+}
+.danger-pill {
+  display: block;
+  margin: 26px auto 12px;
+  padding: 10px 22px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  transition: transform .12s ease, opacity .16s ease;
+}
+
+.danger-pill:active {
+  transform: scale(.97);
+  opacity: .82;
+}
+
+html.dark .danger-pill {
+  background: rgba(233, 138, 112, .16);
+  color: #F0A18C;
+}
+
 .settings-version {
   margin: 22px 0 6px;
   padding-bottom: env(safe-area-inset-bottom);
@@ -3749,6 +3887,72 @@ html.dark .sch-cell.band-evening { background-color: rgba(140, 165, 255, .032); 
 .sch-chip.high {
   box-shadow: inset 2px 0 0 var(--amber);
 }
+
+/* 深色模式下的行程表：改用中性浅灰底（不再压到近黑），格线与色块一起提亮，
+   在深色主题里显得通透，又不刺眼 */
+html.dark .sch-grid {
+  background: #262B35;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .10), 0 4px 16px rgba(0, 0, 0, .28);
+}
+
+html.dark .sch-day,
+html.dark .sch-corner {
+  background: #2C3240;
+  border-left-color: rgba(255, 255, 255, .16);
+}
+
+html.dark .sch-day .sch-dow,
+html.dark .sch-adlabel,
+html.dark .sch-hourlabel {
+  background: transparent;
+  color: #B3BBCE;
+}
+
+html.dark .sch-adlabel,
+html.dark .sch-hourlabel { background: #262B35; }
+
+html.dark .sch-adcell,
+html.dark .sch-cell {
+  border-top-color: rgba(255, 255, 255, .14);
+  border-left-color: rgba(255, 255, 255, .14);
+}
+
+html.dark .sch-cell.band-night { background-color: rgba(140, 165, 255, .07); }
+html.dark .sch-cell.band-afternoon { background-color: rgba(255, 196, 120, .06); }
+html.dark .sch-cell.band-evening { background-color: rgba(140, 165, 255, .05); }
+
+html.dark .sch-cell.today-col,
+html.dark .sch-adcell.today-col { background-color: rgba(111, 139, 255, .22); }
+
+html.dark .sch-chip {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .10);
+}
+
+html.dark .sch-chip .sch-mark { filter: brightness(1.3); }
+
+html.dark .sch-chip.done {
+  background: rgba(255, 255, 255, .08);
+  color: #AEB6C9;
+}
+
+html.dark .sch-chip.overdue {
+  background: rgba(233, 138, 112, .2);
+  color: #F2A48C;
+}
+
+html.dark .sch-foot { color: #AAB2C6; }
+
+html.dark .sch-day.today .sch-dnum { background: #6F8BFF; color: #0F1117; }
+
+/* 深色模式下其它视图里偏暗的次级信息一并提亮 */
+html.dark .dd-empty,
+html.dark .plan-empty,
+html.dark .agenda-empty { color: #A7AFC2; }
+
+html.dark .row-card { background: #1E222C; }
+
+html.dark .row-meta,
+html.dark .row-time { color: #A9B1C4; }
 
 .sch-foot {
   display: flex;
