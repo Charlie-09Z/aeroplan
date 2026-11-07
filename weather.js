@@ -15,7 +15,7 @@
   var CACHE_MS = 45 * 60 * 1000;      // 45 分钟刷新一次，避免高频轮询
   var FORECAST_DAYS = 16;            // Open-Meteo 允许的上限
   var STALE_MS = 6 * 60 * 60 * 1000; // 超过 6 小时标注「可能已过期」
-  var WCACHE_KEY = 'light-schedule.cache.weather.v1';
+  var WCACHE_KEY = 'aeroplan.cache.weather.v1';
 
   var opts = {
     t: function (s) { return s; },
@@ -584,7 +584,7 @@
 
   // Photon 偶尔仍返回英文/拼音的市名。中文界面下用 Open-Meteo 的
   // language=zh 反查一次中文名并缓存；失败时保留原名，绝不显示空白。
-  var PLACE_ZH_KEY = 'light-schedule.cache.place-zh.v1';
+  var PLACE_ZH_KEY = 'aeroplan.cache.place-zh.v1';
   var placeZhMemo = null;
 
   function placeZhMap() {

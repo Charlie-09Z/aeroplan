@@ -4,12 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#4C6FFF">
+  <meta name="aeroplan-build" content="dev">
   <meta name="description" content="氢计划（AeroPlan）：日历、日程、待办、行程表与周月年计划，数据只存在本机，无需账号。">
   <title>氢计划</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=40">
+  <link rel="stylesheet" href="./styles.css?v=41">
 </head>
 <body>
   <div class="phone">
@@ -741,6 +742,7 @@
 
           <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
           <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.9.1</div>
+          <div class="settings-version" id="settingsBuildStamp">构建标识：dev</div>
         </div>
       </div>
 
@@ -758,6 +760,12 @@
             <h3>应用简介</h3>
             <p>纯本地的日程与行程工具：日历、议程、行程表、计划、日记、天气与黄历。没有账号，也没有服务端。</p>
             <p>提醒由系统本地通知调度，应用关闭或锁屏后仍会触发。</p>
+          </section>
+
+          <section class="about-group">
+            <h3>构建标识</h3>
+            <p id="aboutBuildStamp">dev</p>
+            <p>用于核对安装包是否为最新构建：格式为「构建时间 · CI 流水号 · 短 commit」。</p>
           </section>
 
           <section class="about-group">
@@ -875,7 +883,10 @@
         <p class="perm-note" id="permNote">重要事项请同时在系统闹钟里设一次；部分系统会限制后台运行，下面自查能帮你判断是哪一环断了。</p>
 
         <div class="notify-diag" id="notifyDiag" hidden></div>
+        <p class="perm-request-hint" id="newPackageHint" hidden></p>
+        <p class="perm-request-hint" id="permRequestHint" hidden></p>
         <div class="notify-diag-actions">
+          <button class="secondary-btn" id="permRequest" type="button">申请通知权限</button>
           <button class="text-btn" id="notifyDiagRefresh" type="button">刷新自查</button>
         </div>
 
@@ -887,9 +898,9 @@
 
     </div>
   </div>
-  <script src="./i18n.js?v=40"></script>
-  <script src="./regions.js?v=40"></script>
-  <script src="./weather.js?v=40"></script>
-  <script src="./app.js?v=40"></script>
+  <script src="./i18n.js?v=41"></script>
+  <script src="./regions.js?v=41"></script>
+  <script src="./weather.js?v=41"></script>
+  <script src="./app.js?v=41"></script>
 </body>
 </html>

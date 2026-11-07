@@ -84,6 +84,9 @@
   --z-city-bg: 57;
   --z-city: 58;
   --z-diary-viewer: 59;
+  /* 日记写作页里的「省市选择」浮层：必须高于写作页（53）、预览层（59）与写作页内其它浮层 */
+  --z-region-bg: 66;
+  --z-region: 67;
   --z-modal-bg: 60;
   --z-modal: 61;
   --z-perm-bg: 70;
@@ -2706,6 +2709,17 @@ html.dark .tag-rep { background: rgba(255, 255, 255, .08); }
 .year-sheet { z-index: var(--z-year); }
 .detail-sheet { z-index: var(--z-detail); }
 
+/* 日记里的「省市」浮层复用年历结构，但必须压在写作页（z=53）之上，
+   否则会被写作页整屏盖住，表现就是「点了没反应」。 */
+#regionBackdrop { z-index: var(--z-region-bg); }
+#regionSheet { z-index: var(--z-region); }
+
+/* 浮层打开时锁住写作页的滚动，关闭后恢复（只锁内部滚动容器，不影响页面本身） */
+body.region-open .de-scroll { overflow: hidden; }
+
+/* 深色模式下加深遮罩，避免背景文字透出造成重叠感 */
+html.dark .year-backdrop { background: rgba(4, 7, 14, .62); }
+
 html.dark .year-sheet,
 html.dark .detail-sheet {
   box-shadow: 0 -1px 0 rgba(255, 255, 255, .06);
@@ -5030,10 +5044,32 @@ html.dark .row-time { color: #A9B1C4; }
 .diag-table tr.diag-skip td:nth-child(6) { color: var(--muted); }
 .diag-table tr.diag-fail td:nth-child(6) { color: var(--danger); }
 
+/* 「全部条目存储原值」表是 7 列，判定结果在最后一列 */
+.diag-table.diag-raw tr.diag-ok td:last-child { color: var(--green); }
+.diag-table.diag-raw tr.diag-skip td:last-child { color: var(--muted); }
+
 .notify-diag-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   padding: 2px 2px 0;
+}
+
+.notify-diag-actions .secondary-btn {
+  min-height: 32px;
+  padding: 0 12px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* 降级到 WebView 应用内提示时的显式说明，不允许伪装成系统通知已开启 */
+.perm-request-hint {
+  margin: 4px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warn, #b26a00);
 }
 
 /* 四行竖排：图标+气温 / 天气文字 / 位置 / 更新时间，整体右对齐 */

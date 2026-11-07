@@ -22,15 +22,27 @@
     todo: { label: '待办', color: 'var(--todo)' }
   };
 
-  const LS_ITEMS_KEY = 'light-schedule.items';
-  const LS_META_KEY = 'light-schedule.meta';
-  const LS_CATS_KEY = 'light-schedule.categories';
-  const LS_PLANS_KEY = 'light-schedule.plans';
-  const LS_DIARY_KEY = 'light-schedule.diary';
-  const IDB_NAME = 'light-schedule-db';
+  const LS_ITEMS_KEY = 'aeroplan.items';
+  const LS_META_KEY = 'aeroplan.meta';
+  const LS_CATS_KEY = 'aeroplan.categories';
+  const LS_PLANS_KEY = 'aeroplan.plans';
+  const LS_DIARY_KEY = 'aeroplan.diary';
+  const IDB_NAME = 'aeroplan-db';
   const IDB_STORE = 'kv';
   // 日记附件单独一个对象仓库，按 id 索引，避免把 Blob 塞进 kv 的大对象里
   const DIARY_FILE_STORE = 'diaryFiles';
+
+  // 旧代号（light-schedule）的库与键里可能存着用户全部数据，只能迁移、不能直接改名。
+  // 迁移成功后旧库/旧键保留不删，失败时继续读旧库，绝不出现「打开就空了」。
+  const LEGACY_IDB_NAMES = ['light-schedule-db'];
+  const LEGACY_LS_KEYS = {
+    items: 'light-schedule.items',
+    meta: 'light-schedule.meta',
+    categories: 'light-schedule.categories',
+    plans: 'light-schedule.plans',
+    diary: 'light-schedule.diary',
+    lang: 'light-schedule.lang'
+  };
 
   const APP_VERSION = '0.9.1';
   const POLICY_VERSION = 'privacy-1.1';
@@ -204,6 +216,12 @@
     channelInfo: null,
     // 最近一次排程的逐条诊断（自查面板的实例表直接用这份数据）
     reminderReport: [],
+    // 最近一次扫描的规模与时间：用于区分「还没算」和「确实没有提醒」
+    reminderScan: null,
+    // 数据是否已经读完：自查面板据此区分「尚未加载完」与「确实没有提醒条目」
+    loaded: false,
+    // 旧代号数据迁移日志（写入自查面板）
+    migrationLog: [],
     lastDayKey: '',
     // 年历：捏合展开时记下正在浏览的年份；pinchActive 用于让横滑手势让位
     yearView: false,
@@ -419,7 +437,7 @@
   // ==================== 缓存管理：统一前缀、统一清理、可自检 ====================
   // 应用只保留“活数据”：日期换算缓存按当前浏览窗口裁剪，天气与反查地名由
   // weather.js 每次替换而非累积；这里提供统一入口，避免越用越大。
-  const CACHE_PREFIX = 'light-schedule.cache.';
+  const CACHE_PREFIX = 'aeroplan.cache.';
 
   function cacheKeysInStorage() {
     const keys = [];
@@ -1277,6 +1295,138 @@
     });
   }
 
+  // ---------- 旧库迁移（light-schedule-db → aeroplan-db） ----------
+  // 打开旧库时不指定版本：已有版本保持不变，不会因为升级而改动旧库结构。
+  function openExistingDB(name) {
+    return new Promise(function (resolve, reject) {
+      let req;
+      try {
+        req = indexedDB.open(name);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error || new Error('旧库打开失败')); };
+      req.onblocked = function () { reject(new Error('旧库被占用')); };
+    });
+  }
+
+  function readStoreValue(db, storeName, key) {
+    return new Promise(function (resolve) {
+      try {
+        if (!db.objectStoreNames.contains(storeName)) return resolve(undefined);
+        const req = db.transaction(storeName, 'readonly').objectStore(storeName).get(key);
+        req.onsuccess = function () { resolve(req.result ? req.result.value : undefined); };
+        req.onerror = function () { resolve(undefined); };
+      } catch (err) {
+        resolve(undefined);
+      }
+    });
+  }
+
+  function readStoreAll(db, storeName) {
+    return new Promise(function (resolve) {
+      try {
+        if (!db.objectStoreNames.contains(storeName)) return resolve([]);
+        const req = db.transaction(storeName, 'readonly').objectStore(storeName).getAll();
+        req.onsuccess = function () { resolve(req.result || []); };
+        req.onerror = function () { resolve([]); };
+      } catch (err) {
+        resolve([]);
+      }
+    });
+  }
+
+  async function readLegacyIdb(name) {
+    let db = null;
+    try {
+      db = await withTimeout(openExistingDB(name), 1200);
+      const snapshot = {
+        items: await readStoreValue(db, IDB_STORE, 'items'),
+        categories: await readStoreValue(db, IDB_STORE, 'categories'),
+        plans: await readStoreValue(db, IDB_STORE, 'plans'),
+        meta: await readStoreValue(db, IDB_STORE, 'meta'),
+        diary: await readStoreValue(db, IDB_STORE, 'diary')
+      };
+      const files = await readStoreAll(db, DIARY_FILE_STORE);
+      return { snapshot: snapshot, files: files };
+    } catch (err) {
+      return null;
+    } finally {
+      if (db) {
+        try { db.close(); } catch (err) { /* 忽略 */ }
+      }
+    }
+  }
+
+  function hasAnyValue(snapshot) {
+    if (!snapshot) return false;
+    return ['items', 'categories', 'plans', 'diary'].some(function (k) {
+      return Array.isArray(snapshot[k]) && snapshot[k].length > 0;
+    }) || (snapshot.meta && typeof snapshot.meta === 'object' && Object.keys(snapshot.meta).length > 0);
+  }
+
+  // 启动时做一次：新库为空、旧库有数据才迁移；任一环节失败就跳过，继续用旧数据源。
+  async function migrateLegacyStore() {
+    state.migrationLog = [];
+    try {
+      if (storage.status === 'idb') {
+        const current = {
+          items: await idbGet('items'),
+          categories: await idbGet('categories'),
+          plans: await idbGet('plans'),
+          diary: await idbGet('diary'),
+          meta: await idbGet('meta')
+        };
+        if (hasAnyValue(current)) return;
+        for (const name of LEGACY_IDB_NAMES) {
+          const legacy = await readLegacyIdb(name);
+          if (!legacy || !hasAnyValue(legacy.snapshot)) continue;
+          const s = legacy.snapshot;
+          await idbSetMany([
+            ['items', Array.isArray(s.items) ? s.items : []],
+            ['categories', Array.isArray(s.categories) ? s.categories : []],
+            ['plans', Array.isArray(s.plans) ? s.plans : []],
+            ['diary', Array.isArray(s.diary) ? s.diary : []],
+            ['meta', s.meta && typeof s.meta === 'object' ? s.meta : {}]
+          ]);
+          for (const file of (legacy.files || [])) {
+            if (file && file.id) await diaryFilePut(file);
+          }
+          state.migrationLog.push(
+            '已迁移旧库 ' + name + '：' + (Array.isArray(s.items) ? s.items.length : 0) + ' 条条目 / ' +
+            (Array.isArray(s.diary) ? s.diary.length : 0) + ' 篇日记 / ' +
+            (Array.isArray(s.plans) ? s.plans.length : 0) + ' 条计划'
+          );
+          console.log(state.migrationLog[state.migrationLog.length - 1]);
+          return;
+        }
+      } else if (storage.status === 'local') {
+        const pairs = [
+          [LS_ITEMS_KEY, LEGACY_LS_KEYS.items],
+          [LS_CATS_KEY, LEGACY_LS_KEYS.categories],
+          [LS_PLANS_KEY, LEGACY_LS_KEYS.plans],
+          [LS_META_KEY, LEGACY_LS_KEYS.meta],
+          [LS_DIARY_KEY, LEGACY_LS_KEYS.diary]
+        ];
+        let copied = 0;
+        pairs.forEach(function (pair) {
+          if (localStorage.getItem(pair[0])) return;
+          const legacy = localStorage.getItem(pair[1]);
+          if (!legacy) return;
+          localStorage.setItem(pair[0], legacy);
+          copied += 1;
+        });
+        if (copied) {
+          state.migrationLog.push('已迁移旧 local-storage 键 ' + copied + ' 组（旧键保留）');
+        }
+      }
+    } catch (err) {
+      console.warn('旧数据迁移失败，继续使用原有数据：', err);
+    }
+  }
+
   function idbGet(key) {
     return new Promise(function (resolve, reject) {
       const tx = storage.db.transaction(IDB_STORE, 'readonly');
@@ -1389,7 +1539,7 @@
 
   function localStorageWorks() {
     try {
-      const probe = 'light-schedule.probe';
+      const probe = 'aeroplan.probe';
       localStorage.setItem(probe, '1');
       const val = localStorage.getItem(probe);
       localStorage.removeItem(probe);
@@ -1478,6 +1628,7 @@
     });
 
     state.agendaFilters = state.agendaFilters.filter(function (id) { return ids.has(id); });
+    state.loaded = true;
   }
 
   async function persistItems(silent) {
@@ -5399,13 +5550,16 @@
     if (state.view === 'agenda') state.agendaAnchor = item.date;
     renderAll();
     scheduleReminders();
+    // 保存成功后同一帧后再刷新一次自查表：用户能立刻看到这一条是否真的落库、是否排上
+    requestAnimationFrame(function () { renderNotifyDiagnostics(); });
     // 有提醒时确保拿到系统通知（Android 13+）与精确闹钟（Android 12+）权限
     if (typeof item.remindBefore === 'number' && isNativeApp()) {
       if (notifyState.status !== 'granted') ensureReminderPermissions();
       else maybeAskExactAlarm();
     }
-    if (base) showToast(ok ? T('已保存修改：{title}', { title: shorten(item.title, 14) }) : T('已修改，但没能保存到本机'));
-    else showToast(ok ? T('已添加：{title}', { title: shorten(item.title, 18) }) : T('已添加，但没能保存到本机'));
+    if (!ok) showToast(T('保存失败：未能写入本机，提醒不会生效'));
+    else if (base) showToast(T('已保存修改：{title}', { title: shorten(item.title, 14) }));
+    else showToast(T('已添加：{title}', { title: shorten(item.title, 18) }));
   }
 
   // ==================== 添加计划面板（与日程独立） ====================
@@ -5617,13 +5771,14 @@
     closePlanSheet();
     renderPlan();
     scheduleReminders();
+    requestAnimationFrame(function () { renderNotifyDiagnostics(); });
     if (typeof plan.remindBefore === 'number' && isNativeApp()) {
       if (notifyState.status !== 'granted') ensureReminderPermissions();
       else maybeAskExactAlarm();
     }
-    if (base) showToast(ok ? T('已保存修改：{title}', { title: shorten(plan.title, 14) }) : T('已修改，但没能保存到本机'));
-    else showToast(ok ? T('已添加{kind}：{title}', { kind: T(PLAN_KINDS[plan.kind]), title: shorten(plan.title, 16) })
-      : T('已添加，但没能保存到本机'));
+    if (!ok) showToast(T('保存失败：未能写入本机，提醒不会生效'));
+    else if (base) showToast(T('已保存修改：{title}', { title: shorten(plan.title, 14) }));
+    else showToast(T('已添加{kind}：{title}', { kind: T(PLAN_KINDS[plan.kind]), title: shorten(plan.title, 16) }));
   }
 
   async function togglePlanDone(id) {
@@ -5664,7 +5819,32 @@
 
   // ==================== 设置页 ====================
 
-  const notifyState = { status: 'default', checked: false, native: false };
+  const notifyState = {
+    status: 'default',
+    checked: false,
+    native: false,
+    // 权限接口的原始返回值：自查面板原样展示，不再只给「已开启 / 未开启」这种推断值
+    lastCheckRaw: '',
+    lastCheckAt: 0,
+    lastRequestRaw: '',
+    lastRequestAt: 0,
+    lastRequestError: '',
+    requestAttempts: 0,
+    // true 表示当前只能走应用内提示：Capacitor WebView 的 Notification.requestPermission()
+    // 不会弹系统授权，必须如实告知用户，不能伪装成「已发送系统通知」
+    webFallback: false
+  };
+
+  function rawResultText(res) {
+    if (res === undefined) return 'undefined';
+    try { return JSON.stringify(res); } catch (err) { return String(res); }
+  }
+
+  function clockTimeText(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+  }
 
   function permissionLabel(status) {
     if (status === 'granted') return T('已允许');
@@ -5993,9 +6173,30 @@
     }, 1800);
   }
 
+  // 构建标识：CI 在压缩网页时写进 <meta name="aeroplan-build">，
+  // 用户可以在「设置 → 关于」一眼核对装的是不是最新构建（渠道参数、插件等差异都能据此判断）。
+  function buildStampText() {
+    try {
+      const meta = document.querySelector('meta[name="aeroplan-build"]');
+      const value = meta && meta.getAttribute('content');
+      return value && value !== 'dev' ? value : (isEn() ? 'dev (running from source)' : 'dev（本地源码运行）');
+    } catch (err) {
+      return 'dev';
+    }
+  }
+
+  function applyBuildStamp() {
+    const text = buildStampText();
+    const row = document.getElementById('settingsBuildStamp');
+    if (row) row.textContent = (isEn() ? 'Build: ' : '构建标识：') + text;
+    const about = document.getElementById('aboutBuildStamp');
+    if (about) about.textContent = text;
+  }
+
   function renderSettings() {
     if (!storage.status) return;
 
+    applyBuildStamp();
     $('#themeToggle').checked = document.documentElement.classList.contains('dark');
     $('#lunarToggle').checked = lunarVisible();
     if ($('#almanacToggle')) $('#almanacToggle').checked = almanacVisible();
@@ -6276,13 +6477,18 @@
   }
 
   // 提醒专用渠道：重要性 HIGH 才会横幅弹出；渠道不存在时 Android 会静默丢弃通知。
-  // Android 的渠道参数一旦创建就不可修改，旧版本可能已经在设备上留下参数不对的
-  // qingjihua-reminders，重建同 id 无效，所以这里改用带版本的新 id，启动时顺带删除旧渠道。
-  const REMIND_CHANNEL_ID = 'qingjihua-reminders-v2';
-  const REMIND_CHANNEL_LEGACY_ID = 'qingjihua-reminders';
+  // Android 的渠道参数一旦创建就不可修改：设备上的旧渠道（importance 4）无法升级，
+  // 重建同 id 无效，所以这里改用带版本的新 id，启动时逐个删除旧渠道。
+  const REMIND_CHANNEL_ID = 'aeroplan-reminders-v3';
+  const REMIND_CHANNEL_LEGACY_IDS = [
+    'aeroplan-reminders-v2',
+    'qingjihua-reminders-v2',
+    'qingjihua-reminders',
+    'light-schedule-reminders'
+  ];
   const REMIND_CHANNEL_IMPORTANCE = 5;
   const REMIND_SMALL_ICON = 'ic_stat_icon';
-  const REMIND_SOUND = 'qingjihua_notify';
+  const REMIND_SOUND = 'aeroplan_notify';
 
   // 同一时刻只建一次渠道：启动、授权、排程、测试通知都会调用它
   let channelTask = null;
@@ -6304,13 +6510,15 @@
 
   // 旧渠道只做删除尝试：本来不存在或系统不允许删除都无害，不阻塞启动
   async function dropLegacyReminderChannel(notify) {
-    if (!notify || typeof notify.deleteChannel !== 'function') return false;
-    try {
-      await notify.deleteChannel({ id: REMIND_CHANNEL_LEGACY_ID });
-      return true;
-    } catch (err) {
-      return false;
+    if (!notify || typeof notify.deleteChannel !== 'function') return [];
+    const removed = [];
+    for (const id of REMIND_CHANNEL_LEGACY_IDS) {
+      try {
+        await notify.deleteChannel({ id: id });
+        removed.push(id);
+      } catch (err) { /* 不存在就跳过 */ }
     }
+    return removed;
   }
 
   async function ensureReminderChannel(notify) {
@@ -6382,26 +6590,43 @@
   async function refreshNotifyState() {
     const notify = localNotifyPlugin();
     notifyState.native = !!notify;
+    notifyState.webFallback = false;
     if (notify) {
       try {
         const res = await notify.checkPermissions();
+        notifyState.lastCheckRaw = rawResultText(res);
+        notifyState.lastCheckAt = Date.now();
         const display = res && res.display;
         if (display === 'granted') notifyState.status = 'granted';
         else if (display === 'denied') notifyState.status = 'denied';
         else notifyState.status = 'default';
       } catch (err) {
+        notifyState.lastCheckRaw = 'error: ' + (err && err.message ? err.message : String(err));
+        notifyState.lastCheckAt = Date.now();
         notifyState.status = 'unsupported';
       }
+    } else if (isNativeApp()) {
+      // Capacitor WebView 里没有原生插件时，window.Notification 不受支持：
+      // requestPermission() 不会弹系统授权，只会一直停在 default。这里必须标成降级路径。
+      notifyState.status = 'unsupported';
+      notifyState.webFallback = true;
+      notifyState.lastCheckRaw = 'native plugin missing → web fallback (no system dialog)';
+      notifyState.lastCheckAt = Date.now();
     } else if ('Notification' in window) {
       notifyState.status = Notification.permission;
+      notifyState.lastCheckRaw = 'web Notification.permission=' + Notification.permission;
+      notifyState.lastCheckAt = Date.now();
     } else {
       notifyState.status = 'unsupported';
+      notifyState.lastCheckRaw = 'Notification API unavailable';
+      notifyState.lastCheckAt = Date.now();
     }
     notifyState.checked = true;
     // 精确闹钟状态决定排程精度与界面标注，每次检查权限时一起刷新
     if (notify) await refreshExactAlarmStatus(notify);
     renderSettings();
     renderPermissionSheet();
+    // 必须在 check 完成后重排：启动时 notifyState 还是 default，提前排程会走页面计时器
     scheduleReminders();
     return notifyState.status;
   }
@@ -6414,27 +6639,43 @@
 
   async function askNotifyPermission() {
     const notify = localNotifyPlugin();
+    notifyState.requestAttempts += 1;
+    notifyState.lastRequestAt = Date.now();
+    notifyState.lastRequestError = '';
     let status = 'unsupported';
     if (notify) {
       try {
         const res = await notify.requestPermissions();
+        notifyState.lastRequestRaw = rawResultText(res);
         status = res && res.display === 'granted' ? 'granted' : 'denied';
       } catch (err) {
+        notifyState.lastRequestRaw = 'error: ' + (err && err.message ? err.message : String(err));
+        notifyState.lastRequestError = notifyState.lastRequestRaw;
         status = 'denied';
       }
-    } else if ('Notification' in window) {
+    } else if (!isNativeApp() && 'Notification' in window) {
       try {
         status = await Notification.requestPermission();
+        notifyState.lastRequestRaw = 'web Notification.requestPermission() → ' + status;
       } catch (err) {
+        notifyState.lastRequestRaw = 'web error: ' + (err && err.message ? err.message : String(err));
+        notifyState.lastRequestError = notifyState.lastRequestRaw;
         status = 'denied';
       }
+    } else {
+      notifyState.lastRequestRaw = 'native plugin missing → webview fallback, no system dialog';
+      notifyState.webFallback = true;
+      status = 'unsupported';
     }
     notifyState.status = status;
     notifyState.checked = true;
     renderSettings();
     renderPermissionSheet();
     if (status === 'granted') showToast(T('通知已开启'));
+    else if (status === 'unsupported') showToast(T('当前构建没有原生通知插件，只能应用内提示'));
+    else showToast(T('系统没有授予通知权限'));
     scheduleReminders();
+    await renderNotifyDiagnostics();
     if (status === 'granted') maybeAskExactAlarm();
     return status;
   }
@@ -6463,6 +6704,28 @@
 
     const later = $('#permLater');
     if (later) later.textContent = T('开始使用');
+
+    // 显式的手动申请入口：首启自动申请可能因为 Activity 未就绪而失败，
+    // 这个按钮任何时候都能再走一遍 checkPermissions → requestPermissions。
+    const reqBtn = $('#permRequest');
+    if (reqBtn) {
+      reqBtn.textContent = notifyState.webFallback ? T('重新申请（当前降级）') : T('申请通知权限');
+      reqBtn.disabled = notifyState.status === 'granted';
+    }
+    const reqHint = $('#permRequestHint');
+    if (reqHint) {
+      reqHint.hidden = !notifyState.webFallback;
+      reqHint.textContent = T('当前 WebView 拿不到原生通知插件：系统不会弹授权，提醒只会显示为应用内提示。');
+    }
+
+    // 新包名 + 本机无数据：明确告诉用户旧版数据不会自动继承，需要先导出备份再导入
+    const pkgHint = $('#newPackageHint');
+    if (pkgHint) {
+      const empty = state.loaded && !state.items.length && !state.plans.length &&
+        !(Array.isArray(state.diary) && state.diary.length);
+      pkgHint.hidden = !(empty && isNativeApp());
+      pkgHint.textContent = T('这是 AeroPlan 的新安装包（com.aeroplan.app）。如需保留旧数据，请先在旧版「设置 → 备份数据」导出，再在本版「恢复数据」导入；新旧包名不同，不能直接覆盖升级。');
+    }
   }
 
   function openPermissionSheet() {
@@ -6617,7 +6880,7 @@
     // 避免备份在网盘/聊天里成为可关联的弱指纹。
     const payload = {
       app: isEn() ? 'AeroPlan' : '氢计划',
-      schema: 'qingjihua-backup',
+      schema: 'aeroplan-backup',
       manifest: {
         formatVersion: 1,
         schemaVersion: 8,
@@ -7178,7 +7441,16 @@
     // 原生端：有 LocalNotifications 且已授权时，交给系统排程（App 关掉、锁屏也能弹）
     const notify = localNotifyPlugin();
     const useNative = !!(notify && typeof notify.schedule === 'function' &&
-      notifyState.status === 'granted');
+      notifyState.status === 'granted' && !notifyState.webFallback);
+    // 记录这一轮扫描的时间与规模：自查面板据此区分「还没算」与「确实没有提醒」
+    state.reminderScan = {
+      at: now,
+      items: state.items.length,
+      plans: state.plans.length,
+      useNative: useNative,
+      status: notifyState.status,
+      loaded: state.loaded
+    };
     const pending = [];
     // 诊断表：每一行对应「一个带提醒的实例」，记录它为什么排上或为什么没排上
     const report = [];
@@ -7425,16 +7697,25 @@
   // 申请通知权限；Android 12+ 再检查「精确闹钟」权限。返回是否已授权
   async function ensureReminderPermissions(options) {
     const notify = localNotifyPlugin();
-    if (!notify) return false;
+    if (!notify) {
+      notifyState.webFallback = isNativeApp();
+      return false;
+    }
     let granted = false;
     try {
       const cur = await notify.checkPermissions();
+      notifyState.lastCheckRaw = rawResultText(cur);
+      notifyState.lastCheckAt = Date.now();
       granted = cur && cur.display === 'granted';
       if (!granted) {
+        notifyState.requestAttempts += 1;
+        notifyState.lastRequestAt = Date.now();
         const res = await notify.requestPermissions();
+        notifyState.lastRequestRaw = rawResultText(res);
         granted = res && res.display === 'granted';
       }
     } catch (err) {
+      notifyState.lastRequestError = err && err.message ? err.message : String(err);
       granted = false;
     }
     notifyState.native = true;
@@ -7442,11 +7723,16 @@
     notifyState.status = granted ? 'granted' : 'denied';
     renderSettings();
     renderPermissionSheet();
-    if (!granted) return false;
+    if (!granted) {
+      if (!(options && options.quiet)) showToast(T('系统没有授予通知权限，提醒可能不会弹出'));
+      await renderNotifyDiagnostics();
+      return false;
+    }
 
     await ensureReminderChannel(notify);
     await maybeAskExactAlarm(options && options.quiet);
     scheduleReminders();
+    await renderNotifyDiagnostics();
     return true;
   }
 
@@ -7506,8 +7792,53 @@
     });
   }
 
+  // 读取存储里的原始 remindBefore：自查面板要看到「存的是什么」，
+  // 而不是只看到内存里规范化后的结果，否则分不清「没存」和「存了但没读出来」。
+  async function readRawRemindMap(storeKey) {
+    const map = {};
+    try {
+      let raw = null;
+      if (storage.status === 'idb') {
+        raw = await idbGet(storeKey);
+      } else if (storage.status === 'local') {
+        const key = storeKey === 'plans' ? LS_PLANS_KEY : LS_ITEMS_KEY;
+        raw = JSON.parse(localStorage.getItem(key) || '[]');
+      } else {
+        raw = storeKey === 'plans' ? storage.memoryPlans : storage.memoryItems;
+      }
+      (raw || []).forEach(function (record) {
+        if (!record || !record.id) return;
+        const has = Object.prototype.hasOwnProperty.call(record, 'remindBefore');
+        map[record.id] = {
+          has: has,
+          value: record.remindBefore,
+          type: has ? typeof record.remindBefore : 'missing'
+        };
+      });
+    } catch (err) { /* 读不到就按未知展示 */ }
+    return map;
+  }
+
+  function rawRemindText(raw) {
+    if (!raw) return isEn() ? 'unknown' : '未知';
+    if (!raw.has) return isEn() ? 'missing key' : '字段不存在';
+    if (raw.value === null) return 'null';
+    if (raw.value === undefined) return 'undefined';
+    return String(raw.value);
+  }
+
+  function rawRemindVerdict(raw, normalized) {
+    if (typeof normalized === 'number') return isEn() ? 'set' : '已设置';
+    if (!raw) return isEn() ? 'unknown' : '未知';
+    if (!raw.has || raw.value === null || raw.value === undefined) {
+      return isEn() ? 'not set (null)' : '未设置（null）';
+    }
+    if (Number(raw.value) === 0) return isEn() ? '0 → treated as not set' : '0 → 按未设置处理';
+    return isEn() ? 'invalid value' : '非法值';
+  }
+
   // 自查面板：把「权限 / 渠道 / 精确闹钟 / 系统里已排程数量 / 最近错误」一次列清楚，
-  // 用户不用猜是哪一环断了。
+  // 并逐条列出「存储原值」与「这一轮的排程结果」，用户不用猜是哪一环断了。
   async function collectNotifyDiagnostics() {
     const L = function (zh, en) { return isEn() ? en : zh; };
     const notify = localNotifyPlugin();
@@ -7520,9 +7851,38 @@
       return L('未询问', 'Not asked');
     };
     rows.push([L('通知权限', 'Notification permission'), statusText(notifyState.status)]);
+    rows.push([L('checkPermissions 原始', 'checkPermissions raw'),
+      (notifyState.lastCheckRaw || L('尚未调用', 'not called yet')) +
+      L('（' + clockTimeText(notifyState.lastCheckAt) + '）', ' (' + clockTimeText(notifyState.lastCheckAt) + ')')]);
+    rows.push([L('requestPermissions 原始', 'requestPermissions raw'),
+      (notifyState.lastRequestRaw || L('尚未调用', 'not called yet')) +
+      L('（' + clockTimeText(notifyState.lastRequestAt) + '，共 ' + notifyState.requestAttempts + ' 次）',
+        ' (' + clockTimeText(notifyState.lastRequestAt) + ', attempts ' + notifyState.requestAttempts + ')')]);
+    if (notifyState.lastRequestError) {
+      rows.push([L('申请失败原因', 'Request error'), notifyState.lastRequestError]);
+    }
+    rows.push([L('通知通道', 'Notification path'),
+      notifyState.webFallback
+        ? L('降级：应用内提示（不会弹系统通知）', 'Fallback: in-app alert only (no system notification)')
+        : (notify ? L('原生系统通知', 'Native system notification') : L('不支持', 'Unsupported'))]);
+    rows.push([L('数据加载', 'Data loaded'),
+      state.loaded
+        ? L('已加载 ' + state.items.length + ' 条条目 / ' + state.plans.length + ' 条计划', 'Loaded ' + state.items.length + ' items / ' + state.plans.length + ' plans')
+        : L('尚未加载完（先不要据此判断）', 'Not loaded yet (do not judge from this)')]);
+    rows.push([L('最近扫描', 'Last scan'),
+      state.reminderScan
+        ? L('扫描 ' + state.reminderScan.items + ' 条条目、' + state.reminderScan.plans + ' 条计划 · 权限 ' + statusText(state.reminderScan.status),
+          'Scanned ' + state.reminderScan.items + ' items, ' + state.reminderScan.plans + ' plans · ' + statusText(state.reminderScan.status))
+        : L('尚未扫描', 'not scanned yet')]);
 
     if (!notify) {
-      rows.push([L('原生插件', 'Native plugin'), L('不可用（网页版）', 'Unavailable (web)')]);
+      rows.push([L('原生插件', 'Native plugin'),
+        notifyState.webFallback
+          ? L('缺失（WebView 降级）', 'Missing (webview fallback)')
+          : L('不可用（网页版）', 'Unavailable (web)')]);
+      if (Array.isArray(state.meta.migrationLog) && state.meta.migrationLog.length) {
+        rows.push([L('旧数据迁移', 'Legacy migration'), state.meta.migrationLog.join('；')]);
+      }
       return rows;
     }
 
@@ -7531,15 +7891,17 @@
       const res = await notify.listChannels();
       const list = (res && res.channels) || [];
       const ch = list.filter(function (c) { return c && c.id === REMIND_CHANNEL_ID; })[0];
-      const legacy = list.filter(function (c) { return c && c.id === REMIND_CHANNEL_LEGACY_ID; })[0];
+      const legacy = list.filter(function (c) {
+        return c && REMIND_CHANNEL_LEGACY_IDS.indexOf(c.id) !== -1;
+      });
       if (ch) {
         state.channelInfo = ch;
         channelText = L('已创建 · 重要性 ', 'Created · importance ') + ch.importance;
-        if (ch.importance < 4) channelText += L('（偏低，可能不弹横幅）', ' (low, may not pop)');
+        if (ch.importance < 5) channelText += L('（不是 5，可能不弹横幅；渠道参数不可改，需要换新 id）', ' (not 5, may not pop; channel settings are immutable, use a new id)');
         channelText += ch.sound ? L(' · 含提示音', ' · sound on') : L(' · 无提示音', ' · no sound');
         channelText += ch.vibration ? L(' · 振动', ' · vibrate') : '';
       }
-      if (legacy) channelText += L(' · 旧渠道仍在（可忽略）', ' · legacy channel still present (harmless)');
+      if (legacy.length) channelText += L(' · 旧渠道仍在：' + legacy.map(function (c) { return c.id; }).join('、'), ' · legacy present: ' + legacy.map(function (c) { return c.id; }).join(', '));
     } catch (err) {
       channelText = state.channelInfo
         ? L('已创建（未回读）· 重要性 ', 'Created (not read back) · importance ') + state.channelInfo.importance
@@ -7579,6 +7941,9 @@
     rows.push([L('本轮记录的排程', 'Recorded this round'), String(recorded) + L(' 条', '')]);
 
     if (state.nativeScheduleError) rows.push([L('最近排程错误', 'Last schedule error'), state.nativeScheduleError]);
+    if (Array.isArray(state.meta.migrationLog) && state.meta.migrationLog.length) {
+      rows.push([L('旧数据迁移', 'Legacy migration'), state.meta.migrationLog.join('；')]);
+    }
     return rows;
   }
 
@@ -7608,6 +7973,66 @@
       return isEn() ? pair[1] : pair[0];
     };
 
+    // ---------- 表一：全部条目 / 计划的存储原值（不按 remindBefore > 0 过滤） ----------
+    const rawItems = await readRawRemindMap('items');
+    const rawPlans = await readRawRemindMap('plans');
+    const allRows = [];
+    state.items.forEach(function (item) {
+      allRows.push({
+        key: String(item.id) + '|' + item.date,
+        kind: item.type === 'event' ? (isEn() ? 'event' : '日程') : (isEn() ? 'todo' : '待办'),
+        title: item.title || '',
+        time: item.time || ((item.recurrence && item.recurrence.time) || (isEn() ? 'all-day' : '未设时间')),
+        raw: rawItems[item.id],
+        normalized: item.remindBefore
+      });
+    });
+    state.plans.forEach(function (plan) {
+      allRows.push({
+        key: String(plan.id) + '|' + (plan.periodStart || ''),
+        kind: isEn() ? 'plan' : '计划',
+        title: plan.title || '',
+        time: plan.time || (isEn() ? 'all-day' : '未设时间'),
+        raw: rawPlans[plan.id],
+        normalized: plan.remindBefore
+      });
+    });
+
+    let rawTableHTML = '<div class="diag-sub">' +
+      esc(isEn() ? 'All entries · stored reminder value' : '全部条目 · 提醒存储原值') + '</div>';
+    if (!state.loaded) {
+      rawTableHTML += '<p class="diag-empty">' +
+        esc(isEn() ? 'Data has not finished loading — wait a moment and refresh, this is not "no reminders".'
+          : '数据尚未加载完，稍等后点「刷新自查」，这不等同于「没有提醒条目」。') + '</p>';
+    } else if (!allRows.length) {
+      rawTableHTML += '<p class="diag-empty">' +
+        esc(isEn() ? 'No entries at all (0 items, 0 plans).' : '当前确实一条条目都没有（0 条条目、0 条计划）。') + '</p>';
+    } else {
+      const rawHead = isEn()
+        ? ['Instance', 'Kind', 'Title', 'Item time', 'Stored value', 'Type', 'Verdict']
+        : ['实例键', '类型', '标题', '条目时间', '存储原值', '类型', '判定'];
+      const withRemind = allRows.filter(function (r) { return typeof r.normalized === 'number'; }).length;
+      rawTableHTML += '<div class="diag-table-wrap"><table class="diag-table diag-raw"><thead><tr>' +
+        rawHead.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
+        '</tr></thead><tbody>' +
+        allRows.map(function (r) {
+          return '<tr class="' + (typeof r.normalized === 'number' ? 'diag-ok' : 'diag-skip') + '">' +
+            '<td class="diag-mono">' + esc(r.key) + '</td>' +
+            '<td>' + esc(r.kind) + '</td>' +
+            '<td>' + esc(r.title) + '</td>' +
+            '<td>' + esc(r.time) + '</td>' +
+            '<td class="diag-mono">' + esc(rawRemindText(r.raw)) + '</td>' +
+            '<td class="diag-mono">' + esc(r.raw ? r.raw.type : (isEn() ? 'unknown' : '未知')) + '</td>' +
+            '<td>' + esc(rawRemindVerdict(r.raw, r.normalized)) + '</td>' +
+            '</tr>';
+        }).join('') +
+        '</tbody></table></div>' +
+        '<p class="diag-empty">' + esc(isEn()
+          ? 'Entries with a reminder: ' + withRemind + ' / ' + allRows.length
+          : '其中已设置提醒：' + withRemind + ' / ' + allRows.length + ' 条') + '</p>';
+    }
+
+    // ---------- 表二：这一轮的排程结果 ----------
     const report = Array.isArray(state.reminderReport) ? state.reminderReport : null;
     let tableHTML = '';
     if (report) {
@@ -7615,10 +8040,12 @@
         ? ['Instance', 'Title', 'Item time', 'Before', 'Fires at', 'Scheduled', 'id', 'Reason']
         : ['实例 keys', '标题', '条目时间', '提前', '触发时间', '是否已排程', '排程 id', '失败原因'];
       if (!report.length) {
-        tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Reminder instances' : '带提醒的实例') + '</div>' +
-          '<p class="diag-empty">' + esc(isEn() ? 'No entry has a reminder yet.' : '当前没有设置提醒的条目。') + '</p>';
+        tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Scheduling result' : '带提醒的实例（排程结果）') + '</div>' +
+          '<p class="diag-empty">' + esc(state.loaded
+            ? (isEn() ? 'No entry has a reminder, so nothing was scheduled.' : '确实没有设置提醒的条目，因此没有可排程的实例。')
+            : (isEn() ? 'Data not loaded yet.' : '数据尚未加载完，还不能下结论。')) + '</p>';
       } else {
-        tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Reminder instances' : '带提醒的实例') + '</div>' +
+        tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Scheduling result' : '带提醒的实例（排程结果）') + '</div>' +
           '<div class="diag-table-wrap"><table class="diag-table"><thead><tr>' +
           tHead.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
           '</tr></thead><tbody>' +
@@ -7643,7 +8070,7 @@
         return '<div class="diag-row"><span class="diag-key">' + esc(r[0]) + '</span>' +
           '<span class="diag-value">' + esc(r[1]) + '</span></div>';
       }).join('') +
-      '<p class="diag-hint">' + esc(hint) + '</p>' + tableHTML;
+      '<p class="diag-hint">' + esc(hint) + '</p>' + rawTableHTML + tableHTML;
     box.hidden = false;
   }
 
@@ -8482,8 +8909,9 @@
     $('#permBackdrop').addEventListener('click', finishPermissionIntro);
     $('#permLater').addEventListener('click', finishPermissionIntro);
     $('#permAllow').addEventListener('click', function () { askNotifyPermission(); });
+    $('#permRequest').addEventListener('click', function () { askNotifyPermission(); });
     $('#permRecheck').addEventListener('click', function () { refreshAllPermissionStates(); });
-    $('#notifyDiagRefresh').addEventListener('click', function () { renderNotifyDiagnostics(); });
+    $('#notifyDiagRefresh').addEventListener('click', function () { refreshAllPermissionStates(); });
 
     $('#themeToggle').addEventListener('change', function () {
       state.meta.theme = $('#themeToggle').checked ? 'dark' : 'light';
@@ -8719,11 +9147,11 @@
 
   // ==================== 语言 ====================
 
-  const LANG_MIRROR_KEY = 'light-schedule.lang';
+  const LANG_MIRROR_KEY = 'aeroplan.lang';
 
   function resolveInitialLanguage() {
     try {
-      const saved = localStorage.getItem(LANG_MIRROR_KEY);
+      const saved = localStorage.getItem(LANG_MIRROR_KEY) || localStorage.getItem(LEGACY_LS_KEYS.lang);
       if (saved === 'zh' || saved === 'en') return saved;
     } catch (err) { /* 忽略 */ }
     const nav = (navigator.language || '').toLowerCase();
@@ -9386,6 +9814,11 @@
   function openRegionSheet() {
     const data = regionData();
     if (!data.length) return;
+    // 先收起软键盘：浮层贴在底部，键盘还在时会被顶出可视区
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+    document.body.classList.add('region-open');
     const draft = state.diaryDraft;
     const loc = draft && draft.location ? draft.location : null;
     let pi = 0;
@@ -9414,6 +9847,7 @@
   function closeRegionSheet() {
     if (!regionPicker.open) return;
     regionPicker.open = false;
+    document.body.classList.remove('region-open');
     $('#regionSheet').classList.remove('open');
     $('#regionBackdrop').classList.remove('open');
     setTimeout(function () {
@@ -10371,7 +10805,13 @@
 
     await detectStorage();
     updateStorageBanner();
+    // 旧代号（light-schedule）的数据先迁移到新库/新键，再读取，避免「打开就空了」
+    await migrateLegacyStore();
     await loadAll();
+    if (state.migrationLog.length) {
+      state.meta.migrationLog = state.migrationLog.slice();
+      try { await persistMeta(); } catch (err) { /* 迁移日志写不进去不影响数据 */ }
+    }
 
     // 已保存过语言（在数据里）就以后者为准
     if (state.meta.lang && window.I18N && state.meta.lang !== window.I18N.lang) {
@@ -10403,7 +10843,7 @@
     });
 
     // 渠道必须在第一次排程之前建好：Android 8+ 的通知按渠道投递，缺渠道会被静默丢弃。
-    // 先删掉旧 id 的渠道（参数不可改，重建同 id 无效），再幂等创建 v2 渠道。
+    // 先删掉旧 id 的渠道（参数不可改，重建同 id 无效），再幂等创建当前渠道。
     const bootNotify = localNotifyPlugin();
     if (bootNotify) {
       await dropLegacyReminderChannel(bootNotify);
@@ -10411,6 +10851,17 @@
       await refreshExactAlarmStatus(bootNotify);
     }
     await refreshNotifyState();
+
+    // 首启自动申请一次系统通知权限：Activity 就绪后再调用，避免「从未弹过授权」。
+    // 只尝试一次，失败或用户拒绝后不再打扰；「权限管理 → 申请通知权限」是可靠的手动兜底。
+    if (isNativeApp() && notifyState.status !== 'granted' && notifyState.status !== 'denied' &&
+      state.meta.notifyAutoAsked !== true) {
+      state.meta.notifyAutoAsked = true;
+      try { await persistMeta(); } catch (err) { /* 标记写不进去也不影响本次申请 */ }
+      setTimeout(function () {
+        if (notifyState.status !== 'granted') askNotifyPermission();
+      }, 900);
+    }
     // 开屏结束后的顺序：协议确认 → 通知授权引导 → 主界面
     onSplashDone(function () { maybeShowAgreement(); });
   }

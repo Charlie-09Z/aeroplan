@@ -542,7 +542,7 @@
     '联系方式': 'Contact',
     '氢计划是一个纯本地的日程与行程工具：日历、条目、计划、行程表和天气。没有账号，也没有服务端。': 'AeroPlan is a fully local schedule and planning tool: calendar, items, plans, timetable and weather. There are no accounts and no server.',
     '提醒由系统本地通知调度，应用关闭或锁屏后仍会触发。': 'Reminders are scheduled through system local notifications and still fire when the app is closed or the screen is locked.',
-    '条目、计划、分类、设置和同意记录保存在本机：优先 IndexedDB（light-schedule-db），不可用时退回 localStorage。': 'Items, plans, categories, settings and the consent record stay on this device: IndexedDB (light-schedule-db) is preferred, with localStorage as a fallback.',
+    '条目、计划、分类、设置和同意记录保存在本机：优先 IndexedDB（aeroplan-db），不可用时退回 localStorage。': 'Items, plans, categories, settings and the consent record stay on this device: IndexedDB (aeroplan-db) is preferred, with localStorage as a fallback.',
     '没有服务器，我们不会持有你的数据副本。': 'There is no server, so we hold no copy of your data.',
     '卸载应用或清除应用数据会删除全部本地内容。换机或清理前请先导出备份。': 'Uninstalling the app or clearing its data removes all local content. Export a backup before switching devices or cleaning up.',
     '只有天气与地址搜索会联网。它们发出的是搜索关键词和所选地点的坐标，收件方只有下列服务。': 'Only weather and address search go online. They send search keywords and the coordinates of the place you picked, and only to the services listed below.',
@@ -740,7 +740,17 @@
     '日记里的图片与文件只存进本应用自己的 IndexedDB，不写入相册、不申请存储权限、不联网、不做云端同步。IndexedDB 不可用时，日记文字仍可保存，附件功能会提示「当前环境不支持附件」。': 'Images and files in the journal go only into this app\'s own IndexedDB — not to Photos, with no storage permission, no network, and no cloud sync. When IndexedDB is unavailable, journal text still saves and attachments show "not supported here".',
     '备份是未加密的 JSON，含条目、计划、分类、日记、偏好与同意记录。': 'A backup is an unencrypted JSON file containing items, plans, categories, journal entries, preferences and the consent record.',
     '默认备份不含附件本体，只有文件名、大小与类型；需要连图片一起带走时，在「备份数据」弹窗里选择「包含附件」，体积可能很大，导出前会估算并再次确认。': 'By default a backup has no attachment bodies — only names, sizes and types. To take the images along, choose "Include attachments" in the Backup dialog; it can be large, and the size is estimated and confirmed before export.',
-    '备份文件中的日记为明文，含附件时体积很大，请妥善保管。': 'Journal entries in a backup are plain text, and the file gets large with attachments — please keep it safe.'
+    '备份文件中的日记为明文，含附件时体积很大，请妥善保管。': 'Journal entries in a backup are plain text, and the file gets large with attachments — please keep it safe.',
+
+    // ---------- 通知权限（含降级说明） ----------
+    '申请通知权限': 'Request notification permission',
+    '重新申请（当前降级）': 'Request again (fallback)',
+    '当前 WebView 拿不到原生通知插件：系统不会弹授权，提醒只会显示为应用内提示。': 'This WebView can\'t reach the native notification plugin, so no system prompt appears and reminders can only show in-app.',
+    '当前构建没有原生通知插件，只能应用内提示': 'This build has no native notification plugin; reminders can only show in-app',
+    '系统没有授予通知权限': 'Notification permission was not granted',
+    '系统没有授予通知权限，提醒可能不会弹出': 'Notification permission was not granted, so reminders may not appear',
+    '保存失败：未能写入本机，提醒不会生效': 'Save failed: nothing was written to this device, so reminders won\'t fire',
+    '这是 AeroPlan 的新安装包（com.aeroplan.app）。如需保留旧数据，请先在旧版「设置 → 备份数据」导出，再在本版「恢复数据」导入；新旧包名不同，不能直接覆盖升级。': 'This is the new AeroPlan package (com.aeroplan.app). To keep old data, export a backup from the old version (Settings → Backup data) and restore it here; the package name changed, so it cannot update the old app in place.'
   };
 
   var ATTRS = ['placeholder', 'aria-label', 'title', 'alt'];

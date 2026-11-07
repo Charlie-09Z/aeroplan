@@ -17,6 +17,19 @@ if (!fs.existsSync(androidDir)) {
   process.exit(1);
 }
 
+// ---------- 0. 应用标识（包名） ----------
+// 包名以 capacitor.config.json 为唯一来源：改名会让它变成「另一个应用」，
+// 老版本无法覆盖升级、数据也不继承，所以这里同时强制写入 gradle 的 namespace 与 applicationId，
+// 避免模板残留旧包名导致 MainActivity 包路径和清单对不上。
+const capConfig = JSON.parse(fs.readFileSync(path.join(root, 'capacitor.config.json'), 'utf8'));
+const APP_ID = String(capConfig.appId || '');
+if (!/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(APP_ID)) {
+  console.error('capacitor.config.json 里的 appId 不合法：' + APP_ID);
+  process.exit(1);
+}
+const APP_ID_PATH = APP_ID.split('.');
+console.log('应用包名（applicationId / namespace）：' + APP_ID);
+
 // ---------- 1. 版本号 ----------
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const VERSION_NAME = String(pkg.version || '0.0.1');
@@ -50,6 +63,18 @@ if (!fs.existsSync(gradlePath)) {
 }
 
 let gradle = fs.readFileSync(gradlePath, 'utf8');
+
+// namespace / applicationId 必须和 appId 一致，否则清单里的 Activity 全限定名会指向不存在的类
+if (/namespace\s+"[^"]*"/.test(gradle)) {
+  gradle = gradle.replace(/namespace\s+"[^"]*"/, 'namespace "' + APP_ID + '"');
+} else {
+  console.error('警告：build.gradle 里没有 namespace，跳过包名同步');
+}
+if (/applicationId\s+"[^"]*"/.test(gradle)) {
+  gradle = gradle.replace(/applicationId\s+"[^"]*"/, 'applicationId "' + APP_ID + '"');
+} else {
+  gradle = gradle.replace(/(defaultConfig\s*\{)/, '$1\n        applicationId "' + APP_ID + '"');
+}
 
 const beforeVersion = gradle.match(/versionName\s+"[^"]*"/);
 gradle = gradle.replace(/versionCode\s+\d+/, 'versionCode ' + VERSION_CODE);
@@ -115,7 +140,7 @@ fs.writeFileSync(proguardPath, [
   '-keepclassmembers class * {',
   '    @android.webkit.JavascriptInterface <methods>;',
   '}',
-  '-keep class com.qingricheng.app.** { *; }',
+  '-keep class ' + APP_ID + '.** { *; }',
   '-dontwarn com.getcapacitor.**',
   ''
 ].join('\n'));
@@ -129,7 +154,7 @@ const KEEP_RESOURCES = [
   '@drawable/splash',
   '@mipmap/ic_launcher',
   '@mipmap/ic_launcher_round',
-  '@raw/qingjihua_notify'
+  '@raw/aeroplan_notify'
 ];
 fs.writeFileSync(path.join(rawResDir, 'keep.xml'), [
   '<?xml version="1.0" encoding="utf-8"?>',
@@ -141,7 +166,7 @@ console.log('已写入 keep.xml，防止压缩误删：' + KEEP_RESOURCES.join('
 
 // Android 8+ 的通知声音由「渠道」决定，且渠道只能引用 res/raw 里的音频。
 // 这里用固定算法生成 0.6 秒的双音提示，避免引入外部音频与网络资源。
-const noticeSoundPath = path.join(rawResDir, 'qingjihua_notify.wav');
+const noticeSoundPath = path.join(rawResDir, 'aeroplan_notify.wav');
 const SAMPLE_RATE = 44100;
 const SECONDS = 0.6;
 const totalSamples = Math.floor(SAMPLE_RATE * SECONDS);
@@ -172,7 +197,7 @@ wavHeader.writeUInt16LE(16, 34);
 wavHeader.write('data', 36, 4, 'ascii');
 wavHeader.writeUInt32LE(pcm.length, 40);
 fs.writeFileSync(noticeSoundPath, Buffer.concat([wavHeader, pcm]));
-console.log('已生成通知提示音：res/raw/qingjihua_notify.wav');
+console.log('已生成通知提示音：res/raw/aeroplan_notify.wav');
 
 fs.writeFileSync(gradlePath, gradle);
 console.log('已写入' + (HAS_SIGNING ? '签名配置' : '（无签名）') + '与版本号：versionName ' + VERSION_NAME +
@@ -200,6 +225,11 @@ if (fs.existsSync(stringsPath)) {
 const manifestPath = path.join(androidDir, 'app', 'src', 'main', 'AndroidManifest.xml');
 if (fs.existsSync(manifestPath)) {
   let manifest = fs.readFileSync(manifestPath, 'utf8');
+  // 模板里可能残留旧包名的全限定 Activity / provider，统一改成当前 appId
+  manifest = manifest.replace(/\bcom\.qingricheng\.app\b/g, APP_ID);
+  manifest = manifest.replace(/\bcom\.qingjihua\.app\b/g, APP_ID);
+  // <manifest package="..."> 必须和 applicationId 一致，否则相对类名会解析到别处
+  manifest = manifest.replace(/(<manifest\b[^>]*\spackage=")[^"]*(")/, '$1' + APP_ID + '$2');
   const needs = [
     {
       name: 'android.permission.INTERNET',
@@ -265,6 +295,51 @@ if (fs.existsSync(manifestPath)) {
   console.log('没有找到 AndroidManifest.xml，跳过权限写入');
 }
 
+// ---------- 3.3 构建期硬断言：权限 / SDK / 插件注册 ----------
+// 这些是「通知不响」的常见断点，宁可构建失败，也不要产出「看起来能装但永远不弹」的包。
+const variablesPath = path.join(androidDir, 'variables.gradle');
+let targetSdk = 0;
+if (fs.existsSync(variablesPath)) {
+  const variables = fs.readFileSync(variablesPath, 'utf8');
+  const m = variables.match(/targetSdkVersion\s*=\s*(\d+)/);
+  if (m) targetSdk = Number(m[1]);
+}
+console.log('targetSdkVersion = ' + (targetSdk || '未知'));
+if (!targetSdk || targetSdk < 33) {
+  console.error('构建断言失败：targetSdkVersion 必须 >= 33（当前 ' + (targetSdk || '未知') + '）。' +
+    '低于 33 时 Android 13+ 的 POST_NOTIFICATIONS 行为不一致，运行时授权链路无法保证。');
+  process.exit(1);
+}
+
+const appManifestFinal = fs.readFileSync(manifestPath, 'utf8');
+if (!/android\.permission\.POST_NOTIFICATIONS/.test(appManifestFinal)) {
+  console.error('构建断言失败：AndroidManifest.xml 缺少 POST_NOTIFICATIONS');
+  process.exit(1);
+}
+
+const pluginsJsonPath = path.join(androidDir, 'app', 'src', 'main', 'assets', 'capacitor.plugins.json');
+if (!fs.existsSync(pluginsJsonPath)) {
+  // 这一步在 npx cap sync 之前，文件可能还没生成；硬断言放在构建末端的产物检查里
+  console.warn('警告：还没有 capacitor.plugins.json（cap sync 之后会生成并在产物检查里硬校验）');
+} else {
+  const pluginsJson = fs.readFileSync(pluginsJsonPath, 'utf8');
+  if (!/LocalNotifications/.test(pluginsJson)) {
+    console.warn('警告：capacitor.plugins.json 里暂时没有 LocalNotifications，' +
+      '若 cap sync 之后仍然缺失，产物检查会直接失败');
+  } else {
+    console.log('插件注册校验通过：capacitor.plugins.json 含 LocalNotifications');
+  }
+}
+
+// 提示音与 keep.xml 的实际文件名必须一致，否则渠道建好后也没有声音
+if (!fs.existsSync(noticeSoundPath)) {
+  console.error('构建断言失败：缺少提示音资源 ' + noticeSoundPath);
+  process.exit(1);
+}
+const legacySound = path.join(rawResDir, 'qingjihua_notify.wav');
+if (fs.existsSync(legacySound)) fs.rmSync(legacySound, { force: true });
+console.log('资源校验通过：res/raw/aeroplan_notify.wav 存在，旧命名已清理');
+
 // ---------- 3.2 状态栏：浅色主题白底深色图标，深色主题深底浅色图标 ----------
 // 运行时会通过 @capacitor/status-bar 按应用主题再设一次；这里写原生主题是为了
 // 首帧（JS 还没执行时）不出现系统默认的黑色状态栏。
@@ -326,11 +401,41 @@ if (fs.existsSync(stylesPath)) {
 }
 
 // ---------- 3.1 关闭 WebView 调试 ----------
-const mainActivityPath = path.join(
-  androidDir, 'app', 'src', 'main', 'java', 'com', 'qingricheng', 'app', 'MainActivity.java'
-);
-if (fs.existsSync(mainActivityPath)) {
+// 包名变更后 MainActivity 的目录与 package 声明必须一起移动，否则编译不过。
+const javaRoot = path.join(androidDir, 'app', 'src', 'main', 'java');
+const expectedJavaDir = path.join.apply(path, [javaRoot].concat(APP_ID_PATH));
+const expectedMainActivity = path.join(expectedJavaDir, 'MainActivity.java');
+
+function findMainActivity() {
+  if (fs.existsSync(expectedMainActivity)) return expectedMainActivity;
+  const stack = [javaRoot];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (err) { continue; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (entry.name === 'MainActivity.java') return full;
+    }
+  }
+  return '';
+}
+
+let mainActivityPath = findMainActivity();
+if (mainActivityPath && mainActivityPath !== expectedMainActivity) {
+  fs.mkdirSync(expectedJavaDir, { recursive: true });
+  let moved = fs.readFileSync(mainActivityPath, 'utf8');
+  moved = moved.replace(/^package\s+[A-Za-z0-9_.]+;/m, 'package ' + APP_ID + ';');
+  fs.writeFileSync(expectedMainActivity, moved);
+  fs.rmSync(mainActivityPath, { force: true });
+  mainActivityPath = expectedMainActivity;
+  console.log('已把 MainActivity 移动到新包路径：' + APP_ID);
+}
+if (mainActivityPath) {
   let java = fs.readFileSync(mainActivityPath, 'utf8');
+  // 包声明兜底：模板残留旧包名时直接改成本次构建的 appId
+  java = java.replace(/^package\s+[A-Za-z0-9_.]+;/m, 'package ' + APP_ID + ';');
   if (!/setWebContentsDebuggingEnabled/.test(java)) {
     if (!/import android\.os\.Bundle;/.test(java)) {
       java = java.replace(/(import com\.getcapacitor\.BridgeActivity;)/,
