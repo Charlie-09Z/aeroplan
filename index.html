@@ -7,10 +7,10 @@
 
   <meta name="description" content="氢计划（AeroPlan）：日历、日程、待办、行程表与周月年计划，数据只存在本机，无需账号。">
   <title>氢计划</title>
-  <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="icon" href="./icons/icon-192.png">
-  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
-  <link rel="stylesheet" href="./styles.css?v=42">
+  <link rel="manifest" href="./manifest.webmanifest?v=1.112">
+  <link rel="icon" href="./icons/icon-192.png?v=1.112">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png?v=1.112">
+  <link rel="stylesheet" href="./styles.css?v=1.112">
 </head>
 <body>
   <div class="phone">
@@ -39,13 +39,9 @@
         </div>
         <div class="topbar-right">
           <button class="today-btn" id="todayBtn" type="button">今天</button>
-          <button class="icon-btn" id="settingsBtn" type="button" aria-label="设置">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 6.5h9M17.5 6.5H20M4 12h4.5M12.5 12H20M4 17.5h9M17.5 17.5H20"/>
-              <circle cx="15" cy="6.5" r="2.2"/>
-              <circle cx="10" cy="12" r="2.2"/>
-              <circle cx="15" cy="17.5" r="2.2"/>
-            </svg>
+          <button class="nav-btn theme-btn" id="themeBtn" type="button" aria-label="切换到深色模式">
+            <svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M5.6 18.4l-1.4 1.4M19.8 5.6l-1.4 1.4"/></svg>
+            <svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.2A8.4 8.4 0 1 1 9 4.1a6.6 6.6 0 0 0 11.2 11.1z"/></svg>
           </button>
         </div>
       </header>
@@ -57,6 +53,7 @@
 
       <div class="batch-bar" id="batchBar" hidden>
         <span class="batch-count" id="batchCount">已选 0 项</span>
+        <button class="batch-btn" id="batchAll" type="button">全选</button>
         <button class="batch-btn" id="batchCancel" type="button">取消</button>
         <button class="batch-btn danger" id="batchDelete" type="button" disabled>删除</button>
       </div>
@@ -97,21 +94,72 @@
             <p class="empty-title">新的一天，从计划开始</p>
           </div>
           <p class="cal-tip" id="calTip">点任意日期，查看当天按小时排列的安排。</p>
+          <button class="cal-more-row" id="agendaEntryBtn" type="button">
+            <span class="cal-more-main">全部安排</span>
+            <span class="cal-more-sub">历史与未来，连续往下看</span>
+            <svg class="cal-more-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>
+          </button>
         </section>
 
-        <section class="view" id="viewAgenda" hidden>
-          <div class="filter-bar" id="agendaFilterBar" hidden></div>
-          <div class="empty-state" id="agendaEmpty" hidden>
-            <span class="empty-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <rect x="3.5" y="4.5" width="17" height="16" rx="4"/>
-                <path d="M8 2.8v3.4M16 2.8v3.4M7.4 10.6h9.2M8.4 14.6h4.2"/>
-              </svg>
-            </span>
-            <p class="empty-title">今天还没有安排</p>
-            <p class="empty-sub">想到什么就先记下来，之后再调整。</p>
-          </div>
-          <div id="agendaList"></div>
+        <section class="view profile-view" id="viewProfile" hidden>
+          <section class="setting-group">
+            <h3>外观</h3>
+            <button class="row-btn" id="cardStyleEntryBtn" type="button">
+              <span>卡片样式</span>
+              <span class="loc-value" id="cardStyleValue">和纸</span>
+              <span class="row-arrow">›</span>
+            </button>
+            <button class="row-btn" id="fontEntryBtn" type="button">
+              <span>字体</span>
+              <span class="loc-value" id="fontValue">默认字体</span>
+              <span class="row-arrow">›</span>
+            </button>
+          </section>
+
+          <section class="setting-group">
+            <h3>个性化</h3>
+            <div class="setting-row cal-card-row">
+              <span>日历卡片</span>
+              <div class="seg cal-card-seg" id="calendarCardSeg" role="group" aria-label="日历卡片内容">
+                <button class="seg-btn" type="button" data-cal-card="almanac" data-no-i18n aria-pressed="false">黄历</button>
+                <button class="seg-btn" type="button" data-cal-card="zodiac" data-no-i18n aria-pressed="false">星座</button>
+                <button class="seg-btn" type="button" data-cal-card="off" data-no-i18n aria-pressed="false">关闭</button>
+              </div>
+            </div>
+            <div class="setting-row zodiac-pick-row" id="zodiacPickRow" hidden>
+              <span>选择星座</span>
+              <button class="zodiac-entry" id="zodiacOpen" type="button" aria-label="选择星座">
+                <span class="ze-value" id="zodiacCurrent"></span>
+                <span class="row-arrow" aria-hidden="true">›</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="setting-group">
+            <h3>标签管理</h3>
+            <button class="row-btn" id="profileTripTagsBtn" type="button">
+              <span>分类标签</span>
+              <span class="row-arrow">›</span>
+            </button>
+            <button class="row-btn" id="profileMoodTagsBtn" type="button">
+              <span>情绪标签</span>
+              <span class="row-arrow">›</span>
+            </button>
+          </section>
+
+          <section class="setting-group">
+            <h3>管理</h3>
+            <button class="row-btn" id="profileCountdownBtn" type="button">
+              <span>纪念日</span>
+              <span class="row-arrow">›</span>
+            </button>
+            <button class="row-btn" id="profileSettingsBtn" type="button">
+              <span>设置</span>
+              <span class="row-arrow">›</span>
+            </button>
+          </section>
+
+          <p class="profile-version" id="profileVersion">V1.1.9</p>
         </section>
 
         <section class="view" id="viewPlan" hidden>
@@ -150,8 +198,13 @@
             </div>
           </div>
 
+          <section class="cd-strip diary-cd" id="countdownStrip" hidden>
+            <div class="cd-cards" id="countdownCards"></div>
+          </section>
+
           <div class="batch-bar diary-batch-bar" id="diaryManageBar" hidden>
             <span class="batch-count" id="diaryManageCount">已选 0 篇</span>
+            <button class="batch-btn" id="diaryManageAll" type="button">全选</button>
             <button class="batch-btn" id="diaryManageCancel" type="button">取消</button>
             <button class="batch-btn danger" id="diaryManageDelete" type="button" disabled>删除</button>
           </div>
@@ -179,12 +232,12 @@
           </svg>
           <span>日历</span>
         </button>
-        <button class="tab" type="button" data-view="agenda">
+        <button class="tab" type="button" data-view="plan">
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="6" cy="7" r="1.4"/>
-            <path d="M10 7h10M6 12.5h1.4M10 12.5h10M6 18h1.4M10 18h8"/>
+            <path d="M5 4.8h14v14.4H5z"/>
+            <path d="M8.4 9.2h7.2M8.4 12.4h7.2M8.4 15.6h4.4"/>
           </svg>
-          <span>议程</span>
+          <span>计划</span>
         </button>
         <button class="tab" type="button" data-view="schedule">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -193,13 +246,6 @@
           </svg>
           <span>行程表</span>
         </button>
-        <button class="tab" type="button" data-view="plan">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="8"/>
-            <path d="M12 12V7.4M12 12l3.4 2.6"/>
-          </svg>
-          <span>计划</span>
-        </button>
         <button class="tab" type="button" data-view="diary">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M5.2 4.8h9.1A2.5 2.5 0 0 1 16.8 7.3v12.4H7.7a2.5 2.5 0 0 1-2.5-2.5z"/>
@@ -207,6 +253,14 @@
             <path d="M8.6 8.7h5M8.6 12.1h5"/>
           </svg>
           <span>日记</span>
+        </button>
+        <button class="tab tab-more" type="button" data-view="profile">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6" cy="12" r="2"/>
+            <circle cx="12" cy="12" r="2"/>
+            <circle cx="18" cy="12" r="2"/>
+          </svg>
+          <span>更多</span>
         </button>
       </nav>
 
@@ -245,10 +299,6 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12h3.9"/></svg>
               <span class="chip-label">今天 09:00</span>
             </button>
-            <button class="soft-chip" id="remindChip" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16.4H6l1.3-2V10a4.7 4.7 0 0 1 9.4 0v4.4Z"/><path d="M10.6 18.9a1.8 1.8 0 0 0 2.8 0"/></svg>
-              <span class="chip-label">提醒</span>
-            </button>
             <button class="soft-chip" id="repeatChip" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.2 8.9H8.4a3 3 0 0 0-3 3v.6"/><path d="m14.8 6.5 2.4 2.4-2.4 2.4"/><path d="M6.8 15.1h8.8a3 3 0 0 0 3-3v-.6"/><path d="m9.2 17.5-2.4-2.4 2.4-2.4"/></svg>
               <span class="chip-label">重复</span>
@@ -264,13 +314,6 @@
           </div>
 
           <div class="chip-flow cat-chip-flow" id="categoryChips"></div>
-
-          <div class="chip-editor" id="remindEditor" hidden>
-            <input class="inline-number" id="remindMinutes" type="number" min="1" max="10080" step="1" inputmode="numeric" placeholder="提前多少分钟">
-            <span class="chip-editor-unit">分钟前</span>
-            <button class="chip-editor-ok" id="remindApply" type="button">确定</button>
-            <button class="chip-editor-clear" id="remindClear" type="button">不提醒</button>
-          </div>
 
           <input type="checkbox" id="priorityInput" hidden>
         </div>
@@ -344,16 +387,50 @@
 
           <input class="inline-title" id="planTitle" type="text" maxlength="80" placeholder="想完成什么？" autocomplete="off" enterkeyhint="done">
 
+          <div class="plan-target-row">
+            <div class="plan-target-text">
+              <span class="plan-target-label">目标次数</span>
+              <span class="plan-target-hint">每点一次记一次；填 1 就是一次性计划</span>
+            </div>
+            <div class="stepper">
+              <button class="stepper-btn" type="button" data-plan-step="-1" aria-label="减少目标次数">−</button>
+              <input class="stepper-input" id="planTarget" type="number" min="1" max="999" step="1" value="1" inputmode="numeric" aria-label="目标次数">
+              <button class="stepper-btn" type="button" data-plan-step="1" aria-label="增加目标次数">＋</button>
+            </div>
+          </div>
+
+          <div class="plan-style-row">
+            <span class="plan-style-label">进度视觉</span>
+            <div class="plan-style-opts" id="planStyleOpts" role="group" aria-label="进度视觉">
+              <button class="plan-style-opt active" type="button" data-plan-style="bar" aria-pressed="true">
+                <span class="pso-preview pso-bar"><i></i></span>
+                <span class="pso-name">进度条</span>
+              </button>
+              <button class="plan-style-opt" type="button" data-plan-style="battery" aria-pressed="false">
+                <span class="pso-preview pso-cells"><i></i><i></i><i></i><i></i></span>
+                <span class="pso-name">能量格</span>
+              </button>
+              <button class="plan-style-opt" type="button" data-plan-style="ring" aria-pressed="false">
+                <span class="pso-preview pso-ring"><i></i></span>
+                <span class="pso-name">环形</span>
+              </button>
+              <button class="plan-style-opt" type="button" data-plan-style="percent" aria-pressed="false">
+                <span class="pso-preview pso-pct">50%</span>
+                <span class="pso-name">百分数</span>
+              </button>
+              <button class="plan-style-opt" type="button" data-plan-style="moon" aria-pressed="false">
+                <span class="pso-preview pso-moon"><i></i></span>
+                <span class="pso-name">月相</span>
+              </button>
+            </div>
+          </div>
+
           <textarea class="inline-note" id="planNote" rows="1" maxlength="500" placeholder="备注（可选）"></textarea>
 
           <div class="chip-flow">
             <button class="soft-chip" id="planDateChip" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12h3.9"/></svg>
               <span class="chip-label">今天</span>
-            </button>
-            <button class="soft-chip" id="planRemindChip" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16.4H6l1.3-2V10a4.7 4.7 0 0 1 9.4 0v4.4Z"/><path d="M10.6 18.9a1.8 1.8 0 0 0 2.8 0"/></svg>
-              <span class="chip-label">提醒</span>
             </button>
             <button class="soft-chip" id="planPriorityChip" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 20.2V4.2"/><path d="M6.6 4.9h8.8l-1.6 3.1 1.6 3.1H6.6"/></svg>
@@ -366,13 +443,6 @@
           </div>
 
           <div class="chip-flow cat-chip-flow" id="planCategoryChips"></div>
-
-          <div class="chip-editor" id="planRemindEditor" hidden>
-            <input class="inline-number" id="planRemindInput" type="number" min="1" max="10080" step="1" inputmode="numeric" placeholder="提前多少分钟">
-            <span class="chip-editor-unit">分钟前</span>
-            <button class="chip-editor-ok" id="planRemindApply" type="button">确定</button>
-            <button class="chip-editor-clear" id="planRemindClear" type="button">不提醒</button>
-          </div>
         </div>
 
         <div class="sheet-actions">
@@ -439,25 +509,26 @@
         </div>
       </div>
 
-      <!-- 日记位置：内置省市两级滚轮（完全离线） -->
+      <!-- 日记位置：内置省市区县滚轮（完全离线） -->
       <div class="year-backdrop" id="regionBackdrop" hidden></div>
       <div class="year-sheet region-sheet" id="regionSheet" role="dialog" aria-modal="true" aria-labelledby="regionTitle" hidden>
         <div class="sheet-grabber"></div>
         <div class="sheet-head">
-          <h2 id="regionTitle">选择省市</h2>
+          <h2 id="regionTitle">选择位置</h2>
           <button class="icon-btn" id="regionClose" type="button" aria-label="关闭">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
           </button>
         </div>
         <div class="jump-wheels">
-          <div class="wheel-caption" aria-hidden="true"><span>省</span><span>市</span></div>
+          <div class="wheel-caption" aria-hidden="true"><span>省</span><span>市</span><span>区/县</span></div>
           <div class="wheel-row region-wheels">
             <div class="wheel" id="regionProvince" role="listbox" aria-label="省份"></div>
             <div class="wheel" id="regionCity" role="listbox" aria-label="城市"></div>
+            <div class="wheel" id="regionDistrict" role="listbox" aria-label="区/县"></div>
             <div class="wheel-band" aria-hidden="true"></div>
           </div>
         </div>
-        <p class="region-note">省市列表来自应用内置，完全离线，不联网、不定位、不上传。</p>
+        <p class="region-note">省市区县列表来自应用内置，完全离线，不联网、不定位、不上传。</p>
         <div class="sheet-actions">
           <button class="primary-btn" id="regionDone" type="button">确定</button>
         </div>
@@ -472,9 +543,30 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
           </button>
         </div>
-        <input class="city-search" id="citySearch" type="search" autocomplete="off" placeholder="输入城市、区县或地点，例如 杭州 / 西湖 / 剑桥大学">
-        <div class="city-results" id="cityResults"></div>
-        <p class="city-hint">城市或区县由你搜索选择，只用于查询天气并保存在本机；应用不读取设备定位。</p>
+        <div class="jump-wheels city-wheels">
+          <div class="wheel-caption" aria-hidden="true"><span>省</span><span>市</span><span>区/县</span></div>
+          <div class="wheel-row">
+            <div class="wheel" id="cityProvince" role="listbox" aria-label="省份"></div>
+            <div class="wheel" id="cityCity" role="listbox" aria-label="城市"></div>
+            <div class="wheel" id="cityDistrict" role="listbox" aria-label="区/县"></div>
+            <div class="wheel-band" aria-hidden="true"></div>
+          </div>
+        </div>
+        <div class="sheet-actions city-wheel-actions">
+          <button class="primary-btn" id="cityWheelDone" type="button">确定</button>
+        </div>
+        <div class="city-search-fold">
+          <button class="city-search-toggle" id="citySearchToggle" type="button" aria-expanded="false" aria-controls="citySearchBody">
+            <svg class="city-search-toggle-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15 19 19"/></svg>
+            <span>搜索其他地点</span>
+            <svg class="city-search-toggle-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10l4 4 4-4"/></svg>
+          </button>
+          <div class="city-search-body" id="citySearchBody" hidden>
+            <input class="city-search" id="citySearch" type="search" autocomplete="off" placeholder="输入城市、区县或地点，例如 杭州 / 西湖 / 剑桥大学">
+            <div class="city-results" id="cityResults"></div>
+            <p class="city-hint">滚轮列表来自应用内置；搜索可查更细的地点。选择只保存在本机，应用不读取设备定位。</p>
+          </div>
+        </div>
       </div>
 
       <div class="sheet-backdrop address-backdrop" id="addressBackdrop" hidden></div>
@@ -492,8 +584,8 @@
         <p class="city-hint">地址由你搜索选择，只随这条记录保存在本机，可随备份导出和恢复，不会上传。</p>
       </div>
 
-      <div class="detail-backdrop" id="detailBackdrop" hidden></div>
-      <div class="detail-sheet" id="detailSheet" role="dialog" aria-modal="true" aria-labelledby="detailTitle" hidden>
+      <div class="detail-backdrop above-page" id="detailBackdrop" hidden></div>
+      <div class="detail-sheet above-page" id="detailSheet" role="dialog" aria-modal="true" aria-labelledby="detailTitle" hidden>
         <div class="sheet-grabber"></div>
         <div class="sheet-head">
           <h2 id="detailTitle">条目详情</h2>
@@ -537,6 +629,7 @@
               <button class="de-loc-clear" id="deLocClear" type="button" hidden>清除</button>
             </div>
             <p class="de-loc-summary" id="deLocSummary"></p>
+            <div class="de-weather" id="deWeather" hidden></div>
             <input class="de-loc-text" id="deLocText" type="text" maxlength="60" autocomplete="off" placeholder="具体位置（可选），如街道、店铺、楼栋">
           </div>
           <div class="de-attach">
@@ -635,12 +728,6 @@
         <button type="button" class="danger" data-cat-pop="del">删除</button>
       </div>
 
-      <div class="reminder-alert" id="reminderAlert" hidden>
-        <i class="ra-dot" aria-hidden="true"></i>
-        <div class="ra-main"><b id="raTitle"></b><span id="raTime"></span></div>
-        <button class="ra-ok" id="raOk" type="button">知道了</button>
-      </div>
-
       <div class="snackbar" id="snackbar" hidden>
         <span class="snackbar-text" id="snackbarText">已完成</span>
         <button class="snackbar-action" id="snackbarAction" type="button">撤销</button>
@@ -660,11 +747,6 @@
         <div class="settings-body">
           <section class="setting-group">
             <h3>常用</h3>
-            <label class="setting-row toggle-row">
-              <span>深色模式</span>
-              <input type="checkbox" id="themeToggle">
-              <span class="toggle" aria-hidden="true"></span>
-            </label>
             <label class="setting-row toggle-row">
               <span>农历</span>
               <input type="checkbox" id="lunarToggle">
@@ -704,7 +786,7 @@
           </section>
 
           <section class="setting-group">
-            <h3>个性化</h3>
+            <h3>语言</h3>
             <div class="setting-row lang-setting">
               <span>语言 / Language</span>
               <div class="lang-row" id="langRow" role="group" aria-label="语言 / Language">
@@ -712,24 +794,6 @@
                 <button class="lang-chip" type="button" data-lang="en">English</button>
               </div>
             </div>
-            <label class="setting-row toggle-row">
-              <span>黄历卡片</span>
-              <input type="checkbox" id="almanacToggle">
-              <span class="toggle" aria-hidden="true"></span>
-            </label>
-            <div class="setting-row cat-setting">
-              <span>分类管理</span>
-            </div>
-            <div class="cat-bubbles" id="categoryList"></div>
-          </section>
-
-          <section class="setting-group">
-            <h3>权限</h3>
-            <button class="row-btn" id="permissionGuideBtn" type="button">
-              <span>权限管理</span>
-              <b id="notifyState">检测中…</b>
-              <span class="row-arrow">›</span>
-            </button>
           </section>
 
           <section class="setting-group">
@@ -741,7 +805,7 @@
           </section>
 
           <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
-          <div class="settings-version" id="settingsVersion">氢计划 · 版本V0.9.1</div>
+          <div class="settings-version" id="settingsVersion">氢计划 · 版本V1.1.9</div>
         </div>
       </div>
 
@@ -757,8 +821,8 @@
 
           <section class="about-group">
             <h3>应用简介</h3>
-            <p>纯本地的日程与行程工具：日历、议程、行程表、计划、日记、天气与黄历。没有账号，也没有服务端。</p>
-            <p>提醒由系统本地通知调度，应用关闭或锁屏后仍会触发。</p>
+            <p>纯本地的日程与行程工具：日历、计划、行程表、日记、纪念日、天气与黄历。没有账号，也没有服务端。</p>
+            <p>本应用不提供到点提醒，所有内容仅在本机记录与展示。</p>
           </section>
 
           <section class="about-group">
@@ -777,12 +841,7 @@
 
           <section class="about-group">
             <h3>权限与系统限制</h3>
-            <p>通知：用于到点提醒；拒绝后仍可使用，但收不到提醒。</p>
-            <p>闹钟与提醒（Android 12/12L）：用于准时触发；Android 13 及以上由系统自动授予，没有单独开关。</p>
-            <p>日历（可选，默认关闭）：只有你在「权限管理」里打开「同时写入系统日历」后才会申请读写权限。开启后，带提醒的条目写入专用日历「AeroPlan 提醒」，提醒由系统日历负责，不联网；关闭开关会清空该专用日历里由本应用写入的事件，不会改动你原有的任何日历。</p>
-            <p>振动：用于轻触反馈，可随时关闭。本版本不申请存储与定位权限：备份经系统保存/分享面板完成，导入由你手动选择文件。</p>
-            <p>国产系统的自启动、后台清理与省电策略可能拦截提醒；需要时请在系统设置里允许本应用自启动/后台运行，并把省电策略设为「不限制」。应用无法把自己加入这些白名单，只能由你手动开启。重要事项请同时在系统闹钟里设一次提醒。</p>
-            <p>系统日历和本地通知用的是同一套 AlarmManager。区别在于系统日历是系统应用、在系统白名单里，不受省电与自启动策略限制，所以更可靠；它并不是用了特殊的推送通道。</p>
+            <p>振动：用于轻触反馈，可随时关闭。本版本不申请存储、定位、通知与闹钟权限：备份经系统保存/分享面板完成，导入由你手动选择文件。</p>
           </section>
 
           <section class="about-group">
@@ -833,7 +892,7 @@
             <p>请通过你获取本应用的渠道联系我们：应用商店页面、发布页面或仓库 Issue。</p>
           </section>
 
-          <p class="about-version">0.9.1</p>
+          <p class="about-version">1.1.9</p>
         </div>
 
         <div class="agreement-actions" id="agreementActions" hidden>
@@ -842,123 +901,293 @@
         </div>
       </div>
 
-      <div class="sheet-backdrop perm-backdrop" id="permBackdrop" hidden></div>
-      <div class="sheet perm-sheet" id="permSheet" role="dialog" aria-modal="true" aria-labelledby="permTitle" hidden>
-        <div class="sheet-grabber"></div>
-        <div class="sheet-head">
-          <h2 id="permTitle">开始使用前</h2>
-          <button class="icon-btn" id="permClose" type="button" aria-label="关闭">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+      <div class="settings-page agenda-page" id="agendaPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="agendaBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
           </button>
-        </div>
-
-        <div class="perm-hero" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="M12 4.2a5.3 5.3 0 0 1 5.3 5.3v3.1l1.4 2.6H5.3l1.4-2.6V9.5A5.3 5.3 0 0 1 12 4.2Z"/>
-            <path d="M9.7 19.1a2.4 2.4 0 0 0 4.6 0"/>
-          </svg>
-        </div>
-
-        <p class="perm-text">氢计划用手机的系统通知提醒你安排的事。通知只在你自己的手机上生成，不会上传到任何地方。</p>
-
-        <div class="perm-list">
-          <div class="perm-item">
-            <div class="perm-item-head">
-              <span class="perm-item-name">通知与提醒</span>
-              <b class="perm-badge" id="permNotifyState">检测中…</b>
-            </div>
-            <p class="perm-item-text">提醒由系统排程，关掉应用或锁屏后也会按时通知。权限、通知渠道、精确闹钟与排程数量可以在「通知自查」里逐项查看。</p>
-            <button class="secondary-btn perm-item-btn" id="permAllow" type="button">允许通知</button>
-            <div class="perm-denied" id="permDenied" hidden>
-              <p>系统拒绝了通知权限。可以打开手机「设置 → 应用 → 氢计划 → 通知」把通知打开，再回到这里点下面的按钮重新检查。</p>
-            </div>
-          </div>
-          <button class="row-btn perm-selfcheck-btn" id="notifySelfCheckBtn" type="button">
-            <span>通知自查</span>
-            <b id="notifySelfCheckState">权限、渠道与排程</b>
-            <span class="row-arrow">›</span>
-          </button>
-
-          <div class="perm-item">
-            <div class="perm-item-head">
-              <span class="perm-item-name">同时写入系统日历</span>
-              <label class="perm-switch">
-                <input type="checkbox" id="calendarSyncToggle">
-                <span class="perm-switch-track"></span>
-              </label>
-            </div>
-            <p class="perm-item-text">开启后，带提醒的日程/待办会写入专用日历「AeroPlan 提醒」，由系统日历负责提醒，更不容易被后台策略拦住。默认关闭。</p>
-            <p class="perm-calendar-state" id="calendarSyncState" hidden></p>
+          <h2 class="settings-title" id="agendaTitle">全部安排</h2>
+          <button class="today-btn" id="agendaToday" type="button">今天</button>
+        </header>
+        <div class="list-search-bar">
+          <div class="diary-search list-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2"/><path d="M15.4 15.4 20 20"/></svg>
+            <input id="agendaSearch" type="search" autocomplete="off" placeholder="搜索安排、地点或分类" aria-label="搜索安排、地点或分类">
+            <button class="diary-search-clear" id="agendaSearchClear" type="button" aria-label="清空搜索" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+            </button>
           </div>
         </div>
-
-        <p class="perm-note" id="permNote">重要事项请同时在系统闹钟里设一次；部分系统会限制后台运行。</p>
-
-        <p class="perm-request-hint" id="newPackageHint" hidden></p>
-
-        <div class="perm-actions">
-          <button class="primary-btn" id="permLater" type="button">开始使用</button>
+        <div class="agenda-nav-row">
+          <button class="agenda-nav-btn" id="agendaPrev" type="button" aria-label="更早">更早</button>
+          <button class="agenda-nav-btn" id="agendaNext" type="button" aria-label="更晚">更晚</button>
+        </div>
+        <div class="settings-body agenda-body">
+          <div class="filter-bar" id="agendaFilterBar" hidden></div>
+          <div class="empty-state" id="agendaEmpty" hidden>
+            <span class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <rect x="3.5" y="4.5" width="17" height="16" rx="4"/>
+                <path d="M8 2.8v3.4M16 2.8v3.4M7.4 10.6h9.2M8.4 14.6h4.2"/>
+              </svg>
+            </span>
+            <p class="empty-title">今天还没有安排</p>
+            <p class="empty-sub">想到什么就先记下来，之后再调整。</p>
+          </div>
+          <div id="agendaList"></div>
         </div>
       </div>
 
-      <!-- 通知自查：从「权限管理」进入的独立整页，内容多时正常纵向滚动 -->
-      <div class="notify-diag-page" id="notifyDiagPage" hidden>
+      <div class="settings-page" id="zodiacPage" hidden>
         <header class="settings-topbar">
-          <button class="icon-btn" id="notifyDiagClose" type="button" aria-label="返回">
+          <button class="icon-btn" id="zodiacBack" type="button" aria-label="返回">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5.5 8.5 12 15 18.5"/></svg>
           </button>
-          <h2>通知自查</h2>
+          <h2 class="settings-title">选择星座</h2>
         </header>
-        <div class="settings-body notify-diag-body">
-          <p class="diag-lead">这里列出权限原始返回值、通知渠道、全部条目的提醒存储值与本轮排程结果。权限已允许、渠道已创建、排程数大于 0 仍不响时，多半是系统后台限制。</p>
-          <p class="diag-refresh-state" id="notifyDiagStatus" hidden></p>
-          <p class="perm-request-hint" id="permRequestHint" hidden></p>
-          <div class="notify-diag" id="notifyDiag" hidden></div>
-          <div class="notify-diag-actions">
-            <button class="secondary-btn" id="permRequest" type="button">申请通知权限</button>
-            <button class="text-btn" id="notifyDiagRefresh" type="button">刷新自查</button>
-          </div>
+        <div class="settings-body">
+          <p class="setting-hint">选中即生效并返回，选择保存在本机。</p>
+          <div class="zodiac-grid" id="zodiacGrid"></div>
+        </div>
+      </div>
 
-          <div class="diag-selftest">
-            <h3>十秒自检</h3>
-            <p>点一次按钮：用与正式提醒完全相同的参数排一条 10 秒后的通知，并实时记录监听事件、系统队列、已送达列表与当前是否在前台。</p>
-            <button class="secondary-btn" id="notifySelfTestBtn" type="button">开始十秒自检</button>
-            <div class="diag-selftest-log" id="notifySelfTestLog" hidden></div>
-            <div class="diag-criteria">
-              <p><b>怎么判读：</b></p>
-              <p>① 收到事件 + 已送达有记录 + 屏幕无横幅 → 投递成功但被系统拦截显示（渠道/横幅/勿扰）。</p>
-              <p>② 收到事件 + 已送达为空 → 投递失败，重点查小图标与提示音。</p>
-              <p>③ 未收到事件 + 队列在等待后被清空 → 闹钟被系统吞掉（后台策略）。</p>
-              <p>④ 未收到事件 + 队列里仍有该条 → 排程未生效。</p>
+      <div class="settings-page cardstyle-page" id="cardStylePage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="cardStyleBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title">卡片样式</h2>
+        </header>
+        <div class="settings-body cardstyle-body">
+          <section class="skin-current">
+            <div class="skin-current-head">
+              <span class="skin-current-label">当前样式</span>
+              <span class="skin-current-name" id="cardStyleCurrentName">和纸</span>
+            </div>
+            <div class="skin-current-stage" id="cardStyleCurrentStage"></div>
+            <p class="skin-current-note" id="cardStyleCurrentNote" hidden></p>
+          </section>
+          <p class="setting-hint">点选立即全局生效，并保存在本机。</p>
+          <p class="setting-hint">带「仅浅色 / 仅深色」标记的皮肤只在对应主题下生效。</p>
+          <div class="seg skin-filter" id="cardStyleFilter" role="group" aria-label="样式筛选">
+            <button class="seg-btn active" type="button" data-skin-filter="all" aria-pressed="true">全部</button>
+            <button class="seg-btn" type="button" data-skin-filter="light" aria-pressed="false">仅浅色</button>
+            <button class="seg-btn" type="button" data-skin-filter="dark" aria-pressed="false">仅深色</button>
+            <button class="seg-btn" type="button" data-skin-filter="both" aria-pressed="false">通用</button>
+          </div>
+          <div class="skin-grid" id="cardStyleGrid"></div>
+        </div>
+      </div>
+
+      <div class="settings-page font-page" id="fontPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="fontBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title">字体</h2>
+        </header>
+        <div class="settings-body">
+          <p class="setting-hint">点选立即生效，选择保存在本机。</p>
+          <p class="setting-hint">系统字体跟随设备，部分安卓机型在系统设置里换字体后会跟着变。</p>
+          <div class="font-list" id="fontList"></div>
+        </div>
+      </div>
+
+      <div class="settings-page" id="countdownPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="countdownBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title">纪念日</h2>
+          <button class="text-btn" id="countdownAdd" type="button">＋ 新建</button>
+        </header>
+        <div class="settings-body" id="countdownListBody"></div>
+      </div>
+
+      <div class="settings-page" id="tripTagsPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="tripTagsBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title">分类标签</h2>
+          <button class="text-btn" id="tripTagsAdd" type="button">＋ 新建</button>
+        </header>
+        <div class="settings-body">
+          <p class="setting-hint">按住可拖动排序，长按可编辑或删除。标签颜色会用在名称文字上。</p>
+          <div class="mood-list" id="categoryList"></div>
+        </div>
+      </div>
+
+      <div class="settings-page" id="planHistoryPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="planHistoryBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title">历史计划</h2>
+        </header>
+        <div class="list-search-bar">
+          <div class="diary-search list-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2"/><path d="M15.4 15.4 20 20"/></svg>
+            <input id="planHistorySearch" type="search" autocomplete="off" placeholder="搜索历史计划的标题或备注" aria-label="搜索历史计划的标题或备注">
+            <button class="diary-search-clear" id="planHistorySearchClear" type="button" aria-label="清空搜索" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="settings-body" id="planHistoryBody"></div>
+      </div>
+
+      <div class="settings-page" id="moodPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="moodBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title">情绪标签</h2>
+          <button class="text-btn" id="moodAdd" type="button">＋ 新建</button>
+        </header>
+        <div class="settings-body">
+          <p class="setting-hint">按住可拖动排序，长按可编辑或删除。自定义情绪会出现在日记的情绪条里。</p>
+          <div class="mood-list" id="moodList"></div>
+        </div>
+      </div>
+
+      <div class="settings-page diary-detail-page" id="diaryDetailPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="ddBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title" id="ddTitle">日记</h2>
+          <button class="text-btn" id="ddEdit" type="button">编辑</button>
+        </header>
+        <div class="settings-body dd-body" id="ddBody"></div>
+      </div>
+
+      <div class="cat-pop" id="diaryPop" hidden>
+        <button type="button" data-diary-pop="edit">编辑</button>
+        <button type="button" class="danger" data-diary-pop="del">删除</button>
+      </div>
+
+      <div class="cat-pop" id="moodPop" hidden>
+        <button type="button" data-mood-pop="edit">编辑</button>
+        <button type="button" class="danger" data-mood-pop="del">删除</button>
+      </div>
+
+      <div class="cat-pop" id="cdPop" hidden>
+        <button type="button" data-cd-pop="edit">编辑</button>
+        <button type="button" class="danger" data-cd-pop="del">删除</button>
+      </div>
+
+      <div class="sheet-backdrop above-page" id="cdBackdrop" hidden></div>
+      <div class="sheet cd-sheet above-page" id="cdSheet" role="dialog" aria-modal="true" aria-labelledby="cdSheetTitle" hidden>
+        <div class="sheet-grabber"></div>
+        <div class="sheet-head">
+          <h2 id="cdSheetTitle">新建纪念日</h2>
+          <button class="icon-btn" id="cdClose" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+          </button>
+        </div>
+        <div class="sheet-body cd-body">
+          <input class="inline-title" id="cdTitle" type="text" maxlength="40" placeholder="例如：生日、考试、旅行" autocomplete="off">
+          <div class="cd-group">
+            <div class="cd-group-head">
+              <span class="cd-field-label">日期</span>
+              <div class="seg cd-seg" id="cdCalSeg" role="group" aria-label="日期类型">
+                <button class="seg-btn" type="button" data-cd-cal="solar">公历</button>
+                <button class="seg-btn" type="button" data-cd-cal="lunar">农历</button>
+              </div>
+            </div>
+            <input id="cdDate" type="hidden">
+            <button class="soft-chip cd-date-chip" id="cdDateChip" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.4" y="5" width="17.2" height="15.6" rx="3.4"/><path d="M8 3.4v3.2M16 3.4v3.2M3.6 9.6h16.8"/></svg>
+              <span class="chip-label" id="cdDateChipLabel">选择日期</span>
+            </button>
+            <div id="cdLunarField" hidden>
+              <div class="cd-lunar-row">
+                <button class="cd-pick" id="cdLunarYearBtn" type="button"><span id="cdLunarYearText">—</span></button>
+                <button class="cd-pick" id="cdLunarMonthBtn" type="button"><span id="cdLunarMonthText">—</span></button>
+                <button class="cd-pick" id="cdLunarDayBtn" type="button"><span id="cdLunarDayText">—</span></button>
+              </div>
+              <label class="cd-leap-row" id="cdLeapRow" hidden>
+                <input type="checkbox" id="cdLunarLeap">
+                <span>闰月</span>
+              </label>
+              <p class="cd-hint" id="cdLunarHint"></p>
             </div>
           </div>
-
-          <div class="diag-native">
-            <h3>原生通道</h3>
-            <p>这条通道不经过 Capacitor 插件：由 App 内的 AlarmManager 直接排程、广播接收后自己发通知。</p>
-            <div class="diag-native-body" id="nativeDiag">
-              <p class="diag-empty">检测中…</p>
+          <div class="cd-group">
+            <div class="cd-group-head">
+              <span class="cd-field-label">计算方式</span>
+              <div class="seg cd-seg" id="cdDirSeg" role="group" aria-label="计算方式">
+                <button class="seg-btn" type="button" data-cd-dir="down">倒数</button>
+                <button class="seg-btn" type="button" data-cd-dir="up">正数</button>
+              </div>
             </div>
-            <button class="secondary-btn" id="nativeTestBtn" type="button">测试原生通道（10 秒）</button>
-            <div class="diag-selftest-log" id="nativeTestLog" hidden></div>
-            <p class="diag-hint">若原生通道也收不到，问题必然在系统层（省电、后台限制或 ROM 拦截），不在应用代码。</p>
           </div>
+          <div class="cd-group" id="cdRepeatGroup">
+            <div class="cd-group-head">
+              <span class="cd-field-label">重复</span>
+              <div class="seg cd-seg" id="cdRepeatSeg" role="group" aria-label="重复">
+                <button class="seg-btn" type="button" data-cd-repeat="none">不重复</button>
+                <button class="seg-btn" type="button" data-cd-repeat="yearly">每年</button>
+                <button class="seg-btn" type="button" data-cd-repeat="monthly">每月</button>
+              </div>
+            </div>
+          </div>
+          <div class="cd-group">
+            <span class="cd-field-label">颜色</span>
+            <div class="swatch-row" id="cdSwatches"></div>
+          </div>
+          <div class="cd-group">
+            <span class="cd-field-label">分类标签</span>
+            <div class="cat-chips" id="cdCats"></div>
+          </div>
+          <label class="setting-row toggle-row cd-pin-row">
+            <span>置顶</span>
+            <input type="checkbox" id="cdPinned">
+            <span class="toggle" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="sheet-actions">
+          <button class="text-btn danger" id="cdDelete" type="button" hidden>删除</button>
+          <button class="primary-btn" id="cdSave" type="button" disabled>保存</button>
+        </div>
+      </div>
 
-          <div class="diag-bg-guide">
-            <h3>后台限制自查与引导</h3>
-            <p class="diag-bg-device" id="bgGuideDevice">读取设备信息…</p>
-            <div class="diag-bg-steps" id="bgGuide"></div>
-            <button class="secondary-btn" id="bgGuideSettingsBtn" type="button">去设置</button>
-            <p class="diag-hint">应用无法把自己加入系统自启动/省电白名单，只能按上面的路径手动开启。开启「同时写入系统日历」后，这条路径不依赖上述白名单，可作为兜底。</p>
+      <!-- 纪念日农历日期：应用内滚轮，复用 year-sheet 的分层与遮罩 -->
+      <div class="year-backdrop" id="cdWheelBackdrop" hidden></div>
+      <div class="year-sheet cd-wheel-sheet" id="cdWheelSheet" role="dialog" aria-modal="true" aria-labelledby="cdWheelTitle" hidden>
+        <div class="sheet-grabber"></div>
+        <div class="sheet-head">
+          <h2 id="cdWheelTitle">农历日期</h2>
+          <button class="icon-btn" id="cdWheelClose" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>
+          </button>
+        </div>
+        <div class="jump-wheels">
+          <div class="wheel-caption" aria-hidden="true"><span>年</span><span>月</span><span>日</span></div>
+          <div class="wheel-row" id="cdWheelRow">
+            <div class="wheel" id="cdWheelYear" role="listbox" aria-label="农历年份"></div>
+            <div class="wheel" id="cdWheelMonth" role="listbox" aria-label="农历月份"></div>
+            <div class="wheel" id="cdWheelDay" role="listbox" aria-label="农历日"></div>
+            <div class="wheel-band" aria-hidden="true"></div>
           </div>
+        </div>
+        <label class="cd-leap-row cd-wheel-leap" id="cdWheelLeapRow" hidden>
+          <input type="checkbox" id="cdWheelLeap">
+          <span>闰月</span>
+        </label>
+        <p class="cd-hint cd-wheel-hint" id="cdWheelHint"></p>
+        <div class="sheet-actions">
+          <button class="primary-btn" id="cdWheelDone" type="button">确定</button>
         </div>
       </div>
 
     </div>
   </div>
-  <script src="./i18n.js?v=42"></script>
-  <script src="./regions.js?v=42"></script>
-  <script src="./weather.js?v=42"></script>
-  <script src="./app.js?v=42"></script>
+  <script src="./i18n.js?v=1.112"></script>
+  <script src="./regions.js?v=1.112"></script>
+  <script src="./districts.js?v=1.112"></script>
+  <script src="./weather.js?v=1.112"></script>
+  <script src="./app.js?v=1.112"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 'use strict';
 
 /* =========================================================
-   氢计划 / AeroPlan v0.9.1
+   氢计划 / AeroPlan v1.1.8
    纯前端：无框架、无 CDN、无构建步骤
    数据存在手机上：优先用浏览器数据库，不可用时退到本地存储，再不行只放内存
    ========================================================= */
@@ -27,6 +27,7 @@
   const LS_CATS_KEY = 'aeroplan.categories';
   const LS_PLANS_KEY = 'aeroplan.plans';
   const LS_DIARY_KEY = 'aeroplan.diary';
+  const LS_CD_KEY = 'aeroplan.countdowns';
   const IDB_NAME = 'aeroplan-db';
   const IDB_STORE = 'kv';
   // 日记附件单独一个对象仓库，按 id 索引，避免把 Blob 塞进 kv 的大对象里
@@ -44,8 +45,8 @@
     lang: 'light-schedule.lang'
   };
 
-  const APP_VERSION = '0.9.1';
-  const POLICY_VERSION = 'privacy-1.1';
+  const APP_VERSION = '1.1.12';
+  const POLICY_VERSION = 'privacy-1.2';
   // 生成新 keystore 后，把证书 SHA-256 指纹填在这里（README 有步骤）
   const OFFICIAL_CERT_SHA256 = '';
 
@@ -64,11 +65,8 @@
     '不会发送日程正文、备注、分类、计划、备份文件内容、账号信息、通讯录、相片或设备型号。',
     '',
     '三、权限与系统限制',
-    '通知用于到点提醒；拒绝后收不到提醒。',
-    'Android 12/12L 的「闹钟与提醒」用于准时触发；Android 13 及以上由系统自动授予，没有单独开关。',
     '振动用于轻触反馈；关闭不影响功能。',
-    '本版本不申请存储与定位权限：备份经系统保存或分享面板完成，导入由你手动选择文件。',
-    '国产系统的自启动、后台清理与省电策略可能拦截提醒，需要时请允许自启动/后台运行并设为「不限制」。',
+    '本版本不申请存储、定位、通知与闹钟权限：备份经系统保存或分享面板完成，导入由你手动选择文件。',
     '',
     '四、备份文件',
     '备份是未加密的 JSON 文件，含条目、计划、分类、偏好和同意记录。请存放在可信位置。',
@@ -88,11 +86,8 @@
     'We do not send event titles, notes, categories, plans, backup contents, account details, contacts, photos or the device model.',
     '',
     '3. Permissions and system limits',
-    'Notifications are used for reminders. If denied, you will not receive reminders.',
-    'On Android 12/12L, "Alarms and reminders" keeps reminders on time; on Android 13 and later the system grants it automatically with no separate toggle.',
     'Vibration is used for light feedback when picking dates and times. Turning it off does not affect any feature.',
-    'This version requests no storage or location permission: backups go through the system save/share panel, and imports use the file you pick manually.',
-    'Autostart, background cleanup and battery policies on some ROMs may block reminders. Allow autostart/background activity and set battery usage to "Unrestricted" when needed.',
+    'This version requests no storage, location, notification or alarm permission: backups go through the system save/share panel, and imports use the file you pick manually.',
     '',
     '4. Backup files',
     'A backup is an unencrypted JSON file containing items, plans, categories, preferences and the consent record. Keep it somewhere you trust.',
@@ -128,31 +123,39 @@
     '#1F2937'  // 黑
   ];
 
-  // 分类内置图标：全部为内联 SVG（线性、细笔画），只随分类颜色着色，不引入字体或网络资源。
-  // id 会写进分类数据与备份；改名会导致旧数据图标丢失，因此 id 固定不变。
+  // 分类内置图标：扁平拟物 / 双色调。
+  // 每个图标 3 个色块（.i1 主体 / .i2 次面 / .i3 暗部或点缀）+ 1 处高光（.hl），
+  // 全部内联 SVG、只靠 CSS 变量取色，不使用 linearGradient，因此没有 id，
+  // 也就不会出现「重复渲染后渐变串色」的问题；单图标节点数 3~7。
+  // id 会写进分类数据与备份，改名会导致旧数据图标丢失，因此 id 固定不变。
   const CATEGORY_ICONS = [
-    { id: 'book', zh: '书本 / 学习', en: 'Book', svg: '<path d="M2 4h6a3 3 0 0 1 3 3v13a4 4 0 0 0-4-4H2z"/><path d="M22 4h-6a3 3 0 0 0-3 3v13a4 4 0 0 1 4-4h5z"/>' },
-    { id: 'work', zh: '工作 / 公文包', en: 'Work', svg: '<rect x="3" y="7" width="18" height="12" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/>' },
-    { id: 'gift', zh: '纪念日 / 礼物', en: 'Anniversary', svg: '<rect x="3" y="9" width="18" height="12" rx="2"/><path d="M12 9v12"/><path d="M3 13h18"/><path d="M12 9c-3 0-4.5-1.5-4.5-3A2 2 0 0 1 12 5c0 1.5-1.5 4-4.5 4"/><path d="M12 9c3 0 4.5-1.5 4.5-3A2 2 0 0 0 12 5c0 1.5 1.5 4 4.5 4"/>' },
-    { id: 'flower', zh: '花朵', en: 'Flower', svg: '<circle cx="12" cy="12" r="2.4"/><circle cx="12" cy="6.4" r="2.8"/><circle cx="17" cy="9.4" r="2.8"/><circle cx="17" cy="14.6" r="2.8"/><circle cx="12" cy="17.6" r="2.8"/><circle cx="7" cy="14.6" r="2.8"/><circle cx="7" cy="9.4" r="2.8"/>' },
-    { id: 'sport', zh: '运动', en: 'Sport', svg: '<path d="M3 9v6"/><path d="M6 7v10"/><path d="M18 7v10"/><path d="M21 9v6"/><path d="M6 12h12"/>' },
-    { id: 'food', zh: '餐食', en: 'Food', svg: '<path d="M3 12h18"/><path d="M5 12a7 7 0 0 0 14 0"/><path d="M4 21h16"/><path d="M9 3.5c0 1.8-1 2.8-1 4.5"/><path d="M13 3c0 1.8-1 2.8-1 4.5"/>' },
-    { id: 'travel', zh: '旅行', en: 'Travel', svg: '<path d="M2.5 13.5 21.5 5l-7 16-3.4-6.6-6.6-3.4z"/><path d="M21.5 5 11.1 14.4"/>' },
-    { id: 'medical', zh: '医疗', en: 'Medical', svg: '<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 7.5v9"/><path d="M7.5 12h9"/>' },
-    { id: 'home', zh: '家务', en: 'Housework', svg: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.8V20h13V9.8"/><path d="M9.5 20v-5.5h5V20"/>' },
-    { id: 'finance', zh: '财务', en: 'Finance', svg: '<circle cx="12" cy="12" r="8"/><path d="M8.5 8.5 12 12l3.5-3.5"/><path d="M12 12v4.5"/><path d="M9 13.2h6"/>' },
-    { id: 'music', zh: '音乐', en: 'Music', svg: '<path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>' },
-    { id: 'pet', zh: '宠物', en: 'Pet', svg: '<circle cx="6" cy="9" r="2"/><circle cx="10" cy="6.2" r="2"/><circle cx="14" cy="6.2" r="2"/><circle cx="18" cy="9" r="2"/><path d="M8 15c0-2 1.8-4 4-4s4 2 4 4c0 2-2 3-4 3s-4-1-4-3z"/>' },
-    { id: 'cake', zh: '生日蛋糕', en: 'Birthday', svg: '<path d="M4 21h16"/><path d="M5 21v-7h14v7"/><path d="M5 16.5c1.6-1.6 2.4 1.6 4 0s2.4-1.6 4 0 2.4 1.6 4 0"/><path d="M9 11V6.5"/><path d="M12 11V5.5"/><path d="M15 11V6.5"/>' },
-    { id: 'star', zh: '星标', en: 'Star', svg: '<path d="M12 3.2l2.6 5.5 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.5l5.9-.8z"/>' }
+    { id: 'book', zh: '书本 / 学习', en: 'Book', svg: '<rect class="i1" x="3.4" y="3.2" width="17.2" height="17.6" rx="3.2"/><rect class="i2" x="7.2" y="5.4" width="10.9" height="13.2" rx="1.8"/><path class="i3" d="M7.2 5.4H5.4a1.8 1.8 0 0 0-1.8 1.8v9.6a1.8 1.8 0 0 0 1.8 1.8h1.8z"/><path class="hl" d="M9.2 8.4h6.9v1.3H9.2z"/>' },
+    { id: 'work', zh: '工作 / 公文包', en: 'Work', svg: '<rect class="i1" x="2.8" y="7.6" width="18.4" height="12.6" rx="3"/><path class="i3" d="M9 7.6V5.8A2.6 2.6 0 0 1 11.6 3.2h.8A2.6 2.6 0 0 1 15 5.8v1.8h-1.9V5.9a.8.8 0 0 0-.8-.8h-.6a.8.8 0 0 0-.8.8v1.7z"/><rect class="i2" x="10.1" y="11.6" width="3.8" height="2.1" rx="1"/><path class="hl" d="M3.6 14.2h16.8v1.2H3.6z"/>' },
+    { id: 'gift', zh: '纪念日 / 礼物', en: 'Anniversary', svg: '<rect class="i1" x="3.2" y="8.8" width="17.6" height="12" rx="2"/><rect class="i2" x="10.5" y="8.8" width="3" height="12"/><rect class="i2" x="3.2" y="11.8" width="17.6" height="2.6"/><path class="i3" d="M10.5 8.8c-1.3-.5-2-1.7-2-2.7 0-.8.6-1.3 1.3-1.3.9 0 2 1.1 2.8 4z"/><path class="i3" d="M13.5 8.8c1.3-.5 2-1.7 2-2.7 0-.8-.6-1.3-1.3-1.3-.9 0-2 1.1-2.8 4z"/>' },
+    { id: 'flower', zh: '花朵', en: 'Flower', svg: '<circle class="i1" cx="12" cy="6.7" r="3"/><circle class="i1" cx="17.3" cy="12" r="3"/><circle class="i2" cx="12" cy="17.3" r="3"/><circle class="i2" cx="6.7" cy="12" r="3"/><circle class="i3" cx="12" cy="12" r="2.4"/>' },
+    { id: 'sport', zh: '运动', en: 'Sport', svg: '<path class="i1" d="M7.6 8.6h8.8v6.8H7.6z"/><rect class="i2" x="3.2" y="7.2" width="3.7" height="9.6" rx="1.7"/><rect class="i2" x="17.1" y="7.2" width="3.7" height="9.6" rx="1.7"/><path class="i3" d="M6.8 9.8h1.7v4.4H6.8zM15.5 9.8h1.7v4.4h-1.7z"/><path class="hl" d="M8.4 9.8h7.2v1.3H8.4z"/>' },
+    { id: 'food', zh: '餐食', en: 'Food', svg: '<path class="i1" d="M3 12.6h18c0 4.3-3.5 7.5-9 7.5S3 16.9 3 12.6z"/><path class="i2" d="M5.2 11.7c1.5-1.5 4-2.4 6.8-2.4s5.3.9 6.8 2.4c-1.7.6-4.2 1-6.8 1s-5.1-.4-6.8-1z"/><path class="ln" d="M9 3.6c-.7 1.3-.7 2 .1 3M12.4 2.9c-.7 1.3-.7 2 .1 3M15.8 3.6c-.7 1.3-.7 2 .1 3"/><path class="hl" d="M5.4 13.8h5.4v1.4H5.4z"/>' },
+    { id: 'travel', zh: '旅行', en: 'Travel', svg: '<path class="i1" d="M21.2 4.3 3 11.5l6.9 2.4z"/><path class="i2" d="M9.9 13.9 21.2 4.3l-8.6 15z"/><path class="i3" d="M9.9 13.9l-1.3 5.2 3.5-3.9z"/><path class="hl" d="M10.1 13.8l2.7-2.3 1.3.8z"/>' },
+    { id: 'medical', zh: '医疗', en: 'Medical', svg: '<rect class="i1" x="3" y="6.6" width="18" height="12.6" rx="3"/><path class="i3" d="M9.2 6.6V5.7A2.5 2.5 0 0 1 11.7 3.2h.6A2.5 2.5 0 0 1 14.8 5.7v.9h-1.9v-.8a.7.7 0 0 0-.7-.7h-.4a.7.7 0 0 0-.7.7v.8z"/><rect class="i2" x="10.9" y="8.9" width="2.2" height="8" rx=".7"/><rect class="i2" x="7.9" y="11.9" width="8.2" height="2.2" rx=".7"/>' },
+    { id: 'home', zh: '家务', en: 'Housework', svg: '<path class="i2" d="M5.6 9.8 12 4.4l6.4 5.4V20a1 1 0 0 1-1 1H6.6a1 1 0 0 1-1-1z"/><path class="i3" d="M9.8 21v-5.3a2.2 2.2 0 0 1 4.4 0V21z"/><path class="i1" d="M3 11 12 3.2l9 7.8v1.8L12 5.3 3 12.8z"/><rect class="hl" x="7.6" y="12.4" width="2.4" height="2.4" rx=".7"/>' },
+    { id: 'finance', zh: '财务', en: 'Finance', svg: '<circle class="i1" cx="12" cy="12" r="8.6"/><circle class="i2" cx="12" cy="12" r="6.4"/><path class="ln" d="M9.4 8.6 12 11.8l2.6-3.2M12 11.8v4M9.9 13.4h4.2"/><circle class="hl" cx="9.2" cy="7.8" r="1.4"/>' },
+    { id: 'music', zh: '音乐', en: 'Music', svg: '<path class="i1" d="M9.4 5.2l9-1.6v1.9l-9 1.6z"/><path class="i1" d="M9.4 5.2v12.2h1.6V6.6z"/><path class="i1" d="M15.6 7.6v7.9h1.6V6.3z"/><circle class="i2" cx="6.6" cy="17.4" r="2.7"/><circle class="i2" cx="15" cy="15.6" r="2.7"/><path class="hl" d="M10 5.9l8.2-1.5v1.2L10 7.1z"/>' },
+    { id: 'pet', zh: '宠物', en: 'Pet', svg: '<path class="i1" d="M7.4 17.2c0-2.7 2-4.5 4.6-4.5s4.6 1.8 4.6 4.5c0 2.3-2 3.5-4.6 3.5s-4.6-1.2-4.6-3.5z"/><circle class="i2" cx="6.5" cy="8.7" r="2.1"/><circle class="i2" cx="10.1" cy="6" r="2.1"/><circle class="i2" cx="13.9" cy="6" r="2.1"/><circle class="i2" cx="17.5" cy="8.7" r="2.1"/><circle class="hl" cx="10.2" cy="16.2" r="1"/>' },
+    { id: 'cake', zh: '生日蛋糕', en: 'Birthday', svg: '<path class="i2" d="M3.4 20.4h17.2v1.4H3.4z"/><rect class="i1" x="4.8" y="11.6" width="14.4" height="8.8" rx="1.4"/><path class="i2" d="M6.2 9.4h11.6a1.6 1.6 0 0 1 1.6 1.6v1.2H4.6v-1.2a1.6 1.6 0 0 1 1.6-1.6z"/><rect class="i2" x="8.6" y="4.8" width="1.9" height="4.6" rx=".7"/><rect class="i2" x="13.5" y="4.8" width="1.9" height="4.6" rx=".7"/><circle class="i3" cx="9.55" cy="3.4" r="1.4"/><circle class="i3" cx="14.45" cy="3.4" r="1.4"/>' },
+    { id: 'star', zh: '星标', en: 'Star', svg: '<path class="i1" d="M12 3.4l2.6 5.4 5.8.8-4.2 4.1 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.2-4.1 5.8-.8z"/><path class="i2" d="M12 6.6l1.7 3.6 3.9.6-2.8 2.7.7 3.8-3.5-1.9z"/><path class="hl" d="M12 5l1.2 2.4-1.2 1.4-1.2-1.4z"/>' },
+    { id: 'camera', zh: '摄影 / 相机', en: 'Camera', svg: '<rect class="i1" x="2.8" y="7.4" width="18.4" height="12.4" rx="3"/><path class="i2" d="M8.2 7.4l1.5-2.3h4.6l1.5 2.3z"/><circle class="i2" cx="12" cy="13.4" r="4"/><circle class="i3" cx="12" cy="13.4" r="2.2"/><circle class="hl" cx="10.9" cy="12.3" r=".9"/>' },
+    { id: 'coffee', zh: '咖啡 / 休息', en: 'Coffee', svg: '<path class="i1" d="M4 8.4h12.2v5.8a5.2 5.2 0 0 1-5.2 5.2H9.2A5.2 5.2 0 0 1 4 14.2z"/><ellipse class="i2" cx="10.1" cy="8.6" rx="6.1" ry="1.8"/><path class="i1" d="M16.2 9.4h2.1a2.8 2.8 0 0 1 0 5.6h-2.1v-1.7h2.1a1.1 1.1 0 0 0 0-2.2h-2.1z"/><path class="hl" d="M5.3 10.8h4.7v1.4H5.3z"/>' }
   ];
   const CATEGORY_ICON_BY_ID = {};
   CATEGORY_ICONS.forEach(function (icon) { CATEGORY_ICON_BY_ID[icon.id] = icon; });
 
-  // 图标片段本身只有 path/circle，必须包一层 <svg> 才会被浏览器绘制；
+  // 图标片段本身只有 path/circle/rect，必须包一层 <svg> 才会被浏览器绘制；
   // 缺 viewBox 或宽高会渲染成 0×0（之前图标全空的根因就是少了这层 svg）。
-  function categorySvg(inner) {
-    return '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" focusable="false">' +
+  // data-icon 用于在 CSS 里给每个图标分配一套浅色/深色都适用的色板。
+  // viewBox 收紧到 1.5~22.5（图形本体约占 2.8~21.2），在不变大的圆底里
+  // 让块面更充分地铺满，同时留 1 单位左右的细窄留白，避免贴边裁切感。
+  function categorySvg(inner, id) {
+    return '<svg class="cat-ic" data-icon="' + (id || '') + '" viewBox="1.5 1.5 21 21" width="12" height="12" aria-hidden="true" focusable="false">' +
       inner + '</svg>';
   }
 
@@ -161,7 +164,7 @@
     const icon = CATEGORY_ICON_BY_ID[cat.icon];
     if (!icon) return '';
     return '<span class="cat-glyph' + (extraClass ? ' ' + extraClass : '') +
-      '" style="color:' + cat.color + '" aria-hidden="true">' + categorySvg(icon.svg) + '</span>';
+      '" aria-hidden="true">' + categorySvg(icon.svg, icon.id) + '</span>';
   }
 
   // 有图标用图标，没有图标回落成原来的色点，绝不出现空白
@@ -181,6 +184,7 @@
     scheduleAnchor: '',
     items: [],
     plans: [],
+    countdowns: [],
     categories: [],
     agendaFilters: [],
     meta: {},
@@ -199,26 +203,13 @@
     undoFn: null,
     sheetOpen: false,
     planSheetOpen: false,
+    // 计划页分段控件当前选中的周期
+    planKind: 'week',
     editingId: '',
     planEditingId: '',
     settingsOpen: false,
     saving: false,
-    reminderTimers: [],
-    firedReminders: {},
-    nativeReminderIds: [],
-    nativeReminderGen: 0,
-    // 原生排程如果被系统拒绝，这里记录原因，供「权限管理」里的状态自查直接显示
-    nativeScheduleError: '',
-    // 精确闹钟的当前状态；'' 表示还没检测过。denied 时排程会退化为非精确，可能延迟
-    exactAlarmStatus: '',
-    channelReady: false,
-    // 渠道建完后从系统读回的实际参数（重要性、提示音等），自查面板据此判断是否生效
-    channelInfo: null,
-    // 最近一次排程的逐条诊断（自查面板的实例表直接用这份数据）
-    reminderReport: [],
-    // 最近一次扫描的规模与时间：用于区分「还没算」和「确实没有提醒」
-    reminderScan: null,
-    // 数据是否已经读完：自查面板据此区分「尚未加载完」与「确实没有提醒条目」
+    // 数据是否已经读完
     loaded: false,
     // 旧代号数据迁移日志（写入自查面板）
     migrationLog: [],
@@ -254,6 +245,7 @@
     db: null,
     memoryItems: [],
     memoryPlans: [],
+    memoryCountdowns: [],
     memoryMeta: {},
     memoryCats: [],
     memoryDiary: []
@@ -888,14 +880,11 @@
     const date = String(raw.date || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
     if (isNaN(keyToDate(date).getTime())) return null;
-    // 旧版本的「提醒」类型已取消，统一按待办展示，remindBefore 提醒设置保留
+    // 旧版本的「提醒」类型已取消，统一按待办展示
     const type = raw.type === 'reminder' ? 'todo' : (TYPE_META[raw.type] ? raw.type : 'todo');
     const time = /^\d{2}:\d{2}$/.test(String(raw.time || '')) ? String(raw.time) : null;
     const recurrence = normalizeRecurrence(raw.recurrence);
     const completions = normalizeCompletions(raw.completions);
-    const remindRaw = Number(raw.remindBefore);
-    const remindBefore = isFinite(remindRaw) && Math.round(remindRaw) === remindRaw &&
-      remindRaw >= 1 && remindRaw <= 10080 ? remindRaw : null;
     return {
       id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
       type: type,
@@ -910,7 +899,6 @@
       categoryId: typeof raw.categoryId === 'string' && raw.categoryId ? raw.categoryId : null,
       note: String(raw.note || '').slice(0, 500),
       address: normalizeAddress(raw.address),
-      remindBefore: remindBefore,
       recurrence: recurrence,
       completions: completions
     };
@@ -975,6 +963,20 @@
 
   // ---------- 计划（与日程条目独立存储） ----------
   const PLAN_KINDS = { week: '周计划', month: '月计划', year: '年计划' };
+  // 目标次数上限：够表达长期计划，也不至于把卡片撑爆
+  const PLAN_TARGET_MAX = 999;
+  // 五种进度视觉，全部在同一套卡片高度内排布
+  const PLAN_PROGRESS_STYLES = ['bar', 'battery', 'ring', 'percent', 'moon'];
+  const PLAN_PROGRESS_META = {
+    bar: { zh: '进度条', en: 'Bar' },
+    battery: { zh: '能量格', en: 'Cells' },
+    ring: { zh: '环形', en: 'Ring' },
+    percent: { zh: '百分数', en: 'Percent' },
+    moon: { zh: '月相', en: 'Moon' }
+  };
+  function planStyleOf(v) {
+    return PLAN_PROGRESS_STYLES.indexOf(v) !== -1 ? v : 'bar';
+  }
   // 「本周期」按类型说清楚：周 / 月 / 年各自一套叫法，空态、统计、分组标题统一使用
   const PLAN_SCOPE_WORD = { week: '本周', month: '本月', year: '本年度' };
   const PLAN_SCOPE_EMPTY = {
@@ -995,6 +997,20 @@
     return startOfWeek(key);
   }
 
+  // 周期最后一天：用来判断计划是否已经过期（周期结束且目标未达成）
+  function planPeriodEnd(kind, periodStart) {
+    const d = keyToDate(periodStart);
+    if (kind === 'year') return d.getFullYear() + '-12-31';
+    if (kind === 'month') return dateKey(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    return addDays(periodStart, 6);
+  }
+
+  function planIsOverdue(plan, progress) {
+    const p = progress || planProgress(plan);
+    if (p.done) return false;
+    return todayKey() > planPeriodEnd(plan.kind, plan.periodStart);
+  }
+
   function planPeriodLabel(kind, periodStart) {
     const d = keyToDate(periodStart);
     if (kind === 'year') return isEn() ? String(d.getFullYear()) : d.getFullYear() + ' 年';
@@ -1002,6 +1018,8 @@
     return shortDate(periodStart) + ' – ' + shortDate(addDays(periodStart, 6));
   }
 
+  // 计划进度：target = 目标次数 M，count = 已完成次数 N。
+  // 目标 1 的条目等同原来的「一次性计划」，done 只是 count >= target 的派生值。
   function normalizePlan(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const kind = PLAN_KINDS[raw.kind] ? raw.kind : 'week';
@@ -1010,9 +1028,15 @@
     let periodStart = String(raw.periodStart || '');
     if (isNaN(keyToDate(periodStart).getTime())) periodStart = planPeriodStart(kind, todayKey());
     const time = /^\d{2}:\d{2}$/.test(String(raw.time || '')) ? String(raw.time) : null;
-    const remindRaw = Number(raw.remindBefore);
-    const remindBefore = isFinite(remindRaw) && Math.round(remindRaw) === remindRaw &&
-      remindRaw >= 1 && remindRaw <= 10080 ? remindRaw : null;
+
+    const rawTarget = Math.round(Number(raw.target));
+    const rawCount = Math.round(Number(raw.count));
+    let target = isFinite(rawTarget) && rawTarget > 0 ? rawTarget : (isFinite(rawCount) && rawCount > 0 ? rawCount : 1);
+    target = Math.min(Math.max(target, 1), PLAN_TARGET_MAX);
+    // 旧数据只有 done：完成过就把进度直接补满，未完成则从 0 开始
+    let count = isFinite(rawCount) ? rawCount : (raw.done === true ? target : 0);
+    count = Math.min(Math.max(count, 0), target);
+
     return {
       id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
       kind: kind,
@@ -1023,9 +1047,12 @@
       categoryId: typeof raw.categoryId === 'string' && raw.categoryId ? raw.categoryId : null,
       note: String(raw.note || '').slice(0, 500),
       address: normalizeAddress(raw.address),
-      remindBefore: remindBefore,
-      done: raw.done === true,
-      doneAt: typeof raw.doneAt === 'number' ? raw.doneAt : (raw.done === true ? Date.now() : null),
+      target: target,
+      count: count,
+      // 每条计划自己的进度视觉；旧数据缺省回落进度条
+      progressStyle: planStyleOf(raw.progressStyle),
+      done: count >= target,
+      doneAt: typeof raw.doneAt === 'number' ? raw.doneAt : (count >= target ? Date.now() : null),
       // 旧数据没有 order：null 表示继续按时间/创建顺序，不强行改写
       order: typeof raw.order === 'number' && isFinite(raw.order) ? raw.order : null,
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -1033,18 +1060,322 @@
     };
   }
 
+  function planProgress(plan) {
+    const target = Math.max(1, Math.round(Number(plan && plan.target) || 1));
+    const count = Math.min(target, Math.max(0, Math.round(Number(plan && plan.count) || 0)));
+    return { target: target, count: count, ratio: count / target, done: count >= target };
+  }
+
   // ==================== 日记 ====================
 
-  // 六种心情：所有面孔共用同一个外圆，只换眼睛与嘴，保证笔画一致
+  // 心情：所有面孔共用同一个外圆，只换眼睛与嘴，保证笔画一致
   const DIARY_MOODS = [
     { id: 'happy', zh: '开心', en: 'Happy', face: '<path d="M9 10.4h.01M15 10.4h.01"/><path d="M8.8 14c1.9 2.1 4.5 2.1 6.4 0"/>' },
     { id: 'calm', zh: '平静', en: 'Calm', face: '<path d="M9 10.4h.01M15 10.4h.01"/><path d="M9.2 14.4h5.6"/>' },
     { id: 'tired', zh: '疲惫', en: 'Tired', face: '<path d="M8.2 10.2h2.2M13.6 10.2h2.2"/><path d="M9.6 14.6c1.5.9 3.3.9 4.8 0"/>' },
     { id: 'sad', zh: '难过', en: 'Sad', face: '<path d="M9 10.4h.01M15 10.4h.01"/><path d="M8.8 15.2c1.9-2.1 4.5-2.1 6.4 0"/>' },
     { id: 'annoyed', zh: '烦躁', en: 'Irritated', face: '<path d="M8.4 9.4l2.4 1M15.6 9.4l-2.4 1"/><path d="M9.2 15c.9-1 1.7-1 2.6 0s1.7 1 2.6 0"/>' },
-    { id: 'hopeful', zh: '期待', en: 'Hopeful', face: '<path d="M9 10.4h.01M15 10.4h.01"/><circle cx="12" cy="14.8" r="1.5"/>' }
+    { id: 'hopeful', zh: '期待', en: 'Hopeful', face: '<path d="M9 10.4h.01M15 10.4h.01"/><circle cx="12" cy="14.8" r="1.5"/>' },
+    { id: 'excited', zh: '兴奋', en: 'Excited', face: '<path d="M9 10.4h.01M15 10.4h.01"/><path d="M8.4 13.4c2.1 3 5.1 3 7.2 0"/>' },
+    { id: 'grateful', zh: '感激', en: 'Grateful', face: '<path d="M8.4 10.6c.6-.8 1.4-.8 2 0M13.6 10.6c.6-.8 1.4-.8 2 0"/><path d="M9 14c1.8 1.6 4.2 1.6 6 0"/>' },
+    { id: 'angry', zh: '生气', en: 'Angry', face: '<path d="M8.2 8.6l2.6 1.4M15.8 8.6l-2.6 1.4"/><path d="M9.4 15.6c1.7-.8 3.4-.8 5.2 0"/>' },
+    { id: 'anxious', zh: '焦虑', en: 'Anxious', face: '<path d="M9 10.4h.01M15 10.4h.01"/><path d="M9 14.8c.8-.9 1.6.9 2.4 0s1.6-.9 2.4 0"/>' },
+    { id: 'lonely', zh: '孤独', en: 'Lonely', face: '<path d="M8.6 10.6h2M13.4 10.6h2"/><path d="M9.4 15h5.2"/>' },
+    { id: 'surprised', zh: '惊喜', en: 'Surprised', face: '<path d="M9 10.4h.01M15 10.4h.01"/><circle cx="12" cy="15" r="1.8"/>' },
+    { id: 'shy', zh: '害羞', en: 'Shy', face: '<path d="M8.4 10.6c.6.5 1.4.5 2 0M13.6 10.6c.6.5 1.4.5 2 0"/><path d="M9.6 14.4c1.4 1 3.4 1 4.8 0"/><path d="M6.6 12.6h.9M16.5 12.6h.9"/>' },
+    { id: 'moved', zh: '感动', en: 'Moved', face: '<path d="M8.6 10.6c.5-.7 1.2-.7 1.7 0M13.7 10.6c.5-.7 1.2-.7 1.7 0"/><path d="M9 14.2c1.8 1.7 4.2 1.7 6 0"/>' },
+    { id: 'speechless', zh: '无语', en: 'Speechless', face: '<path d="M8.6 10.6h2M13.4 10.6h2"/><path d="M9.4 14.9h5.2"/>' },
+    { id: 'relieved', zh: '释然', en: 'Relieved', face: '<path d="M8.4 10.6c.6.6 1.4.6 2 0M13.6 10.6c.6.6 1.4.6 2 0"/><path d="M9.4 14.2c1.7 1.4 3.5 1.4 5.2 0"/>' },
+    { id: 'bored', zh: '无聊', en: 'Bored', face: '<path d="M8.4 10.4h2.2M13.4 10.4h2.2"/><path d="M9.4 14.8h5.2"/>' },
+    { id: 'longing', zh: '想念', en: 'Longing', face: '<path d="M9 10.4h.01M15 10.4h.01"/><path d="M9 14.6c1.6-.9 4.4-.9 6 0"/><path d="M17.8 15.6c.7.5 1.3 1.3 1.3 2a1.4 1.4 0 0 1-2.6 0c0-.7.6-1.5 1.3-2Z"/>' }
   ];
   const DIARY_MOOD_IDS = DIARY_MOODS.map(function (m) { return m.id; });
+
+  // 自定义情绪可选图标：18 张预设面孔 + 8 个抽象符号，统一放进同一个外圆
+  const MOOD_GLYPH_EXTRAS = [
+    { id: 'heart', face: '<path d="M12 16.6c-2.6-1.8-4-3.2-4-4.9a2.2 2.2 0 0 1 4-1.2 2.2 2.2 0 0 1 4 1.2c0 1.7-1.4 3.1-4 4.9Z"/>' },
+    { id: 'star', face: '<path d="M12 6.6l1.7 3.5 3.8.5-2.8 2.7.7 3.8-3.4-1.9-3.4 1.9.7-3.8-2.8-2.7 3.8-.5z"/>' },
+    { id: 'sun', face: '<circle cx="12" cy="12" r="3"/><path d="M12 6.2v-1.4M12 19.2v-1.4M6.2 12h-1.4M19.2 12h-1.4M8.1 8.1l-1-1M16.9 16.9l-1-1M8.1 15.9l-1 1M16.9 8.1l-1 1"/>' },
+    { id: 'moon', face: '<path d="M14.6 7.2a4.8 4.8 0 1 0 3.9 7.6 5.4 5.4 0 0 1-3.9-7.6Z"/>' },
+    { id: 'leaf', face: '<path d="M16.8 7.2c0 5.2-3.6 8.2-8.4 8.4 0-5 3.4-8.2 8.4-8.4Z"/><path d="M9.4 14.8 15.6 8.6"/>' },
+    { id: 'flame', face: '<path d="M12 17.8c2.3 0 4-1.6 4-3.8 0-2.6-2.6-3.6-3.1-6.6-2.1 1.4-3.1 3.1-3.1 4.8-.5-.5-.9-1.2-1-2-1.2 1.2-1.8 2.4-1.8 3.8 0 2.2 1.7 3.8 4 3.8Z"/>' },
+    { id: 'drop', face: '<path d="M12 7.2c2 3.1 3.2 5 3.2 6.6a3.2 3.2 0 0 1-6.4 0c0-1.6 1.2-3.5 3.2-6.6Z"/>' },
+    { id: 'bolt', face: '<path d="M13.4 6.2 8.6 12.8h3l-.9 5 4.8-6.6h-3z"/>' }
+  ];
+  const MOOD_GLYPHS = DIARY_MOODS.map(function (m) {
+    return { id: m.id, face: m.face };
+  }).concat(MOOD_GLYPH_EXTRAS);
+  const MOOD_GLYPH_BY_ID = {};
+  MOOD_GLYPHS.forEach(function (g) { MOOD_GLYPH_BY_ID[g.id] = g; });
+
+  // 自定义情绪存放在 meta.moods（跟主题、语言同一份本机设置），随备份一起导出
+  function customMoods() {
+    return Array.isArray(state.meta && state.meta.moods) ? state.meta.moods : [];
+  }
+
+  function normalizeMoods(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    raw.forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      const name = String(item.name || '').trim().slice(0, 12);
+      if (!name) return;
+      let id = String(item.id || '');
+      if (!/^cm-[a-z0-9]+$/.test(id)) id = 'cm-' + uid();
+      if (out.some(function (m) { return m.id === id; })) return;
+      out.push({
+        id: id,
+        name: name,
+        color: isHexColor(item.color) ? item.color : '#7C8CF8',
+        glyph: MOOD_GLYPH_BY_ID[item.glyph] ? item.glyph : 'happy',
+        createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now()
+      });
+    });
+    return out.slice(0, 24);
+  }
+
+  // ==================== 卡片样式 / 本机设置 ====================
+
+  // mode：这套皮肤适配的主题。light / dark 表示只在对应主题下生效，
+  // 主题不匹配时静默回落到默认卡片，但保留用户的选择，切回匹配主题自动恢复。
+  const CARD_STYLES = [
+    { id: 'default', zh: '默认', en: 'Default', mode: 'both' },
+    { id: 'washi', zh: '和纸', en: 'Washi', mode: 'light' },
+    { id: 'felt', zh: '毛毡', en: 'Felt', mode: 'light' },
+    { id: 'leather', zh: '皮革', en: 'Leather', mode: 'both' },
+    { id: 'cream', zh: '奶油', en: 'Cream', mode: 'light' },
+    { id: 'note', zh: '便签纸', en: 'Sticky note', mode: 'light' },
+    { id: 'vine', zh: '藤蔓', en: 'Vine', mode: 'light' },
+    // 氛围向 · 深色专属
+    { id: 'starry', zh: '星空', en: 'Starry sky', mode: 'dark' },
+    { id: 'blackhole', zh: '黑洞', en: 'Black hole', mode: 'dark' },
+    { id: 'moon', zh: '月球', en: 'Moon', mode: 'dark' },
+    // 第二批：磨砂玻璃 / 线框 / 果冻 / 雨窗，本轮全部转正
+    { id: 'frost', zh: '磨砂玻璃', en: 'Frosted glass', mode: 'both' },
+    { id: 'outline', zh: '线框', en: 'Outline', mode: 'both' },
+    { id: 'jelly', zh: '果冻', en: 'Jelly', mode: 'both' },
+    { id: 'rain', zh: '雨窗', en: 'Rain window', mode: 'both' },
+    // 第三批：亚麻 / 拉丝金属 / 海岸 / 糖果 / 竹 / 线装书
+    { id: 'linen', zh: '亚麻', en: 'Linen', mode: 'both' },
+    { id: 'metal', zh: '拉丝金属', en: 'Brushed metal', mode: 'both' },
+    { id: 'coast', zh: '海岸', en: 'Seaside', mode: 'light' },
+    { id: 'candy', zh: '糖果', en: 'Candy', mode: 'light' },
+    { id: 'bamboo', zh: '竹简', en: 'Bamboo slip', mode: 'light' },
+    { id: 'bound', zh: '线装书', en: 'Thread-bound book', mode: 'light' },
+    // 第四批 · 风格扩容 20 套（第一批）
+    // 车票、猫趴边、气泡、漫画因造型问题被否，已从注册表与样式中移除；
+    // 以下每套至少动两处结构：形状/边缘、装饰母题的尺度、文字排版。
+    { id: 'polaroid', zh: '拍立得', en: 'Polaroid', mode: 'light' },
+    { id: 'cyber', zh: '赛博霓虹', en: 'Cyber neon', mode: 'dark' },
+    { id: 'pixel', zh: '像素 8-bit', en: 'Pixel 8-bit', mode: 'both' },
+    { id: 'garland', zh: '藤蔓缠绕', en: 'Garland', mode: 'light' },
+    { id: 'newsprint', zh: '报纸剪报', en: 'Newsprint', mode: 'light' },
+    { id: 'envelope', zh: '邮戳信封', en: 'Envelope', mode: 'light' },
+    { id: 'chalkboard', zh: '黑板粉笔', en: 'Chalkboard', mode: 'both' },
+    { id: 'canlabel', zh: '罐头标签', en: 'Can label', mode: 'light' },
+    { id: 'window', zh: '格窗光斑', en: 'Window light', mode: 'light' },
+    { id: 'subtitle', zh: '字幕卡', en: 'Subtitle card', mode: 'both' },
+    { id: 'neon', zh: '霓虹灯牌', en: 'Neon sign', mode: 'dark' },
+    { id: 'clip', zh: '便签回形针', en: 'Clipped note', mode: 'light' },
+    { id: 'quilt', zh: '绗缝棉被', en: 'Quilt', mode: 'light' },
+    { id: 'stamp', zh: '邮票', en: 'Postage stamp', mode: 'light' },
+    { id: 'pawtrail', zh: '爪印项圈', en: 'Paw trail', mode: 'light' },
+    // 胶片 / 木牌 / 撕页日历 / 和纸包装 / 票根 五套观感不成立，已连同样式一起移除
+    { id: 'blueprint', zh: '蓝图', en: 'Blueprint', mode: 'both' },
+    { id: 'zipper', zh: '拉链', en: 'Zipper', mode: 'light' },
+    { id: 'punchcard', zh: '打孔卡', en: 'Punch card', mode: 'light' },
+    { id: 'dogear', zh: '折角纸', en: 'Dog-ear', mode: 'light' },
+    { id: 'circuit', zh: '电路板', en: 'Circuit board', mode: 'dark' },
+  ];
+  const CARD_STYLE_IDS = CARD_STYLES.map(function (s) { return s.id; });
+
+  // 旧键值平滑升级：旧的 paper / glass / ink（以及默认 soft）各自映射到最接近的新皮肤，
+  // 老用户已保存的选择不会丢，也不会因为认不出键值被重置成默认。
+  const CARD_STYLE_LEGACY = {
+    soft: 'washi',
+    paper: 'washi',
+    glass: 'frost',
+    ink: 'outline'
+  };
+  // 新装用户与「恢复初始设置」的落点：不挂任何皮肤变量，走应用最原始的渲染路径
+  const CARD_STYLE_DEFAULT = 'default';
+
+  function normalizeCardStyleId(raw) {
+    if (typeof raw !== 'string' || !raw) return CARD_STYLE_DEFAULT;
+    if (CARD_STYLE_IDS.indexOf(raw) !== -1) return raw;
+    return CARD_STYLE_LEGACY[raw] || CARD_STYLE_DEFAULT;
+  }
+
+  function normalizeMeta(raw) {
+    const meta = Object.assign({}, raw && typeof raw === 'object' ? raw : {});
+    meta.cardStyle = normalizeCardStyleId(meta.cardStyle);
+    meta.fontMode = normalizeFontMode(meta.fontMode);
+    meta.progressStyle = meta.progressStyle === 'battery' ? 'battery' : 'bar';
+    meta.moods = normalizeMoods(meta.moods);
+    return meta;
+  }
+
+  function cardStyleId() {
+    return normalizeCardStyleId(state.meta.cardStyle);
+  }
+
+  function cardStyleLabel(id) {
+    const key = normalizeCardStyleId(id);
+    const skin = CARD_STYLES.filter(function (s) { return s.id === key; })[0];
+    return skin ? (isEn() ? skin.en : skin.zh) : '';
+  }
+
+  function cardStyleMode(id) {
+    const key = normalizeCardStyleId(id);
+    const skin = CARD_STYLES.filter(function (s) { return s.id === key; })[0];
+    return skin && skin.mode ? skin.mode : 'both';
+  }
+
+  // 选中的皮肤是否适配当前主题；both 与 default 永远匹配
+  function cardStyleFitsTheme(id) {
+    const mode = cardStyleMode(id);
+    return mode === 'both' || mode === preferredTheme();
+  }
+
+  // 真正挂到 body 上的皮肤：不匹配就静默换成默认，用户的选择仍留在 meta 里
+  function effectiveCardStyleId() {
+    const id = cardStyleId();
+    return cardStyleFitsTheme(id) ? id : CARD_STYLE_DEFAULT;
+  }
+
+  // 「仅浅色 / 仅深色」小标记，只给单模式皮肤用
+  function cardStyleModeLabel(id) {
+    const mode = cardStyleMode(id);
+    if (mode === 'light') return T('仅浅色');
+    if (mode === 'dark') return T('仅深色');
+    return '';
+  }
+
+  // ==================== 倒数日 ====================
+
+  const CD_COLORS = ['#7C8CF8', '#E0776A', '#68C39F', '#F2B84B', '#46B3C9', '#D98BB5', '#98A2B3', '#F08A4B'];
+  // 农历表覆盖 1900–2100：超出范围一律拒绝，不硬算
+  const CD_MIN_YEAR = 1900;
+  const CD_MAX_YEAR = 2100;
+  const CD_DIRECTIONS = ['down', 'up'];
+  const CD_REPEATS = ['none', 'yearly', 'monthly'];
+  const CD_CALENDARS = ['solar', 'lunar'];
+  // 旧数据缺 direction/repeat/calendar：读入时补全并在这里打标记，boot 完成后回写一次
+  let cdNeedsMigration = false;
+
+  function normalizeCountdown(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const title = String(raw.title || '').trim().slice(0, 40);
+    const date = String(raw.date || '');
+    if (!title) return null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(keyToDate(date).getTime())) return null;
+
+    // 方向：新数据用面板选择；旧数据按日期推断（已过 = 正数，未来 = 倒数）
+    let direction = CD_DIRECTIONS.indexOf(raw.direction) !== -1 ? raw.direction : '';
+    if (!direction) {
+      direction = date < todayKey() ? 'up' : 'down';
+      cdNeedsMigration = true;
+    }
+    let repeat = CD_REPEATS.indexOf(raw.repeat) !== -1 ? raw.repeat : '';
+    if (!repeat) {
+      repeat = 'none';
+      cdNeedsMigration = true;
+    }
+    let calendar = CD_CALENDARS.indexOf(raw.calendar) !== -1 ? raw.calendar : '';
+    if (!calendar) {
+      calendar = 'solar';
+      cdNeedsMigration = true;
+    }
+
+    let lunarYear = null;
+    let lunarMonth = null;
+    let lunarDay = null;
+    let lunarLeap = false;
+    if (calendar === 'lunar') {
+      const ly = Number(raw.lunarYear);
+      const lm = Number(raw.lunarMonth);
+      const ld = Number(raw.lunarDay);
+      const okLunar = isFinite(ly) && isFinite(lm) && isFinite(ld) &&
+        ly >= CD_MIN_YEAR && ly <= CD_MAX_YEAR && lm >= 1 && lm <= 12 && ld >= 1 && ld <= 30;
+      if (okLunar) {
+        lunarYear = Math.round(ly);
+        lunarMonth = Math.round(lm);
+        lunarDay = Math.round(ld);
+        lunarLeap = raw.lunarLeap === true;
+        // 农历没有「每月几号」这种稳定概念，遇到旧数据里的组合降级为不重复
+        if (repeat === 'monthly') {
+          repeat = 'none';
+          cdNeedsMigration = true;
+        }
+      } else {
+        // 农历字段缺失或损坏：回落到公历，卡片本身不丢
+        calendar = 'solar';
+        lunarYear = lunarMonth = lunarDay = null;
+        lunarLeap = false;
+        cdNeedsMigration = true;
+      }
+    }
+
+    return {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
+      title: title,
+      date: date,
+      direction: direction,
+      repeat: repeat,
+      calendar: calendar,
+      lunarYear: lunarYear,
+      lunarMonth: lunarMonth,
+      lunarDay: lunarDay,
+      lunarLeap: lunarLeap,
+      color: isHexColor(raw.color) ? raw.color : CD_COLORS[0],
+      categoryId: typeof raw.categoryId === 'string' && raw.categoryId ? raw.categoryId : null,
+      pinned: raw.pinned === true,
+      // 横向卡片条的固定排序位次：只增不减，新增的排最右，改日期也不会跳位
+      order: isFinite(Number(raw.order)) ? Number(raw.order) : null,
+      createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
+      updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now()
+    };
+  }
+
+  function countdownDays(entry) {
+    // 重复的纪念日按「下一次」计天数，排序才不会把生日永远排到最后
+    const next = cdNextKey(entry);
+    const target = next || entry.date;
+    return cdDayDiff(todayKey(), target);
+  }
+
+  function sortCountdowns() {
+    // 旧数据没有 order：按「未来由近到远，已过由近到远」补一次位次，之后不再变
+    let maxOrder = -1;
+    state.countdowns.forEach(function (c) {
+      if (typeof c.order === 'number') maxOrder = Math.max(maxOrder, c.order);
+    });
+    state.countdowns.filter(function (c) { return typeof c.order !== 'number'; })
+      .sort(function (a, b) {
+        const da = countdownDays(a);
+        const db = countdownDays(b);
+        const ra = da >= 0 ? da : 1e9 + Math.abs(da);
+        const rb = db >= 0 ? db : 1e9 + Math.abs(db);
+        if (ra !== rb) return ra - rb;
+        return a.date.localeCompare(b.date);
+      })
+      .forEach(function (c) { c.order = ++maxOrder; });
+
+    state.countdowns.sort(function (a, b) {
+      // 置顶的排最前，其余按固定位次；位次相同再按日期
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      if (a.order !== b.order) return a.order - b.order;
+      return a.date.localeCompare(b.date);
+    });
+  }
+
+  function countdownNextOrder() {
+    let max = -1;
+    state.countdowns.forEach(function (c) {
+      if (typeof c.order === 'number') max = Math.max(max, c.order);
+    });
+    return max + 1;
+  }
 
   // 附件上限：单篇 20 个、单个 20MB、整体 500MB
   const DIARY_MAX_FILES = 20;
@@ -1065,6 +1396,12 @@
     for (let i = 0; i < DIARY_MOODS.length; i++) {
       if (DIARY_MOODS[i].id === id) return DIARY_MOODS[i];
     }
+    const list = customMoods();
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id !== id) continue;
+      const glyph = MOOD_GLYPH_BY_ID[list[i].glyph] || MOOD_GLYPH_BY_ID.happy;
+      return { id: id, zh: list[i].name, en: list[i].name, face: glyph.face, color: list[i].color, custom: true };
+    }
     return null;
   }
 
@@ -1073,11 +1410,23 @@
     return m ? (isEn() ? m.en : m.zh) : '';
   }
 
+  // 情绪条：预设 12 种 + 用户自定义；自定义带自己的颜色
+  function moodAll() {
+    const presets = DIARY_MOODS.map(function (m) {
+      return { id: m.id, label: isEn() ? m.en : m.zh, color: null, custom: false };
+    });
+    const customs = customMoods().map(function (m) {
+      return { id: m.id, label: m.name, color: m.color, custom: true };
+    });
+    return presets.concat(customs);
+  }
+
   // 面孔：24 网格、1.6 描边，和底部导航同一套线性语言
   function moodIconHTML(id, cls) {
     const m = moodMeta(id);
     if (!m) return '';
-    return '<svg class="' + (cls || 'mood-ico') + '" viewBox="0 0 24 24" aria-hidden="true">' +
+    return '<svg class="' + (cls || 'mood-ico') + '" viewBox="0 0 24 24" aria-hidden="true"' +
+      (m.color ? ' style="color:' + esc(m.color) + '"' : '') + '>' +
       '<circle cx="12" cy="12" r="8.2"/>' + m.face + '</svg>';
   }
 
@@ -1099,21 +1448,42 @@
     };
   }
 
-  // 位置：省市来自内置表（完全离线），具体位置是用户自己写的一行，全部可选
+  // 位置：省市区县来自内置表（完全离线），具体位置是用户自己写的一行，全部可选
   function normalizeDiaryLocation(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const province = String(raw.province || '').trim().slice(0, 20);
     const city = String(raw.city || '').trim().slice(0, 20);
+    const district = String(raw.district || '').trim().slice(0, 20);
     const text = String(raw.text || '').trim().slice(0, 60);
-    if (!province && !city && !text) return null;
-    return { province: province, city: city, text: text };
+    if (!province && !city && !district && !text) return null;
+    return { province: province, city: city, district: district, text: text };
+  }
+
+  // 天气快照：只存用户滚轮选的位置与当天的天气结果，离线也保留
+  function normalizeDiaryWeather(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const date = typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : '';
+    const code = Number(raw.code);
+    if (!date || !isFinite(code)) return null;
+    const max = Number(raw.max);
+    const min = Number(raw.min);
+    return {
+      date: date,
+      code: code,
+      max: isFinite(max) ? max : null,
+      min: isFinite(min) ? min : null,
+      place: String(raw.place || '').trim().slice(0, 60),
+      at: typeof raw.at === 'number' ? raw.at : Date.now()
+    };
   }
 
   function normalizeDiary(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const date = typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : '';
     if (!date || isNaN(keyToDate(date).getTime())) return null;
-    const mood = DIARY_MOOD_IDS.indexOf(raw.mood) !== -1 ? raw.mood : '';
+    // 自定义情绪在 meta 之前读入，这里按 id 规则放行，渲染时找不到就自然留空
+    const rawMood = typeof raw.mood === 'string' ? raw.mood : '';
+    const mood = (DIARY_MOOD_IDS.indexOf(rawMood) !== -1 || /^cm-[a-z0-9]+$/.test(rawMood)) ? rawMood : '';
     const tags = Array.isArray(raw.tags)
       ? raw.tags.filter(function (t) { return typeof t === 'string' && t.trim(); })
           .map(function (t) { return t.trim().slice(0, 16); })
@@ -1124,6 +1494,7 @@
       : [];
     const title = typeof raw.title === 'string' ? raw.title.trim().slice(0, DIARY_TITLE_MAX) : '';
     const location = normalizeDiaryLocation(raw.location);
+    const weather = normalizeDiaryWeather(raw.weather);
     const text = typeof raw.text === 'string' ? raw.text.slice(0, 50000) : '';
     // 完全空的记录直接丢弃：旧版本或异常退出可能留下空壳。
     // 只有标题、只有位置也属于有效记录。
@@ -1135,6 +1506,7 @@
       mood: mood,
       tags: tags,
       location: location,
+      weather: weather,
       attachments: attachments,
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
       updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now()
@@ -1192,6 +1564,7 @@
         mood: entry.mood,
         tags: entry.tags.slice(),
         location: entry.location ? Object.assign({}, entry.location) : null,
+        weather: entry.weather ? Object.assign({}, entry.weather) : null,
         attachments: entry.attachments.map(function (a) { return Object.assign({}, a); }),
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt
@@ -1572,6 +1945,7 @@
     let plans = [];
     let meta = {};
     let diary = [];
+    let countdowns = [];
     try {
       if (storage.status === 'idb') {
         items = (await idbGet('items')) || [];
@@ -1579,18 +1953,21 @@
         plans = (await idbGet('plans')) || [];
         meta = (await idbGet('meta')) || {};
         diary = (await idbGet('diary')) || [];
+        countdowns = (await idbGet('countdowns')) || [];
       } else if (storage.status === 'local') {
         items = JSON.parse(localStorage.getItem(LS_ITEMS_KEY) || '[]');
         cats = JSON.parse(localStorage.getItem(LS_CATS_KEY) || '[]');
         plans = JSON.parse(localStorage.getItem(LS_PLANS_KEY) || '[]');
         meta = JSON.parse(localStorage.getItem(LS_META_KEY) || '{}');
         diary = JSON.parse(localStorage.getItem(LS_DIARY_KEY) || '[]');
+        countdowns = JSON.parse(localStorage.getItem(LS_CD_KEY) || '[]');
       } else {
         items = storage.memoryItems;
         cats = storage.memoryCats;
         plans = storage.memoryPlans;
         meta = storage.memoryMeta;
         diary = storage.memoryDiary;
+        countdowns = storage.memoryCountdowns;
       }
     } catch (err) {
       console.warn('读取本地数据失败：', err);
@@ -1600,12 +1977,15 @@
     if (!Array.isArray(cats)) cats = [];
     if (!Array.isArray(plans)) plans = [];
     if (!Array.isArray(diary)) diary = [];
+    if (!Array.isArray(countdowns)) countdowns = [];
     if (!meta || typeof meta !== 'object') meta = {};
 
     state.categories = cats.map(normalizeCategory).filter(Boolean).slice(0, MAX_CATEGORIES);
     sortCategories();
     state.items = items.map(normalizeItem).filter(Boolean);
     state.plans = plans.map(normalizePlan).filter(Boolean);
+    state.countdowns = countdowns.map(normalizeCountdown).filter(Boolean);
+    sortCountdowns();
     // 日记以 date 为唯一键：旧备份里万一有重复日期，保留更新时间较晚的那条
     const diaryByDate = {};
     diary.forEach(function (raw) {
@@ -1616,7 +1996,7 @@
     });
     state.diary = Object.keys(diaryByDate).map(function (k) { return diaryByDate[k]; });
     sortDiary();
-    state.meta = meta;
+    state.meta = normalizeMeta(meta);
 
     // 旧数据的条目没有 categoryId，这里只在内存里视为未分类，不写回存储
     const ids = new Set(state.categories.map(function (cat) { return cat.id; }));
@@ -1663,6 +2043,24 @@
     } catch (err) {
       console.error('计划保存失败：', err);
       if (!silent) showToast(T('计划保存失败，请重试'));
+      return false;
+    }
+  }
+
+  async function persistCountdowns(silent) {
+    const snapshot = state.countdowns.map(function (cd) { return Object.assign({}, cd); });
+    try {
+      if (storage.status === 'idb') {
+        await idbSet('countdowns', snapshot);
+      } else if (storage.status === 'local') {
+        localStorage.setItem(LS_CD_KEY, JSON.stringify(snapshot));
+      } else {
+        storage.memoryCountdowns = snapshot;
+      }
+      return true;
+    } catch (err) {
+      console.error('倒数日保存失败：', err);
+      if (!silent) showToast(T('纪念日保存失败，请重试'));
       return false;
     }
   }
@@ -1756,11 +2154,6 @@
       onToday = state.yearView
         ? state.yearViewYear === td.getFullYear()
         : state.month.getFullYear() === td.getFullYear() && state.month.getMonth() === td.getMonth();
-    } else if (state.view === 'agenda') {
-      title.textContent = relativeDayLabel(state.agendaAnchor) + ' · ' + weekdayOf(state.agendaAnchor);
-      prev.hidden = false;
-      next.hidden = false;
-      onToday = state.agendaAnchor === t;
     } else if (state.view === 'schedule') {
       const start = state.scheduleAnchor || startOfWeek(t);
       title.textContent = shortDate(start) + ' – ' + shortDate(addDays(start, 6));
@@ -1771,12 +2164,18 @@
       title.textContent = T('日记');
       prev.hidden = true;
       next.hidden = true;
+    } else if (state.view === 'profile') {
+      title.textContent = T('更多');
+      prev.hidden = true;
+      next.hidden = true;
     } else {
       title.textContent = T('计划');
       prev.hidden = true;
       next.hidden = true;
     }
 
+    // 「更多」页只有设置，不需要「今天」
+    $('#todayBtn').hidden = state.view === 'profile';
     $('#todayBtn').classList.toggle('is-current', onToday);
   }
 
@@ -1786,7 +2185,7 @@
       $('#summaryBar').hidden = true;
       return;
     }
-    if (state.view === 'plan' || state.view === 'diary') {
+    if (state.view === 'plan' || state.view === 'diary' || state.view === 'profile') {
       $('#summaryBar').hidden = true;
       return;
     }
@@ -2262,9 +2661,182 @@
   const ALM_GOD_START = { 2: 0, 8: 0, 3: 2, 9: 2, 4: 4, 10: 4, 5: 6, 11: 6, 0: 8, 6: 8, 1: 10, 7: 10 };
   const almanacCache = {};
 
+  // 「日历卡片」三选：黄历 / 星座 / 关闭。
+  // 老数据只有 almanacVisible 开关，关掉过的映射成「关闭」，其余按「黄历」。
+  function storedCalendarCardMode() {
+    const m = state.meta.calendarCard;
+    if (m === 'almanac' || m === 'zodiac' || m === 'off') return m;
+    return state.meta.almanacVisible === false ? 'off' : 'almanac';
+  }
+
+  // 英文界面只有「星座 / 关闭」两段，黄历一律按「星座」等效，避免选中项在控件里不存在。
+  function calendarCardMode() {
+    const m = storedCalendarCardMode();
+    return isEn() && m === 'almanac' ? 'zodiac' : m;
+  }
+
+  // 切到英文或英文启动时，把存着的「黄历」迁成「星座」，保证刷新后控件仍有选中项。
+  // lang 传目标语言（切语言发生在 I18N 生效前），不传则按当前语言判断。
+  function migrateCalendarCardForLang(lang) {
+    const en = lang ? lang === 'en' : isEn();
+    if (!en || storedCalendarCardMode() !== 'almanac') return false;
+    state.meta.calendarCard = 'zodiac';
+    state.meta.almanacVisible = true;
+    return true;
+  }
+
   function almanacVisible() {
-    // 黄历是中文语境内容，英文界面不展示；用户关掉开关也不展示
-    return !isEn() && state.meta.almanacVisible !== false;
+    // 英文界面的等效模式是「星座」，黄历卡片不展示；用户选「关闭」也不展示
+    return calendarCardMode() === 'almanac';
+  }
+
+  // 星座：本地静态文案 + 按日期确定性打分，不联网、不新增权限
+  const ZODIAC_SIGNS = [
+    { id: 'aries', zh: '白羊座', short: '白羊', en: 'Aries', glyph: '♈', el: '火象', elEn: 'Fire', planet: '火星', planetEn: 'Mars',
+      color: '暖橙', colorEn: 'Warm orange', num: 3,
+      luckZh: '行动力被点亮，那件一直想开头的事适合今天动手', luckEn: 'Start what you keep postponing',
+      adviceZh: '别把话说满，留一点回旋余地', adviceEn: 'Leave some room in what you promise' },
+    { id: 'taurus', zh: '金牛座', short: '金牛', en: 'Taurus', glyph: '♉', el: '土象', elEn: 'Earth', planet: '金星', planetEn: 'Venus',
+      color: '米白', colorEn: 'Ivory', num: 6,
+      luckZh: '适合把账目、开销和长期计划理一遍，越具体越安心', luckEn: 'Sort budgets and long-term plans',
+      adviceZh: '不要为了省事而答应临时的加码', adviceEn: 'Do not accept extra work to stay easy' },
+    { id: 'gemini', zh: '双子座', short: '双子', en: 'Gemini', glyph: '♊', el: '风象', elEn: 'Air', planet: '水星', planetEn: 'Mercury',
+      color: '淡黄', colorEn: 'Pale yellow', num: 5,
+      luckZh: '消息来得快，沟通顺，适合约人把卡住的事聊开', luckEn: 'Talk through what has been stuck',
+      adviceZh: '听到的别急着转述，先确认一遍', adviceEn: 'Confirm before you repeat it' },
+    { id: 'cancer', zh: '巨蟹座', short: '巨蟹', en: 'Cancer', glyph: '♋', el: '水象', elEn: 'Water', planet: '月亮', planetEn: 'Moon',
+      color: '珍珠白', colorEn: 'Pearl white', num: 2,
+      luckZh: '情绪敏感但直觉准，适合处理家里和关系里的小事', luckEn: 'Home matters go smoothly',
+      adviceZh: '别用猜测代替询问', adviceEn: 'Ask instead of guessing' },
+    { id: 'leo', zh: '狮子座', short: '狮子', en: 'Leo', glyph: '♌', el: '火象', elEn: 'Fire', planet: '太阳', planetEn: 'Sun',
+      color: '琥珀', colorEn: 'Amber', num: 1,
+      luckZh: '适合站出来牵头，你的判断今天比别人快半步', luckEn: 'Lead — your read is a beat ahead',
+      adviceZh: '把功劳分出去，场面会更稳', adviceEn: 'Share the credit and stay steady' },
+    { id: 'virgo', zh: '处女座', short: '处女', en: 'Virgo', glyph: '♍', el: '土象', elEn: 'Earth', planet: '水星', planetEn: 'Mercury',
+      color: '松绿', colorEn: 'Pine green', num: 7,
+      luckZh: '细节手感在线，适合校对、整理和收尾', luckEn: 'Good day to proof and finish',
+      adviceZh: '允许一件事做到八十分就交出去', adviceEn: 'Let one thing ship at eighty percent' },
+    { id: 'libra', zh: '天秤座', short: '天秤', en: 'Libra', glyph: '♎', el: '风象', elEn: 'Air', planet: '金星', planetEn: 'Venus',
+      color: '雾蓝', colorEn: 'Foggy blue', num: 9,
+      luckZh: '审美和判断都在线，适合定方案、挑东西', luckEn: 'Good for choosing and deciding',
+      adviceZh: '别为了照顾所有人而迟迟不选', adviceEn: 'Do not stall just to please everyone' },
+    { id: 'scorpio', zh: '天蝎座', short: '天蝎', en: 'Scorpio', glyph: '♏', el: '水象', elEn: 'Water', planet: '冥王星', planetEn: 'Pluto',
+      color: '藏青', colorEn: 'Navy', num: 4,
+      luckZh: '专注力很深，适合啃需要耐心的硬骨头', luckEn: 'Deep focus on patient work',
+      adviceZh: '先听完再回应，别急着下结论', adviceEn: 'Listen to the end before concluding' },
+    { id: 'sagittarius', zh: '射手座', short: '射手', en: 'Sagittarius', glyph: '♐', el: '火象', elEn: 'Fire', planet: '木星', planetEn: 'Jupiter',
+      color: '珊瑚', colorEn: 'Coral', num: 8,
+      luckZh: '心思往外跑，适合规划出行和学新东西', luckEn: 'Plan a trip, learn something',
+      adviceZh: '行程留一段空白，不必排满', adviceEn: 'Keep a blank slot in the plan' },
+    { id: 'capricorn', zh: '摩羯座', short: '摩羯', en: 'Capricorn', glyph: '♑', el: '土象', elEn: 'Earth', planet: '土星', planetEn: 'Saturn',
+      color: '石墨灰', colorEn: 'Graphite', num: 10,
+      luckZh: '耐力最稳的一天，适合推进长期目标', luckEn: 'Push the long-term goal',
+      adviceZh: '别把休息也当成任务', adviceEn: 'Do not turn rest into a task' },
+    { id: 'aquarius', zh: '水瓶座', short: '水瓶', en: 'Aquarius', glyph: '♒', el: '风象', elEn: 'Air', planet: '天王星', planetEn: 'Uranus',
+      color: '淡紫', colorEn: 'Lilac', num: 11,
+      luckZh: '想法跳脱，适合换个角度重新看老问题', luckEn: 'Try a new angle on old issues',
+      adviceZh: '把新点子写下来，别只停在嘴上', adviceEn: 'Write the idea down, not just say it' },
+    { id: 'pisces', zh: '双鱼座', short: '双鱼', en: 'Pisces', glyph: '♓', el: '水象', elEn: 'Water', planet: '海王星', planetEn: 'Neptune',
+      color: '海蓝', colorEn: 'Sea blue', num: 12,
+      luckZh: '共情力强，适合谈需要体谅的事', luckEn: 'Talk with understanding',
+      adviceZh: '给情绪找一个落地的出口', adviceEn: 'Give the feeling somewhere to go' }
+  ];
+
+  function zodiacOf() {
+    const id = state.meta.zodiacSign;
+    const hit = ZODIAC_SIGNS.filter(function (z) { return z.id === id; })[0];
+    return hit || ZODIAC_SIGNS[0];
+  }
+
+  // 同一天同一星座分数稳定（纯本地哈希，不随机跳变）
+  function zodiacScore(key, id) {
+    const s = key + '|' + id;
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 9973;
+    return 62 + (h % 34);
+  }
+
+  function zodiacStars(score) {
+    const lit = Math.max(1, Math.min(5, Math.round(score / 20)));
+    return '★★★★★'.slice(0, lit) + '☆☆☆☆☆'.slice(0, 5 - lit);
+  }
+
+  function zodiacCardHTML(key) {
+    if (calendarCardMode() !== 'zodiac') return '';
+    const z = zodiacOf();
+    const en = isEn();
+    const score = zodiacScore(key, z.id);
+    const tagFortune = en ? 'Luck' : '运';
+    const tagDo = en ? 'Do' : '宜';
+    const sep = en ? ': ' : '：';
+    return '<div class="dd-almanac" aria-label="' + esc(T('星座')) + '">' +
+      '<div class="alm-top">' +
+        '<span class="alm-title">' + esc(T('星座')) + ' · ' + esc(en ? z.en : z.zh) + '</span>' +
+        '<span class="alm-ganzhi">' + esc(z.glyph + '\uFE0E ' + (en ? z.elEn + ' · ' + z.planetEn : z.el + ' · ' + z.planet)) + '</span>' +
+      '</div>' +
+      '<div class="alm-line"><b class="alm-tag ok">' + esc(tagFortune) + '</b><span>' +
+        esc(zodiacStars(score) + ' ' + score + ' · ' + (en ? z.luckEn : z.luckZh)) + '</span></div>' +
+      '<div class="alm-line"><b class="alm-tag no">' + esc(tagDo) + '</b><span>' + esc(en ? z.adviceEn : z.adviceZh) + '</span></div>' +
+      '<div class="alm-foot">' +
+        '<span>' + esc(T('幸运色') + sep + (en ? z.colorEn : z.color)) + '</span>' +
+        '<span>' + esc(T('幸运数字') + sep + z.num) + '</span>' +
+        '<span>' + esc(T('守护星') + sep + (en ? z.planetEn : z.planet)) + '</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // 各星座的标准日期区间（公历，跨年的摩羯按 12.22 – 1.19 写）
+  const ZODIAC_RANGES = {
+    aries: '3.21 – 4.19', taurus: '4.20 – 5.20', gemini: '5.21 – 6.21', cancer: '6.22 – 7.22',
+    leo: '7.23 – 8.22', virgo: '8.23 – 9.22', libra: '9.23 – 10.23', scorpio: '10.24 – 11.22',
+    sagittarius: '11.23 – 12.21', capricorn: '12.22 – 1.19', aquarius: '1.20 – 2.18', pisces: '2.19 – 3.20'
+  };
+
+  // 「选择星座」独立整页：十二星座网格，含符号、名称、日期区间与选中态
+  function renderZodiacPage() {
+    const grid = $('#zodiacGrid');
+    if (!grid) return;
+    const en = isEn();
+    const cur = zodiacOf().id;
+    grid.innerHTML = ZODIAC_SIGNS.map(function (z) {
+      const on = z.id === cur;
+      return '<button class="zodiac-item' + (on ? ' active' : '') + '" type="button" data-zodiac="' + z.id +
+        '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+        '<span class="zi-glyph" aria-hidden="true">' + z.glyph + '\uFE0E' + '</span>' +
+        '<span class="zi-text">' +
+          '<span class="zi-name">' + esc(en ? z.en : z.zh) + '</span>' +
+          '<span class="zi-range">' + esc(ZODIAC_RANGES[z.id] || '') + '</span>' +
+        '</span>' +
+        '<span class="zi-tick" aria-hidden="true">' + (on ? '✓' : '') + '</span>' +
+      '</button>';
+    }).join('');
+  }
+
+  function openZodiacPage() {
+    const page = $('#zodiacPage');
+    if (!page) return;
+    renderZodiacPage();
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+    const body = page.querySelector('.settings-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  function closeZodiacPage() {
+    const page = $('#zodiacPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+    }, 240);
+  }
+
+  function calendarCardHTML(key) {
+    const mode = calendarCardMode();
+    if (mode === 'off') return '';
+    if (mode === 'zodiac') return zodiacCardHTML(key);
+    return almanacCardHTML(key);
   }
 
   // 天气总开关：老数据没有该字段时默认开启
@@ -2485,7 +3057,7 @@
     }
 
     inner.innerHTML =
-      almanacCardHTML(key) +
+      calendarCardHTML(key) +
       diaryEntryHTML(key) +
       listHTML;
 
@@ -2724,8 +3296,6 @@
     state.items.splice(idx, 1);
     await persistItems();
     renderAll();
-    scheduleReminders();
-    if (calendarSyncEnabled()) syncCalendarEvents();
     showToast(T('已删除'), 1200);
   }
 
@@ -2849,6 +3419,18 @@
     $('#batchCount').textContent = T('已选 {n} 项', { n: state.batchSel.size });
     const del = $('#batchDelete');
     del.disabled = state.batchSel.size === 0;
+  }
+
+  // 全选：当前屏幕内的全部卡片，含已收起的卡片组（DOM 仍在，只是不可见）
+  function selectAllBatchCards() {
+    const box = document.getElementById(document.body.classList.contains('agenda-open') ? 'agendaList' : 'dayDetailInner');
+    if (!box) return;
+    Array.prototype.forEach.call(box.querySelectorAll('.swipe[data-id]'), function (wrap) {
+      state.batchSel.add(batchKeyOf(wrap));
+    });
+    syncBatchDom();
+    renderBatchBar();
+    haptic(8);
   }
 
   function enterBatchMode(wrap) {
@@ -3011,7 +3593,6 @@
     await persistItems();
     clearBatchState();
     renderAll();
-    scheduleReminders();
     showToast(T('已删除 {n} 项', { n: st.total }), 1400);
   }
 
@@ -3213,7 +3794,9 @@
     const overdue = options.overdue === true || (!item.recurrence && !item.done && item.date < t);
     const meta = TYPE_META[item.type];
     const cat = getCategory(item.categoryId);
-    const railColor = cat ? cat.color : meta.color;
+    // 圆点只表达「类型」：日程蓝、待办绿，和左下角图注一致；
+    // 分类颜色只出现在标签 chip 上，逾期/完成另有文字与卡片状态，不占用这个点。
+    const railColor = meta.color;
     const classes = [
       'row',
       overdue ? 'overdue' : '',
@@ -3375,7 +3958,7 @@
       const active = state.agendaFilters.indexOf(cat.id) !== -1;
       html += '<button class="filter-chip' + (active ? ' active' : '') + '" type="button" data-filter="' + cat.id +
         '" aria-pressed="' + (active ? 'true' : 'false') +
-        '" style="--chip-color:' + cat.color + ';--chip-soft:' + hexToRgba(cat.color, 0.12) + '">' +
+        '" style="--chip-color:' + cat.color + ';--chip-soft:' + hexToRgba(cat.color, 0.12) + ';color:' + cat.color + '">' +
         categoryMarkHTML(cat, '--chip-color:' + cat.color) + esc(cat.name) + '</button>';
     });
 
@@ -3388,6 +3971,20 @@
     const el = document.getElementById('day-' + key);
     if (!el || !el.scrollIntoView) return;
     el.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+  }
+
+  // 「全部安排」的即时搜索：标题、备注、地点、分类名都参与匹配
+  let agendaSearchQuery = '';
+
+  function agendaItemMatches(item, q) {
+    const cat = getCategory(item.categoryId);
+    const hay = [
+      item.title,
+      item.note,
+      item.address && item.address.label,
+      cat && cat.name
+    ].filter(Boolean).join('\n').toLowerCase();
+    return hay.indexOf(q) !== -1;
   }
 
   function renderAgenda() {
@@ -3406,17 +4003,25 @@
     }
 
     const filters = state.agendaFilters;
-    const visibleItems = filters.length
+    let visibleItems = filters.length
       ? state.items.filter(function (item) { return filters.indexOf(item.categoryId) !== -1; })
       : state.items;
 
+    // 关键词过滤放在日期分组之前，分组与时间顺序保持原样
+    const q = agendaSearchQuery.trim().toLowerCase();
+    if (q) visibleItems = visibleItems.filter(function (item) { return agendaItemMatches(item, q); });
+
     if (!visibleItems.length) {
-      $('#agendaList').innerHTML =
-        '<div class="filter-empty">' +
-          '<p class="filter-empty-title">' + esc(T('所选分类还没有条目')) + '</p>' +
-          '<p class="filter-empty-sub">' + esc(T('换一个分类看看，或者给条目加上这些分类。')) + '</p>' +
-          '<button class="empty-btn" type="button" data-filter="all">' + esc(T('查看全部')) + '</button>' +
-        '</div>';
+      $('#agendaList').innerHTML = q
+        ? '<div class="filter-empty">' +
+            '<p class="filter-empty-title">' + esc(T('没有匹配的安排')) + '</p>' +
+            '<p class="filter-empty-sub">' + esc(T('换个关键词试试，或清空搜索。')) + '</p>' +
+          '</div>'
+        : '<div class="filter-empty">' +
+            '<p class="filter-empty-title">' + esc(T('所选分类还没有条目')) + '</p>' +
+            '<p class="filter-empty-sub">' + esc(T('换一个分类看看，或者给条目加上这些分类。')) + '</p>' +
+            '<button class="empty-btn" type="button" data-filter="all">' + esc(T('查看全部')) + '</button>' +
+          '</div>';
       return;
     }
 
@@ -3612,8 +4217,50 @@
   // ==================== 渲染：计划 ====================
 
   function planColorOf(plan) {
-    const cat = getCategory(plan.categoryId);
-    return cat ? cat.color : 'var(--primary)';
+    // 计划没有「日程/待办」之分，圆点统一用计划色，不再跟随分类标签
+    return 'var(--primary)';
+  }
+
+  // 月相亮面路径：k 为已完成比例（0 = 新月全暗，1 = 满月全亮）。
+  // 外圈先画右半圆，再用明暗界线椭圆从底部回到顶部：
+  // k < 0.5 界线凸向右侧，亮面是右边缘月牙；k = 0.5 界线为直线，亮面正好半盘；
+  // k > 0.5 界线凸向左侧，亮面超过半盘。两端单独处理，避免弧线退化后露出半盘。
+  function moonLitPathD(k) {
+    const r = 9.4;
+    const ko = Math.max(0, Math.min(1, k));
+    if (ko <= 0) return '';
+    if (ko >= 1) {
+      return 'M0,' + (-r) + ' A' + r + ',' + r + ' 0 0 1 0,' + r +
+        ' A' + r + ',' + r + ' 0 0 1 0,' + (-r) + 'Z';
+    }
+    const rx = (r * Math.abs(1 - 2 * ko)).toFixed(2);
+    const sweep = ko < 0.5 ? 0 : 1;
+    return 'M0,' + (-r) + ' A' + r + ',' + r + ' 0 0 1 0,' + r +
+      ' A' + rx + ',' + r + ' 0 0 ' + sweep + ' 0,' + (-r) + 'Z';
+  }
+
+  // 亮面只从右侧生长：按面积比例插值推进，ease-out，面积单调不减
+  function moonEaseOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+  function animateMoonLit(el, fromK, toK) {
+    if (el._moonRaf) cancelAnimationFrame(el._moonRaf);
+    if (Math.abs(toK - fromK) < 0.001) {
+      el.setAttribute('d', moonLitPathD(toK));
+      return;
+    }
+    const start = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const dur = 280;
+    function step(now) {
+      const t = Math.min(1, (now - start) / dur);
+      const k = fromK + (toK - fromK) * moonEaseOut(t);
+      el.setAttribute('d', moonLitPathD(k));
+      if (t < 1) {
+        el._moonRaf = requestAnimationFrame(step);
+      } else {
+        el._moonRaf = 0;
+      }
+    }
+    el._moonRaf = requestAnimationFrame(step);
   }
 
   function planSort(a, b) {
@@ -3630,8 +4277,99 @@
     return (a.createdAt || 0) - (b.createdAt || 0);
   }
 
+  // 进度视觉：目标 > 1 才显示；每条计划按自己的 progressStyle 渲染
+  function planProgressVisualHTML(p, plan) {
+    if (p.target <= 1) return '';
+    const style = planStyleOf(plan && plan.progressStyle);
+    const pct = Math.round(p.ratio * 100);
+    const countHTML = '<span class="plan-count"><b data-plan-count>' + p.count + '</b>' +
+      '<span class="plan-count-sep">/</span><span data-plan-target>' + p.target + '</span></span>';
+
+    // 能量格：最多铺 60 格，超过就自动退回进度条
+    if (style === 'battery' && p.target <= 60) {
+      let cells = '';
+      for (let i = 0; i < p.target; i++) {
+        cells += '<i class="plan-cell' + (i < p.count ? ' on' : '') + '"></i>';
+      }
+      return '<div class="plan-progress battery" data-plan-style="battery">' +
+        '<div class="plan-cells' + (p.target > 24 ? ' dense' : '') + '">' + cells + '</div>' + countHTML +
+      '</div>';
+    }
+
+    if (style === 'ring') {
+      return '<div class="plan-progress ring" data-plan-style="ring">' +
+        '<span class="plan-ring-mini">' +
+          '<svg viewBox="0 0 36 36" aria-hidden="true">' +
+            '<circle class="pr-track" cx="18" cy="18" r="14" pathLength="100"/>' +
+            '<circle class="pr-fill" data-plan-arc cx="18" cy="18" r="14" pathLength="100" stroke-dasharray="100"' +
+              ' stroke-dashoffset="' + (100 - p.ratio * 100).toFixed(1) + '"/>' +
+          '</svg>' +
+          '<b class="plan-pct-in" data-plan-pct>' + pct + '%</b>' +
+        '</span>' + countHTML +
+      '</div>';
+    }
+
+    if (style === 'percent') {
+      return '<div class="plan-progress percent" data-plan-style="percent">' +
+        '<span class="plan-pct-main" data-plan-pct>' + pct + '%</span>' + countHTML +
+      '</div>';
+    }
+
+    if (style === 'moon') {
+      // 真实月盘：暗面深灰蓝 + 几处极淡环形山，亮面按完成比例呈现盈亏相位。
+      // 相位：外圈右半弧 + 明暗界线椭圆弧；k=0 新月、0.5 上弦、1 满月。
+      // 节点预算：暗面圆 1 + 环形山 3 + 亮面路径 1 + 满月高光 0/1 + 外缘 1 ≤ 7。
+      const r = 9.4;
+      const k = Math.max(0, Math.min(1, p.ratio));
+      const d = moonLitPathD(k);
+      const full = k >= 0.92;
+      return '<div class="plan-progress moon" data-plan-style="moon">' +
+        '<span class="plan-moon' + (full ? ' is-full' : '') + '" data-plan-moon>' +
+          '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+            '<defs>' +
+              '<radialGradient id="pmLitGrad" cx="38%" cy="30%" r="82%">' +
+                '<stop offset="0" stop-color="#FFF8DE"/>' +
+                '<stop offset=".5" stop-color="#F7EBC0"/>' +
+                '<stop offset=".82" stop-color="#EBD79E"/>' +
+                '<stop offset="1" stop-color="#D6BC7C"/>' +
+              '</radialGradient>' +
+              '<radialGradient id="pmDarkGrad" cx="74%" cy="44%" r="88%">' +
+                '<stop offset="0" stop-color="#4E4C56"/>' +
+                '<stop offset=".55" stop-color="#404659"/>' +
+                '<stop offset="1" stop-color="#343A4A"/>' +
+              '</radialGradient>' +
+            '</defs>' +
+            '<circle class="pm-track" cx="12" cy="12" r="' + r + '"/>' +
+            '<ellipse class="pm-crater" cx="10" cy="9" rx="2.1" ry="1.7"/>' +
+            '<ellipse class="pm-crater" cx="14.2" cy="13.8" rx="1.7" ry="1.3"/>' +
+            '<ellipse class="pm-crater" cx="9.6" cy="14.9" rx="1.2" ry="1"/>' +
+            '<g transform="translate(12 12)"><path class="pm-lit" data-plan-moon-lit data-k="' + k + '" d="' + d + '"/></g>' +
+            // 环形山必须画在亮面之上，否则满月时会被暖黄亮面整块盖住，看起来就是一块平涂。
+            // 4 个坑集中在月盘中部，靠边缘的位置一律不放，26px 下才看得清。
+            '<g class="pm-craters-lit" aria-hidden="true">' +
+              '<ellipse class="pm-crater-lit" cx="11.2" cy="8.6" rx="2.3" ry="1.8"/>' +
+              '<path class="pm-crater-rim" d="M9.3 7.9A2.4 1.9 0 0 1 12.7 7.3"/>' +
+              '<ellipse class="pm-crater-lit" cx="14.4" cy="13.1" rx="1.75" ry="1.4"/>' +
+              '<path class="pm-crater-rim" d="M13.1 12.6A1.8 1.45 0 0 1 15.2 12.2"/>' +
+              '<ellipse class="pm-crater-lit" cx="9.9" cy="15.1" rx="1.3" ry="1.05"/>' +
+              '<ellipse class="pm-crater-lit" cx="12.9" cy="10.5" rx=".95" ry=".78"/>' +
+            '</g>' +
+            '<path class="pm-glow" d="M5.1 9.9A8.2 8.2 0 0 1 11.6 3.6"/>' +
+            '<circle class="pm-rim" cx="12" cy="12" r="' + (r - 0.6) + '"/>' +
+          '</svg>' +
+        '</span>' + countHTML +
+      '</div>';
+    }
+
+    return '<div class="plan-progress bar" data-plan-style="bar">' +
+      '<div class="plan-bar"><i data-plan-bar style="width:' + (p.ratio * 100).toFixed(1) + '%"></i></div>' + countHTML +
+    '</div>';
+  }
+
   function planItemHTML(plan, showPeriod) {
     const cat = getCategory(plan.categoryId);
+    const p = planProgress(plan);
+    const overdue = planIsOverdue(plan, p);
     const tags = [];
     if (showPeriod) {
       tags.push('<span class="tag tag-plan-period">' + esc(planPeriodLabel(plan.kind, plan.periodStart)) + '</span>');
@@ -3641,20 +4379,40 @@
         (categoryGlyphHTML(cat) || '<i></i>') + esc(cat.name) + '</span>');
     }
     if (plan.priority === 'high') tags.push('<span class="tag tag-high">' + esc(T('高优先级')) + '</span>');
+    // 周期结束仍未达成：柔和砖红小标记，不整卡染红
+    if (overdue) tags.push('<span class="tag tag-plan-overdue">' + esc(T('已过期')) + '</span>');
 
-    return '<article class="row plan-item' + (plan.done ? ' done' : '') + '" data-plan-row="' + plan.id + '">' +
+    const tap = p.target <= 1
+      ? '<button class="check' + (p.done ? ' checked' : '') + '" type="button" data-plan-check="' + plan.id +
+          '" role="checkbox" aria-checked="' + (p.done ? 'true' : 'false') +
+          '" aria-label="' + esc(p.done ? T('标记为未完成') : T('标记为完成')) + '">' +
+          '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2.4 7.5l3 2.9 6.2-6.5"/></svg>' +
+        '</button>'
+      : '<button class="plan-tap' + (p.done ? ' done' : '') + '" type="button" data-plan-check="' + plan.id +
+          '" aria-label="' + esc(p.done ? T('目标已达成') : T('记一次完成')) + '">' +
+          '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+            (p.done ? '<path d="M5 12.5l4.2 4.2L19 7.4"/>' : '<path d="M12 6.2v11.6M6.2 12h11.6"/>') +
+          '</svg>' +
+        '</button>';
+
+    // 环形 / 百分数 / 月相三种：视觉块与「+」同一行，视觉在左、「+」在最右
+    const style = planStyleOf(plan.progressStyle);
+    const visual = planProgressVisualHTML(p, plan);
+    const inlineVisual = (style === 'ring' || style === 'percent' || style === 'moon') ? visual : '';
+
+    return '<article class="row plan-item' + (p.done ? ' done' : '') + (overdue ? ' plan-overdue' : '') +
+      '" data-plan-row="' + plan.id + '">' +
       '<div class="row-time">' + (plan.time ? esc(plan.time) : esc(T('全天'))) + '</div>' +
-      '<div class="row-rail"><span class="rail-dot" style="--dot-color:' + planColorOf(plan) + '"></span></div>' +
-      '<div class="row-card' + (plan.priority === 'high' ? ' high' : '') + '">' +
+      '<div class="row-rail"><span class="rail-dot" style="--dot-color:' +
+        (overdue ? 'var(--plan-overdue)' : planColorOf(plan)) + '"></span></div>' +
+      '<div class="row-card plan-row-card' + (plan.priority === 'high' ? ' high' : '') + '">' +
         '<div class="row-main">' +
           '<div class="row-title">' + esc(plan.title) + '</div>' +
           '<div class="row-meta">' + tags.join('') + '</div>' +
+          (inlineVisual ? '' : visual) +
         '</div>' +
-        '<button class="check' + (plan.done ? ' checked' : '') + '" type="button" data-plan-check="' + plan.id +
-          '" role="checkbox" aria-checked="' + (plan.done ? 'true' : 'false') +
-          '" aria-label="' + esc(plan.done ? T('标记为未完成') : T('标记为完成')) + '">' +
-          '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2.4 7.5l3 2.9 6.2-6.5"/></svg>' +
-        '</button>' +
+        (inlineVisual ? '<div class="plan-inline-visual">' + inlineVisual + '</div>' : '') +
+        tap +
       '</div>' +
     '</article>';
   }
@@ -3719,23 +4477,1416 @@
     '</div>';
   }
 
+  function planKindLabel(kind) {
+    return kind === 'month' ? T('月计划') : kind === 'year' ? T('年计划') : T('周计划');
+  }
+
   function renderPlan() {
     const t = todayKey();
+    const kind = state.planKind === 'month' || state.planKind === 'year' ? state.planKind : 'week';
+    const idx = kind === 'week' ? 0 : kind === 'month' ? 1 : 2;
+    // 头部两段：操作按钮行 → 周期分段条；分段条单占一行，作为视图切换而不是按钮
     let html = '<div class="plan-page-head">' +
-      '<div><p>' + esc(T('周、月、年分开看，长线目标也有进度。')) + '</p></div>' +
+      '<button class="plan-history-btn" id="planHistoryBtn" type="button">' + esc(T('历史计划')) + '</button>' +
       '<button class="plan-add-btn" id="planAdd" type="button">' + esc(T('＋ 添加计划')) + '</button>' +
+    '</div>' +
+    '<div class="plan-seg" id="planSeg" role="tablist" aria-label="' + esc(T('计划周期')) + '" style="--seg-i:' + idx + '">' +
+      '<span class="plan-seg-thumb" aria-hidden="true"></span>' +
+      ['week', 'month', 'year'].map(function (k) {
+        return '<button class="plan-seg-btn' + (k === kind ? ' active' : '') + '" type="button" role="tab"' +
+          ' aria-selected="' + (k === kind ? 'true' : 'false') + '" data-plan-kind="' + k + '">' +
+          esc(planKindLabel(k)) + '</button>';
+      }).join('') +
     '</div>';
-
-    ['week', 'month', 'year'].forEach(function (kind) {
-      html += planCardHTML(kind, t);
-    });
+    html += '<div id="planList">' + planCardHTML(kind, t) + '</div>';
     $('#planContent').innerHTML = html;
+  }
 
-    requestAnimationFrame(function () {
-      $$('[data-plan-ring]', $('#planContent')).forEach(function (el) {
-        el.style.strokeDashoffset = String(100 - Number(el.dataset.pct || 0));
+  // ---------- 历史计划（可左滑编辑） ----------
+
+  function planHistoryItemHTML(plan) {
+    const p = planProgress(plan);
+    const cat = getCategory(plan.categoryId);
+    const overdue = planIsOverdue(plan, p);
+    return '<div class="swipe plan-hist-swipe" data-id="' + plan.id + '">' +
+      '<button class="swipe-edit" type="button" data-plan-edit="' + plan.id + '" aria-label="编辑这条计划">' +
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 19.8h4L19.4 8.6a1.8 1.8 0 0 0 0-2.6l-1.4-1.4a1.8 1.8 0 0 0-2.6 0L4.2 15.8v4z"/><path d="M13.6 6.6l3.8 3.8"/></svg>' +
+      '</button>' +
+      '<div class="swipe-inner">' +
+        '<div class="plan-hist-item' + (p.done ? ' done' : '') + (overdue ? ' overdue' : '') + '">' +
+          '<span class="plan-hist-dot" style="background:' +
+            (overdue ? 'var(--plan-overdue)' : planColorOf(plan)) + '"></span>' +
+          '<span class="plan-hist-title">' + esc(plan.title) + '</span>' +
+          (cat ? '<span class="plan-hist-cat" style="color:' + cat.color + '">' + esc(cat.name) + '</span>' : '') +
+          '<span class="plan-hist-count">' + p.count + '/' + p.target + '</span>' +
+          '<span class="plan-hist-check" aria-hidden="true">' + (p.done ? '✓' : (overdue ? esc(T('已过期')) : '')) + '</span>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  let planHistorySearch = '';
+
+  function planHistoryItemMatches(plan, q) {
+    if (!q) return true;
+    const hay = [plan.title, plan.note].filter(Boolean).join('\n').toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  function planHistoryBodyHTML() {
+    const today = todayKey();
+    const q = String(planHistorySearch || '').trim().toLowerCase();
+    let html = '';
+    ['week', 'month', 'year'].forEach(function (kind) {
+      const currentStart = planPeriodStart(kind, today);
+      // 只收已经翻过去的周期，当前周期仍留在主页；搜索只过滤标题与备注
+      const past = state.plans.filter(function (p) {
+        return p.kind === kind && p.periodStart !== currentStart && planHistoryItemMatches(p, q);
       });
+      if (!past.length) return;
+      past.sort(function (a, b) {
+        if (a.periodStart !== b.periodStart) return a.periodStart < b.periodStart ? 1 : -1;
+        return planSort(a, b);
+      });
+      const groups = [];
+      past.forEach(function (p) {
+        const last = groups[groups.length - 1];
+        if (!last || last.start !== p.periodStart) groups.push({ start: p.periodStart, list: [p] });
+        else last.list.push(p);
+      });
+      const doneAll = past.filter(function (p) { return p.done; }).length;
+      html += '<section class="plan-hist-kind">' +
+        '<h3 class="plan-hist-kind-title">' + esc(planKindLabel(kind)) +
+          '<span class="plan-hist-kind-stat">' + esc(T('完成 {done}/{total}', { done: doneAll, total: past.length })) + '</span>' +
+        '</h3>' +
+        groups.map(function (g) {
+          const done = g.list.filter(function (p) { return p.done; }).length;
+          const pct = Math.round((done / g.list.length) * 100);
+          return '<div class="plan-hist-group">' +
+            '<div class="plan-hist-head">' +
+              '<span class="plan-hist-period">' + esc(planPeriodLabel(kind, g.start)) + '</span>' +
+              '<span class="plan-hist-stat">' + done + '/' + g.list.length + ' · ' + pct + '%</span>' +
+            '</div>' +
+            g.list.map(planHistoryItemHTML).join('') +
+          '</div>';
+        }).join('') +
+      '</section>';
     });
+    if (!html) {
+      if (q) {
+        html = '<div class="empty-state plan-hist-empty">' +
+          '<p class="empty-title">' + esc(T('没有匹配的历史计划')) + '</p>' +
+          '<p class="empty-sub">' + esc(T('换个关键词试试，或清空搜索。')) + '</p>' +
+        '</div>';
+      } else {
+        html = '<div class="empty-state plan-hist-empty">' +
+          '<p class="empty-title">' + esc(T('还没有历史计划')) + '</p>' +
+          '<p class="empty-sub">' + esc(T('过去的周 / 月 / 年计划会归档在这里。')) + '</p>' +
+        '</div>';
+      }
+    }
+    return html;
+  }
+
+  function renderPlanHistory() {
+    const body = $('#planHistoryBody');
+    if (body) body.innerHTML = planHistoryBodyHTML();
+  }
+
+  function openPlanHistoryPage() {
+    const page = $('#planHistoryPage');
+    if (!page) return;
+    // 每次打开都从全量开始，避免上次搜索词残留
+    planHistorySearch = '';
+    const input = $('#planHistorySearch');
+    if (input) input.value = '';
+    const clear = $('#planHistorySearchClear');
+    if (clear) clear.hidden = true;
+    renderPlanHistory();
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+    const body = $('#planHistoryBody');
+    if (body) body.scrollTop = 0;
+  }
+
+  function closePlanHistoryPage() {
+    const page = $('#planHistoryPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+    }, 240);
+  }
+
+  // ==================== 渲染：个人页 ====================
+
+  function renderProfile() {
+    const ver = $('#profileVersion');
+    if (ver) ver.textContent = 'V' + APP_VERSION;
+    renderCardStyleEntry();
+    renderFontEntry();
+    renderCategoryList();
+  }
+
+  function applyCardStyle() {
+    const chosen = cardStyleId();
+    const id = effectiveCardStyleId();
+    // data-card-style 记录用户选中的皮肤；data-skin 只在当前主题适配时才挂上
+    document.body.dataset.cardStyle = chosen;
+    if (id === 'default') {
+      // 默认皮肤不挂 data-skin：整套皮肤基座、装饰层、行距全部不参与，回到最干净的渲染
+      delete document.body.dataset.skin;
+    } else {
+      document.body.dataset.skin = id;
+    }
+  }
+
+  function renderCardStyleEntry() {
+    const el = $('#cardStyleValue');
+    if (!el) return;
+    const current = cardStyleId();
+    const tip = cardStyleFitsTheme(current) ? '' : cardStyleModeLabel(current);
+    el.textContent = cardStyleLabel(current) + (tip ? ' · ' + tip : '');
+  }
+
+  // ==================== 字体：默认栈 / 跟随系统 ====================
+  const FONT_MODES = ['default', 'system'];
+
+  function normalizeFontMode(raw) {
+    return raw === 'system' ? 'system' : 'default';
+  }
+
+  function fontMode() {
+    return normalizeFontMode(state.meta.fontMode);
+  }
+
+  function fontModeLabel(mode) {
+    return T(normalizeFontMode(mode) === 'system' ? '系统字体' : '默认字体');
+  }
+
+  // 只切换 html 上的开关，字体栈由 CSS 变量 --font 接管；
+  // 开屏字标与皮肤预览卡各自写死 family，不受影响。
+  function applyFont() {
+    document.documentElement.dataset.font = fontMode();
+  }
+
+  function renderFontEntry() {
+    const el = $('#fontValue');
+    if (el) el.textContent = fontModeLabel(fontMode());
+    const page = $('#fontPage');
+    if (page && !page.hidden) renderFontPage();
+  }
+
+  function renderFontPage() {
+    const list = $('#fontList');
+    if (!list) return;
+    const current = fontMode();
+    const sample = 'Aa 永字八法 2026';
+    list.innerHTML = FONT_MODES.map(function (mode) {
+      const active = mode === current;
+      return '<button class="font-cell' + (active ? ' active' : '') + '" type="button" data-font-mode="' + mode + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
+        '<span class="font-cell-name">' + esc(fontModeLabel(mode)) +
+          '<span class="font-cell-check" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.5 12.5l4.5 4.5 8.5-9.5"/></svg></span></span>' +
+        '<span class="font-cell-sample">' + esc(sample) + '</span>' +
+      '</button>';
+    }).join('');
+  }
+
+  function openFontPage() {
+    const page = $('#fontPage');
+    if (!page) return;
+    renderFontPage();
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+    const body = page.querySelector('.settings-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  function closeFontPage() {
+    const page = $('#fontPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+    }, 240);
+  }
+
+  async function chooseFontMode(mode) {
+    const next = normalizeFontMode(mode);
+    if (fontMode() === next) return;
+    state.meta.fontMode = next;
+    applyFont();
+    renderFontEntry();
+    haptic(8);
+    await persistMeta();
+  }
+
+  function skinDemoHTML(id, large) {
+    const en = isEn();
+    const key = normalizeCardStyleId(id);
+    // 默认皮肤不给预览挂 data-skin，避免整套皮肤基座命中预览
+    const attr = key === 'default' ? '' : ' data-skin="' + key + '"';
+    return '<div class="skin-demo' + (large ? ' skin-demo-lg' : '') + (key === 'default' ? ' skin-demo-default' : '') + '"' + attr + ' aria-hidden="true">' +
+      '<span class="skin-demo-top"><i class="skin-demo-dot"></i>' +
+        '<span class="skin-demo-title">' + (en ? 'Read that book' : '看完那本书') + '</span></span>' +
+      '<span class="skin-demo-meta"><span class="skin-demo-tag">' + (en ? 'Reading' : '阅读') + '</span>' +
+        '<span class="skin-demo-time">09:30</span></span>' +
+      (large ? '<span class="skin-demo-bar"><i></i></span>' : '') +
+    '</div>';
+  }
+
+  let cardStyleFilter = 'all';
+  function renderCardStylePage() {
+    const current = cardStyleId();
+    const nameEl = $('#cardStyleCurrentName');
+    if (nameEl) nameEl.textContent = cardStyleLabel(current);
+    const stage = $('#cardStyleCurrentStage');
+    if (stage) stage.innerHTML = skinDemoHTML(current, true);
+    // 预览照常展示所选皮肤（方便看清它长什么样），但要说明当前主题下实际不生效
+    const noteEl = $('#cardStyleCurrentNote');
+    if (noteEl) {
+      const fits = cardStyleFitsTheme(current);
+      noteEl.hidden = fits;
+      noteEl.textContent = fits ? '' : T('「{name}」只在{mode}生效，当前卡片使用默认样式；切回{mode}会自动恢复。', {
+        name: cardStyleLabel(current),
+        mode: T(cardStyleMode(current) === 'dark' ? '深色模式' : '浅色模式')
+      });
+    }
+    const grid = $('#cardStyleGrid');
+    if (!grid) return;
+    // 筛选只过滤展示，不改变当前已选皮肤；20 套全部在列，不再有 hold 隐藏项
+    grid.innerHTML = CARD_STYLES.filter(function (s) {
+      return cardStyleFilter === 'all' || s.mode === cardStyleFilter;
+    }).map(function (s) {
+      const active = s.id === current;
+      const modeTip = cardStyleModeLabel(s.id);
+      return '<button class="skin-cell' + (active ? ' active' : '') + '" type="button" data-card-style="' + s.id + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
+        '<span class="skin-cell-shot">' + skinDemoHTML(s.id, false) + '</span>' +
+        '<span class="skin-cell-name">' + esc(isEn() ? s.en : s.zh) +
+          (modeTip ? '<i class="skin-cell-mode">' + esc(modeTip) + '</i>' : '') +
+        '</span>' +
+      '</button>';
+    }).join('');
+  }
+
+  function openCardStylePage() {
+    const page = $('#cardStylePage');
+    if (!page) return;
+    renderCardStylePage();
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+    const body = page.querySelector('.settings-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  function closeCardStylePage() {
+    const page = $('#cardStylePage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+    }, 240);
+  }
+
+  async function chooseCardStyle(id) {
+    const next = normalizeCardStyleId(id);
+    if (CARD_STYLE_IDS.indexOf(next) === -1 || cardStyleId() === next) return;
+    state.meta.cardStyle = next;
+    applyCardStyle();
+    renderCardStyleEntry();
+    renderCardStylePage();
+    haptic(8);
+    await persistMeta();
+    if (state.view === 'plan') renderPlan();
+  }
+
+  // ==================== 渲染：倒数日 ====================
+
+  let cdEditingId = '';
+  // 新建/编辑面板的草稿：方向、重复、历法、农历月日都在这里，保存时一次性写进数据
+  let cdDraft = null;
+  let cdWheelDraft = null;
+
+  // ---------- 纪念日：日期换算 ----------
+
+  function cdDayDiff(fromKey, toKey) {
+    return Math.round((keyToDate(toKey).getTime() - keyToDate(fromKey).getTime()) / 86400000);
+  }
+
+  function cdSolarDaysInMonth(year, month) {
+    return new Date(year, month, 0).getDate();
+  }
+
+  // 公历月末夹取：2 月 29 日在平年回落到 2 月 28 日，31 号遇到小月落到月末
+  function cdSolarOn(year, month, day) {
+    return dateKey(new Date(year, month - 1, Math.min(Math.max(1, day), cdSolarDaysInMonth(year, month))));
+  }
+
+  // 唯一历法入口：复用仓库里的 lunarToSolar，这里只做区间检查与「该月没有这一天」的夹取
+  function cdLunarSolar(year, month, day, wantLeap) {
+    if (year < CD_MIN_YEAR || year > CD_MAX_YEAR) return null;
+    if (month < 1 || month > 12 || day < 1) return null;
+    let leap = false;
+    let max;
+    if (wantLeap && lunarLeapMonth(year) === month) {
+      leap = true;
+      max = lunarLeapDays(year);
+    } else {
+      max = lunarMonthDays(year, month);
+    }
+    const useDay = Math.min(day, max);
+    const s = lunarToSolar(year, month, useDay, leap);
+    if (!s || s.year < CD_MIN_YEAR || s.year > CD_MAX_YEAR) return null;
+    return {
+      key: dateKey(new Date(s.year, s.month - 1, s.day)),
+      year: s.year, month: s.month, day: s.day,
+      leap: leap, clamped: useDay !== day
+    };
+  }
+
+  // ---------- 纪念日：「下一次」与「上一次」 ----------
+
+  function cdSolarYearlyNext(anchorKey, todayK) {
+    if (anchorKey >= todayK) return anchorKey;
+    const a = keyToDate(anchorKey);
+    const y = keyToDate(todayK).getFullYear();
+    const key = cdSolarOn(y, a.getMonth() + 1, a.getDate());
+    return key < todayK ? cdSolarOn(y + 1, a.getMonth() + 1, a.getDate()) : key;
+  }
+
+  function cdSolarYearlyPrev(anchorKey, todayK) {
+    const a = keyToDate(anchorKey);
+    const y = keyToDate(todayK).getFullYear();
+    const key = cdSolarOn(y, a.getMonth() + 1, a.getDate());
+    return key > todayK ? cdSolarOn(y - 1, a.getMonth() + 1, a.getDate()) : key;
+  }
+
+  function cdSolarMonthlyNext(anchorKey, todayK) {
+    if (anchorKey >= todayK) return anchorKey;
+    const a = keyToDate(anchorKey);
+    const t = keyToDate(todayK);
+    let y = t.getFullYear();
+    let m = t.getMonth() + 1;
+    let key = cdSolarOn(y, m, a.getDate());
+    if (key < todayK) {
+      m += 1;
+      if (m > 12) { m = 1; y += 1; }
+      key = cdSolarOn(y, m, a.getDate());
+    }
+    return key;
+  }
+
+  function cdSolarMonthlyPrev(anchorKey, todayK) {
+    const a = keyToDate(anchorKey);
+    const t = keyToDate(todayK);
+    let y = t.getFullYear();
+    let m = t.getMonth() + 1;
+    let key = cdSolarOn(y, m, a.getDate());
+    if (key > todayK) {
+      m -= 1;
+      if (m < 1) { m = 12; y -= 1; }
+      key = cdSolarOn(y, m, a.getDate());
+    }
+    return key;
+  }
+
+  // 农历按「农历年」逐年找，跨公历年也正确（春节前后不会差一年）
+  function cdLunarYearlyNext(cd, todayK) {
+    const t = keyToDate(todayK);
+    const tl = solarToLunar(t.getFullYear(), t.getMonth() + 1, t.getDate());
+    let y = Math.max(cd.lunarYear, tl.year);
+    for (let i = 0; i < 3 && y <= CD_MAX_YEAR; i++, y++) {
+      const s = cdLunarSolar(y, cd.lunarMonth, cd.lunarDay, cd.lunarLeap);
+      if (s && s.key >= todayK) return s.key;
+    }
+    return null;
+  }
+
+  function cdLunarYearlyPrev(cd, todayK) {
+    const t = keyToDate(todayK);
+    const tl = solarToLunar(t.getFullYear(), t.getMonth() + 1, t.getDate());
+    let y = Math.max(cd.lunarYear, tl.year);
+    for (let i = 0; i < 3 && y >= CD_MIN_YEAR; i++, y--) {
+      const s = cdLunarSolar(y, cd.lunarMonth, cd.lunarDay, cd.lunarLeap);
+      if (s && s.key <= todayK) return s.key;
+    }
+    return null;
+  }
+
+  function cdNextKey(cd) {
+    if (!cd.repeat || cd.repeat === 'none') return cd.date;
+    const todayK = todayKey();
+    if (cd.calendar === 'lunar') {
+      return cd.repeat === 'yearly' ? cdLunarYearlyNext(cd, todayK) : cd.date;
+    }
+    if (cd.repeat === 'yearly') return cdSolarYearlyNext(cd.date, todayK);
+    if (cd.repeat === 'monthly') return cdSolarMonthlyNext(cd.date, todayK);
+    return cd.date;
+  }
+
+  function cdPrevKey(cd) {
+    const todayK = todayKey();
+    if (!cd.repeat || cd.repeat === 'none' || cd.date > todayK) return null;
+    if (cd.calendar === 'lunar') {
+      return cd.repeat === 'yearly' ? cdLunarYearlyPrev(cd, todayK) : null;
+    }
+    if (cd.repeat === 'yearly') return cdSolarYearlyPrev(cd.date, todayK);
+    if (cd.repeat === 'monthly') return cdSolarMonthlyPrev(cd.date, todayK);
+    return null;
+  }
+
+  // 完整经过的周年数（未到今年的纪念日少算一年）
+  function cdElapsedYears(anchorKey, todayK) {
+    const a = keyToDate(anchorKey);
+    const ty = keyToDate(todayK).getFullYear();
+    let n = ty - a.getFullYear();
+    if (cdSolarOn(ty, a.getMonth() + 1, a.getDate()) > todayK) n -= 1;
+    return Math.max(0, n);
+  }
+
+  // ---------- 纪念日：展示 ----------
+
+  function cdLunarLabel(cd) {
+    if (cd.calendar !== 'lunar' || !cd.lunarMonth || !cd.lunarDay) return '';
+    if (isEn()) return String(cd.lunarMonth) + '/' + String(cd.lunarDay);
+    return (cd.lunarLeap ? '闰' : '') + LUNAR_MONTH_NAMES[cd.lunarMonth - 1] + '月' + LUNAR_DAY_NAMES[cd.lunarDay - 1];
+  }
+
+  // 日期行：农历条目带上「农历 八月十五」，重复条目显示的是下一次的日期
+  function cdDateLine(cd, key) {
+    const target = key || cd.date;
+    const y = String(new Date().getFullYear()) !== target.slice(0, 4) ? ' · ' + target.slice(0, 4) : '';
+    const base = monthDay(target) + ' · ' + weekdayOf(target) + y;
+    if (cd.calendar === 'lunar') return T('农历 {d}', { d: cdLunarLabel(cd) }) + ' · ' + base;
+    return base;
+  }
+
+  function cdMetaChipsHTML(cd, cls) {
+    const chips = [];
+    if (cd.calendar === 'lunar') chips.push(T('农历 {d}', { d: cdLunarLabel(cd) }));
+    if (cd.repeat === 'yearly') chips.push(T('每年'));
+    else if (cd.repeat === 'monthly') chips.push(T('每月'));
+    if (!chips.length) return '';
+    return '<span class="' + cls + '">' + chips.map(function (t) {
+      return '<span class="cd-chip">' + esc(t) + '</span>';
+    }).join('') + '</span>';
+  }
+
+  function cdTodayView(cd, key) {
+    return { num: T('今天'), unit: '', dir: T('今天'), label: T('就是今天'), sub: cdDateLine(cd, key), tone: 'today' };
+  }
+
+  function cdView(cd) {
+    const todayK = todayKey();
+    const startYear = cd.calendar === 'lunar' && cd.lunarYear ? cd.lunarYear : Number(cd.date.slice(0, 4));
+
+    // 正数 + 每年：用「自某年以来 N 年」，周年按年计更贴语义；具体天数放在副行
+    if (cd.direction === 'up' && cd.repeat === 'yearly' && cd.date <= todayK) {
+      const years = cdElapsedYears(cd.date, todayK);
+      const prev = cdPrevKey(cd) || cd.date;
+      const since = cdDayDiff(prev, todayK);
+      return {
+        num: String(years),
+        unit: isEn() ? 'yrs' : T('年'),
+        dir: T('自 {y} 年以来', { y: startYear }),
+        label: T('已经 {n} 年', { n: years }),
+        sub: T('距上次 {n} 天', { n: since }),
+        tone: 'up'
+      };
+    }
+    // 正数 + 每月：按月重复，用「距上次 N 天」更直观
+    if (cd.direction === 'up' && cd.repeat === 'monthly') {
+      const prev = cdPrevKey(cd);
+      if (prev) {
+        const n = cdDayDiff(prev, todayK);
+        if (n === 0) return cdTodayView(cd, prev);
+        return {
+          num: String(n), unit: T('天前'), dir: T('已经'),
+          label: T('距上次 {n} 天', { n: n }), sub: cdDateLine(cd, prev), tone: 'up'
+        };
+      }
+    }
+
+    const next = cdNextKey(cd) || cd.date;
+    const d = cdDayDiff(todayK, next);
+    if (d === 0) return cdTodayView(cd, next);
+    if (d > 0) {
+      return { num: String(d), unit: T('天后'), dir: T('还有'), label: T('还有 {n} 天', { n: d }), sub: cdDateLine(cd, next), tone: 'down' };
+    }
+    // 倒数日过期：不消失，自动转成正数语义「已经 N 天」
+    return { num: String(-d), unit: T('天前'), dir: T('已经'), label: T('已经 {n} 天', { n: -d }), sub: cdDateLine(cd, next), tone: 'up' };
+  }
+
+  function countdownCardHTML(cd) {
+    const info = cdView(cd);
+    const cat = getCategory(cd.categoryId);
+    const catChip = cat
+      ? '<span class="cd-card-cat" style="color:' + esc(cat.color) + '">' +
+          categoryMarkHTML(cat, 'background:' + cat.color) + esc(cat.name) + '</span>'
+      : '';
+    return '<button class="cd-card' + (cd.pinned ? ' pinned' : '') + '" type="button" data-cd-open="' + cd.id +
+      '" style="--cd-color:' + esc(cd.color) + '">' +
+      '<span class="cd-card-top"><i class="cd-dot"></i><span class="cd-card-title">' + esc(cd.title) + '</span>' +
+        (cd.pinned ? '<span class="cd-pin-mark">' + T('置顶') + '</span>' : '') +
+      '</span>' +
+      '<span class="cd-card-main"><b>' + esc(info.num) + '</b><em>' + esc(info.unit) + '</em></span>' +
+      '<span class="cd-card-date"><span class="cd-dir">' + esc(info.dir) + '</span>' + esc(info.sub) + '</span>' +
+      cdMetaChipsHTML(cd, 'cd-card-meta') +
+      catChip +
+    '</button>';
+  }
+
+  function renderCountdownStrip() {
+    const box = $('#countdownCards');
+    const strip = $('#countdownStrip');
+    if (!box || !strip) return;
+    // 日记页这条只做展示：一条都没有时整条隐藏，不占位
+    if (!state.countdowns.length) {
+      box.innerHTML = '';
+      strip.hidden = true;
+      return;
+    }
+    strip.hidden = false;
+    box.innerHTML = state.countdowns.map(countdownCardHTML).join('');
+  }
+
+  function renderCountdownPage() {
+    const body = $('#countdownListBody');
+    if (!body) return;
+    if (!state.countdowns.length) {
+      body.innerHTML = '<div class="empty-state cd-empty">' +
+        '<p class="empty-title">' + esc(T('还没有纪念日')) + '</p>' +
+        '<p class="empty-sub">' + esc(T('新建一个，记住重要的日子。')) + '</p>' +
+      '</div>';
+      return;
+    }
+    body.innerHTML = '<div class="cd-list">' + state.countdowns.map(function (cd) {
+      const info = cdView(cd);
+      const cat = getCategory(cd.categoryId);
+      const catChip = cat
+        ? '<span class="cd-row-cat" style="color:' + esc(cat.color) + '">' +
+            categoryMarkHTML(cat, 'background:' + cat.color) + esc(cat.name) + '</span>'
+        : '';
+      const nextKey = cdNextKey(cd) || cd.date;
+      return '<div class="cd-row' + (cd.pinned ? ' pinned' : '') + '" data-cd-open="' + cd.id + '" style="--cd-color:' + esc(cd.color) + '">' +
+        '<i class="cd-dot"></i>' +
+        '<div class="cd-row-main">' +
+          '<span class="cd-row-title">' + esc(cd.title) + '</span>' +
+          '<span class="cd-row-sub">' + esc(cdDateLine(cd, nextKey)) + '</span>' +
+          cdMetaChipsHTML(cd, 'cd-row-tags') +
+          catChip +
+        '</div>' +
+        '<span class="cd-row-days">' +
+          (info.unit ? '<b>' + esc(info.num) + '</b>' : '') +
+          '<span class="cd-days-tag">' + esc(info.label) + '</span>' +
+        '</span>' +
+        '<button class="cd-pin-btn' + (cd.pinned ? ' active' : '') + '" type="button" data-cd-pin="' + cd.id +
+          '" aria-pressed="' + (cd.pinned ? 'true' : 'false') + '" aria-label="' + esc(T('置顶')) + '">' +
+          '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.4 4.6h7.2l-1 5 3.2 3.2H6.2l3.2-3.2z"/><path d="M12 12.8v6.2"/></svg>' +
+        '</button>' +
+      '</div>';
+    }).join('') + '</div>';
+  }
+
+  function openCountdownPage() {
+    renderCountdownPage();
+    $('#countdownPage').hidden = false;
+    requestAnimationFrame(function () { $('#countdownPage').classList.add('open'); });
+  }
+
+  function closeCountdownPage() {
+    const page = $('#countdownPage');
+    if (!page || page.hidden) return;
+    closeCdPop();
+    page.classList.remove('open');
+    window.setTimeout(function () { page.hidden = true; }, 240);
+  }
+
+  function renderCdCats() {
+    const box = $('#cdCats');
+    if (!box) return;
+    const current = $('#cdSheet').dataset.cat || '';
+    let html = '<button class="cat-chip' + (current ? '' : ' active') + '" type="button" data-cd-cat="none">' +
+      '<i style="--cat-dot:var(--muted)"></i>' + esc(T('未分类')) + '</button>';
+    state.categories.forEach(function (cat) {
+      const active = current === cat.id;
+      html += '<button class="cat-chip' + (active ? ' active' : '') + '" type="button" data-cd-cat="' + cat.id +
+        '" style="--chip-color:' + cat.color + ';--chip-soft:' + hexToRgba(cat.color, 0.12) + ';color:' + cat.color + '">' +
+        categoryMarkHTML(cat, '--chip-color:' + cat.color) + esc(cat.name) + '</button>';
+    });
+    box.innerHTML = html;
+  }
+
+  function renderCdSwatches() {
+    const box = $('#cdSwatches');
+    if (!box) return;
+    const current = ($('#cdSheet').dataset.color || CD_COLORS[0]).toLowerCase();
+    const custom = PRESET_COLORS.every(function (color) { return color.toLowerCase() !== current; });
+    box.innerHTML = swatchesHTML(current, 'cd-color') +
+      '<label class="swatch cd-custom-swatch' + (custom ? ' active' : '') + '" style="--sw:' + current + '" title="' + esc(T('自定义颜色')) + '">' +
+        '<input type="color" id="cdCustomColor" value="' + current + '" aria-label="' + esc(T('自定义颜色')) + '">' +
+      '</label>';
+    $$('#cdSwatches .swatch').forEach(function (el) {
+      if (el.classList.contains('cd-custom-swatch')) return;
+      el.classList.toggle('active', String(el.dataset.cdColor || '').toLowerCase() === current);
+    });
+  }
+
+  function cdDraftLunarOf(key) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key || '')) return null;
+    const d = keyToDate(key);
+    const y = d.getFullYear();
+    if (y < CD_MIN_YEAR || y > CD_MAX_YEAR) return null;
+    const l = solarToLunar(y, d.getMonth() + 1, d.getDate());
+    return { year: l.year, month: l.month, day: l.day, isLeap: l.isLeap };
+  }
+
+  function cdDraftFromDate(key) {
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(key || '') ? key : todayKey();
+    const l = cdDraftLunarOf(date) || cdDraftLunarOf(todayKey());
+    return {
+      calendar: 'solar',
+      direction: 'down',
+      repeat: 'none',
+      date: date,
+      lunarYear: l ? l.year : new Date().getFullYear(),
+      lunarMonth: l ? l.month : 1,
+      lunarDay: l ? l.day : 1,
+      lunarLeap: false
+    };
+  }
+
+  function renderCdChoices() {
+    if (!cdDraft) return;
+    $$('#cdCalSeg .seg-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.cdCal === cdDraft.calendar); });
+    $$('#cdDirSeg .seg-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.cdDir === cdDraft.direction); });
+    // 重复只在「倒数」时有意义：选正数整段隐藏，并且不写 repeat
+    if (cdDraft.direction !== 'down') cdDraft.repeat = 'none';
+    $$('#cdRepeatSeg .seg-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.cdRepeat === cdDraft.repeat); });
+    // 农历没有「每月几号」这种稳定日期：直接禁用，避免存出无法解释的卡片
+    const monthBtn = $('#cdRepeatSeg [data-cd-repeat="monthly"]');
+    if (monthBtn) monthBtn.disabled = cdDraft.calendar === 'lunar';
+    const repeatGroup = $('#cdRepeatGroup');
+    if (repeatGroup) repeatGroup.hidden = cdDraft.direction !== 'down';
+    const chip = $('#cdDateChip');
+    if (chip) chip.hidden = cdDraft.calendar !== 'solar';
+    const lunarField = $('#cdLunarField');
+    if (lunarField) lunarField.hidden = cdDraft.calendar !== 'lunar';
+  }
+
+  function syncCdLunarHint() {
+    const hint = $('#cdLunarHint');
+    if (!hint || !cdDraft) return;
+    const y = cdDraft.lunarYear;
+    if (y < CD_MIN_YEAR || y > CD_MAX_YEAR) {
+      hint.textContent = T('年份需在 1900–2100 之间');
+      return;
+    }
+    let msg = '';
+    // 陈述该年实际的闰月：有就说「该年闰X月」，没有就说「该年无闰月」。
+    // 不再拿所选月份去问「有没有闰这个月」，那种句式既像报错又永远为假。
+    const leapMonth = lunarLeapMonth(y);
+    msg = leapMonth
+      ? T('该年闰{r}月', { r: isEn() ? String(leapMonth) : LUNAR_MONTH_NAMES[leapMonth - 1] })
+      : T('该年无闰月');
+    const key = cdEffectiveKey();
+    if (key) {
+      const solar = T('公历 {d}', { d: monthDay(key) + ' ' + key.slice(0, 4) });
+      msg = msg ? msg + ' · ' + solar : solar;
+    }
+    hint.textContent = msg;
+  }
+
+  function cdEffectiveKey() {
+    if (!cdDraft) return '';
+    if (cdDraft.calendar !== 'lunar') {
+      return /^\d{4}-\d{2}-\d{2}$/.test(cdDraft.date) ? cdDraft.date : '';
+    }
+    const s = cdLunarSolar(cdDraft.lunarYear, cdDraft.lunarMonth, cdDraft.lunarDay, cdDraft.lunarLeap);
+    return s ? s.key : '';
+  }
+
+  function syncCdDateFromDraft() {
+    const key = cdEffectiveKey();
+    const input = $('#cdDate');
+    if (input && key) input.value = key;
+    const label = $('#cdDateChipLabel');
+    if (label && key) label.textContent = relativeDayLabel(key);
+    const chip = $('#cdDateChip');
+    if (chip) chip.classList.toggle('active', !!key);
+    syncCdSave();
+  }
+
+  function cdWheelMaxDay(w) {
+    const leap = w.leap && lunarLeapMonth(w.year) === w.month;
+    return leap ? lunarLeapDays(w.year) : lunarMonthDays(w.year, w.month);
+  }
+
+  function cdWheelYearLabel(y) { return isEn() ? String(y) : (y + ' 年'); }
+  function cdWheelMonthLabel(m) { return isEn() ? ('Month ' + m) : (LUNAR_MONTH_NAMES[m - 1] + '月'); }
+  function cdWheelDayLabel(d) { return isEn() ? ('Day ' + d) : LUNAR_DAY_NAMES[d - 1]; }
+
+  function renderCdLunarPickers() {
+    if (!cdDraft) return;
+    if (cdDraft.lunarYear < CD_MIN_YEAR || cdDraft.lunarYear > CD_MAX_YEAR) cdDraft.lunarYear = new Date().getFullYear();
+    if (cdDraft.lunarMonth < 1 || cdDraft.lunarMonth > 12) cdDraft.lunarMonth = 1;
+
+    const hasLeap = lunarLeapMonth(cdDraft.lunarYear) === cdDraft.lunarMonth;
+    if (!hasLeap) cdDraft.lunarLeap = false;
+    const maxDay = cdWheelMaxDay(cdDraft);
+    if (cdDraft.lunarDay > maxDay) cdDraft.lunarDay = maxDay;
+    if (cdDraft.lunarDay < 1) cdDraft.lunarDay = 1;
+
+    const yt = $('#cdLunarYearText');
+    const mt = $('#cdLunarMonthText');
+    const dt = $('#cdLunarDayText');
+    if (yt) yt.textContent = cdWheelYearLabel(cdDraft.lunarYear);
+    if (mt) mt.textContent = cdWheelMonthLabel(cdDraft.lunarMonth);
+    if (dt) dt.textContent = cdWheelDayLabel(cdDraft.lunarDay);
+
+    // 闰月只在这一年确实有这个闰月时出现；没有闰月就只留一句小字提示
+    const leapRow = $('#cdLeapRow');
+    const leapBox = $('#cdLunarLeap');
+    if (leapRow) leapRow.hidden = !hasLeap;
+    if (leapBox) {
+      leapBox.disabled = !hasLeap;
+      leapBox.checked = hasLeap && !!cdDraft.lunarLeap;
+    }
+
+    syncCdLunarHint();
+    syncCdDateFromDraft();
+  }
+
+  // ---------- 农历日期滚轮（复用 buildRegionWheel，与日期/时间选择器同一套） ----------
+
+  function cdWheelHint() {
+    const hint = $('#cdWheelHint');
+    if (!hint || !cdWheelDraft) return;
+    const s = cdLunarSolar(cdWheelDraft.year, cdWheelDraft.month, cdWheelDraft.day, cdWheelDraft.leap);
+    hint.textContent = s
+      ? T('公历 {d}', { d: monthDay(s.key) + ' ' + s.key.slice(0, 4) })
+      : T('年份需在 1900–2100 之间');
+  }
+
+  function renderCdWheelSheet() {
+    if (!cdWheelDraft) return;
+    const w = cdWheelDraft;
+    if (w.year < CD_MIN_YEAR || w.year > CD_MAX_YEAR) w.year = new Date().getFullYear();
+    if (w.month < 1 || w.month > 12) w.month = 1;
+    const hasLeap = lunarLeapMonth(w.year) === w.month;
+    if (!hasLeap) w.leap = false;
+    const maxDay = cdWheelMaxDay(w);
+    if (w.day > maxDay) w.day = maxDay;
+    if (w.day < 1) w.day = 1;
+
+    const years = [];
+    for (let y = CD_MIN_YEAR; y <= CD_MAX_YEAR; y++) years.push(cdWheelYearLabel(y));
+    const months = [];
+    for (let m = 1; m <= 12; m++) months.push(cdWheelMonthLabel(m));
+    const days = [];
+    for (let d = 1; d <= maxDay; d++) days.push(cdWheelDayLabel(d));
+
+    buildRegionWheel($('#cdWheelYear'), years, w.year - CD_MIN_YEAR, function (i) {
+      w.year = CD_MIN_YEAR + i;
+      w.leap = false;
+      renderCdWheelSheet();
+      haptic(4);
+    });
+    buildRegionWheel($('#cdWheelMonth'), months, w.month - 1, function (i) {
+      w.month = i + 1;
+      w.leap = false;
+      renderCdWheelSheet();
+      haptic(4);
+    });
+    buildRegionWheel($('#cdWheelDay'), days, w.day - 1, function (i) {
+      w.day = i + 1;
+      cdWheelHint();
+      haptic(4);
+    });
+
+    const leapRow = $('#cdWheelLeapRow');
+    const leapBox = $('#cdWheelLeap');
+    if (leapRow) leapRow.hidden = !hasLeap;
+    if (leapBox) {
+      leapBox.disabled = !hasLeap;
+      leapBox.checked = hasLeap && !!w.leap;
+    }
+    cdWheelHint();
+  }
+
+  function openCdWheelSheet() {
+    if (!cdDraft || cdDraft.calendar !== 'lunar') return;
+    cdWheelDraft = {
+      year: cdDraft.lunarYear,
+      month: cdDraft.lunarMonth,
+      day: cdDraft.lunarDay,
+      leap: !!cdDraft.lunarLeap
+    };
+    $('#cdWheelBackdrop').hidden = false;
+    $('#cdWheelSheet').hidden = false;
+    requestAnimationFrame(function () {
+      $('#cdWheelBackdrop').classList.add('open');
+      $('#cdWheelSheet').classList.add('open');
+      renderCdWheelSheet();
+    });
+    haptic(6);
+  }
+
+  function closeCdWheelSheet() {
+    $('#cdWheelSheet').classList.remove('open');
+    $('#cdWheelBackdrop').classList.remove('open');
+    cdWheelDraft = null;
+    window.setTimeout(function () {
+      if ($('#cdWheelSheet').classList.contains('open')) return;
+      $('#cdWheelSheet').hidden = true;
+      $('#cdWheelBackdrop').hidden = true;
+    }, 220);
+  }
+
+  function confirmCdWheel() {
+    if (cdDraft && cdWheelDraft) {
+      cdDraft.lunarYear = cdWheelDraft.year;
+      cdDraft.lunarMonth = cdWheelDraft.month;
+      cdDraft.lunarDay = cdWheelDraft.day;
+      cdDraft.lunarLeap = !!cdWheelDraft.leap && lunarLeapMonth(cdDraft.lunarYear) === cdDraft.lunarMonth;
+      renderCdLunarPickers();
+    }
+    closeCdWheelSheet();
+    haptic(10);
+  }
+
+  function syncCdDateChip() {
+    if (!cdDraft) return;
+    const key = (cdDateDraft && cdDateDraft.date) || cdDraft.date;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(key)) cdDraft.date = key;
+    syncCdDateFromDraft();
+  }
+
+  function openCdSheet(id) {
+    const base = id ? state.countdowns.find(function (cd) { return cd.id === id; }) : null;
+    cdEditingId = base ? base.id : '';
+    $('#cdSheetTitle').textContent = base ? T('编辑纪念日') : T('新建纪念日');
+    $('#cdTitle').value = base ? base.title : '';
+    const date = base ? base.date : addDays(todayKey(), 30);
+    cdDateDraft = { date: date, time: '' };
+    if (base) {
+      const auto = cdDraftLunarOf(base.date);
+      cdDraft = {
+        calendar: base.calendar === 'lunar' ? 'lunar' : 'solar',
+        direction: base.direction === 'up' ? 'up' : 'down',
+        repeat: CD_REPEATS.indexOf(base.repeat) !== -1 ? base.repeat : 'none',
+        date: base.date,
+        lunarYear: base.lunarYear || (auto ? auto.year : new Date().getFullYear()),
+        lunarMonth: base.lunarMonth || (auto ? auto.month : 1),
+        lunarDay: base.lunarDay || (auto ? auto.day : 1),
+        lunarLeap: base.calendar === 'lunar' ? base.lunarLeap === true : false
+      };
+    } else {
+      cdDraft = cdDraftFromDate(date);
+    }
+    $('#cdPinned').checked = base ? !!base.pinned : false;
+    $('#cdSheet').dataset.color = base ? base.color : CD_COLORS[0];
+    $('#cdSheet').dataset.cat = base && base.categoryId ? base.categoryId : '';
+    $('#cdDelete').hidden = !base;
+    renderCdChoices();
+    renderCdLunarPickers();
+    syncCdDateFromDraft();
+    renderCdSwatches();
+    renderCdCats();
+    $('#cdBackdrop').hidden = false;
+    $('#cdSheet').hidden = false;
+    requestAnimationFrame(function () {
+      $('#cdBackdrop').classList.add('open');
+      $('#cdSheet').classList.add('open');
+    });
+    if (!base) setTimeout(function () { $('#cdTitle').focus(); }, 280);
+  }
+
+  function closeCdSheet() {
+    $('#cdSheet').classList.remove('open');
+    $('#cdBackdrop').classList.remove('open');
+    cdEditingId = '';
+    cdDraft = null;
+    window.setTimeout(function () {
+      if ($('#cdSheet').classList.contains('open')) return;
+      $('#cdSheet').hidden = true;
+      $('#cdBackdrop').hidden = true;
+    }, 260);
+  }
+
+  function syncCdSave() {
+    const titleOk = $('#cdTitle').value.trim().length > 0;
+    const key = cdEffectiveKey();
+    const dateOk = !!key && /^\d{4}-\d{2}-\d{2}$/.test(key);
+    const y = dateOk ? Number(key.slice(0, 4)) : 0;
+    $('#cdSave').disabled = !(titleOk && dateOk && y >= CD_MIN_YEAR && y <= CD_MAX_YEAR);
+  }
+
+  async function saveCountdown() {
+    const title = $('#cdTitle').value.trim();
+    if (!cdDraft) return;
+    // 农历 + 每月在面板里已被禁用，这里再兜一层，避免旧状态带进来
+    if (cdDraft.calendar === 'lunar' && cdDraft.repeat === 'monthly') cdDraft.repeat = 'none';
+    const date = cdEffectiveKey();
+    if (!title || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(keyToDate(date).getTime())) {
+      showToast(T('请填写名称和日期'));
+      return;
+    }
+    const y = Number(date.slice(0, 4));
+    if (y < CD_MIN_YEAR || y > CD_MAX_YEAR) {
+      showToast(T('日期超出范围'));
+      return;
+    }
+    const base = cdEditingId ? state.countdowns.find(function (cd) { return cd.id === cdEditingId; }) : null;
+    const lunar = cdDraft.calendar === 'lunar';
+    const entry = normalizeCountdown({
+      id: base ? base.id : uid(),
+      title: title,
+      date: date,
+      direction: cdDraft.direction,
+      // 正数不写 repeat：重复只在倒数场景里有意义
+      repeat: cdDraft.direction === 'down' ? cdDraft.repeat : 'none',
+      calendar: cdDraft.calendar,
+      lunarYear: lunar ? cdDraft.lunarYear : null,
+      lunarMonth: lunar ? cdDraft.lunarMonth : null,
+      lunarDay: lunar ? cdDraft.lunarDay : null,
+      lunarLeap: lunar ? !!cdDraft.lunarLeap : false,
+      color: $('#cdSheet').dataset.color || CD_COLORS[0],
+      categoryId: getCategory($('#cdSheet').dataset.cat) ? $('#cdSheet').dataset.cat : null,
+      pinned: $('#cdPinned').checked,
+      // 新增的追加到最右，编辑时保持原位次
+      order: base ? base.order : countdownNextOrder(),
+      createdAt: base ? base.createdAt : Date.now(),
+      updatedAt: Date.now()
+    });
+    if (!entry) return;
+    if (base) state.countdowns[state.countdowns.indexOf(base)] = entry;
+    else state.countdowns.push(entry);
+    sortCountdowns();
+    closeCdSheet();
+    await persistCountdowns();
+    renderCountdownStrip();
+    if (!$('#countdownPage').hidden) renderCountdownPage();
+    haptic(10);
+    showToast(base ? T('纪念日已更新') : T('已添加纪念日'));
+  }
+
+  async function deleteCountdown(id) {
+    const idx = state.countdowns.findIndex(function (cd) { return cd.id === id; });
+    if (idx === -1) return;
+    state.countdowns.splice(idx, 1);
+    closeCdSheet();
+    await persistCountdowns();
+    renderCountdownStrip();
+    renderCountdownPage();
+    haptic(12);
+    showToast(T('已删除纪念日'));
+  }
+
+  async function toggleCountdownPin(id) {
+    const cd = state.countdowns.find(function (c) { return c.id === id; });
+    if (!cd) return;
+    cd.pinned = !cd.pinned;
+    cd.updatedAt = Date.now();
+    sortCountdowns();
+    await persistCountdowns(true);
+    renderCountdownStrip();
+    renderCountdownPage();
+    haptic(8);
+  }
+
+  // ---------- 倒数日：长按编辑/删除 + 按住拖动排序 ----------
+  let cdPopId = '';
+  let cdDrag = null;
+  let cdDragEndAt = 0;
+  const CD_DRAG_HOLD_MS = 300;
+  const CD_DRAG_CANCEL_PX = 10;
+
+  function openCdPop(id) {
+    const row = document.querySelector('#countdownListBody [data-cd-open="' + id + '"]');
+    const pop = $('#cdPop');
+    if (!row || !pop) return;
+    cdPopId = id;
+    pop.hidden = false;
+    pop.style.visibility = 'hidden';
+    const b = row.getBoundingClientRect();
+    const w = pop.offsetWidth;
+    const h = pop.offsetHeight;
+    let left = b.right - 10;
+    if (left + w > window.innerWidth - 8) left = Math.min(b.right - w, window.innerWidth - w - 8);
+    left = Math.max(8, left);
+    let top = b.bottom + 6;
+    top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+    pop.style.visibility = '';
+    haptic(12);
+  }
+
+  function closeCdPop() {
+    const pop = $('#cdPop');
+    if (!pop || pop.hidden) return;
+    pop.hidden = true;
+    cdPopId = '';
+  }
+
+  function cdDragStart(e) {
+    if (e.target.closest('[data-cd-pin]')) return;
+    const row = e.target.closest('[data-cd-open]');
+    if (!row) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    cdDrag = {
+      el: row,
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      lastX: e.clientX,
+      dy: 0,
+      active: false,
+      moved: false,
+      timer: 0
+    };
+    cdDrag.timer = setTimeout(function () {
+      if (!cdDrag) return;
+      cdDrag.active = true;
+      cdDrag.el.classList.add('dragging');
+      $('#countdownListBody').classList.add('dragging');
+      closeCdPop();
+      try { cdDrag.el.setPointerCapture(cdDrag.pointerId); } catch (err) { /* 忽略 */ }
+      haptic(8);
+    }, CD_DRAG_HOLD_MS);
+  }
+
+  function cdDragMove(e) {
+    if (!cdDrag) return;
+    const dy = e.clientY - cdDrag.startY;
+    const dx = e.clientX - cdDrag.lastX;
+    if (!cdDrag.active) {
+      if (Math.abs(dy) > CD_DRAG_CANCEL_PX || Math.abs(dx) > CD_DRAG_CANCEL_PX) {
+        clearTimeout(cdDrag.timer);
+        cdDrag = null;
+      }
+      return;
+    }
+    e.preventDefault();
+    cdDrag.moved = true;
+    const el = cdDrag.el;
+    const oldDy = cdDrag.dy;
+    cdDrag.dy = dy;
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const target = under ? under.closest('[data-cd-open]') : null;
+    if (target && target !== el) {
+      const box = el.parentNode;
+      const before = new Map();
+      $$('[data-cd-open]', box).forEach(function (r) { before.set(r, r.getBoundingClientRect().top); });
+      const layoutTop = el.getBoundingClientRect().top - oldDy;
+      const r = target.getBoundingClientRect();
+      if (e.clientY > r.top + r.height / 2) box.insertBefore(el, target.nextSibling);
+      else box.insertBefore(el, target);
+      const newLayoutTop = el.getBoundingClientRect().top - oldDy;
+      cdDrag.dy -= (newLayoutTop - layoutTop);
+      $$('[data-cd-open]', box).forEach(function (other) {
+        if (other === el) return;
+        const shift = (before.get(other) || 0) - other.getBoundingClientRect().top;
+        if (!shift) return;
+        other.style.transition = 'none';
+        other.style.transform = 'translateY(' + shift + 'px)';
+        requestAnimationFrame(function () {
+          other.style.transition = 'transform .17s ease';
+          other.style.transform = '';
+        });
+        setTimeout(function () { other.style.transition = ''; }, 220);
+      });
+    }
+    el.style.transform = 'translateY(' + cdDrag.dy + 'px)';
+    cdDrag.lastX = e.clientX;
+  }
+
+  async function cdDragEnd() {
+    if (!cdDrag) return;
+    clearTimeout(cdDrag.timer);
+    const drag = cdDrag;
+    cdDrag = null;
+    drag.el.classList.remove('dragging');
+    drag.el.style.transform = '';
+    $('#countdownListBody').classList.remove('dragging');
+    if (!drag.active) return;
+    cdDragEndAt = Date.now();
+    closeCdPop();
+    // 按住不动就松手：当作长按，弹出编辑/删除
+    if (!drag.moved) {
+      openCdPop(drag.el.dataset.cdOpen);
+      return;
+    }
+    const ids = $$('[data-cd-open]', $('#countdownListBody')).map(function (el) { return el.dataset.cdOpen; });
+    ids.forEach(function (id, i) {
+      const cd = state.countdowns.find(function (c) { return c.id === id; });
+      if (cd) cd.order = i;
+    });
+    sortCountdowns();
+    await persistCountdowns(true);
+    renderCountdownStrip();
+    renderCountdownPage();
+    haptic(8);
+  }
+
+  // ==================== 渲染：自定义情绪 ====================
+
+  let moodPopId = '';
+  let moodDrag = null;
+  let moodDragEndAt = 0;
+  const MOOD_DRAG_HOLD_MS = 260;
+  const MOOD_DRAG_CANCEL_PX = 10;
+
+  function renderMoodPage() {
+    const list = $('#moodList');
+    if (!list) return;
+    const customs = customMoods();
+    if (!customs.length) {
+      list.innerHTML = '<div class="empty-state">' +
+        '<p class="empty-title">' + esc(T('还没有自定义情绪')) + '</p>' +
+        '<p class="empty-sub">' + esc(T('点右上角新建，给情绪起个自己的名字。')) + '</p>' +
+      '</div>';
+      return;
+    }
+    list.innerHTML = customs.map(function (m) {
+      const glyph = MOOD_GLYPH_BY_ID[m.glyph] || MOOD_GLYPH_BY_ID.happy;
+      return '<div class="mood-row" data-mood-row="' + m.id + '" style="--mood-color:' + esc(m.color) + '">' +
+        '<svg class="mood-row-face" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/>' + glyph.face + '</svg>' +
+        '<span class="mood-row-name">' + esc(m.name) + '</span>' +
+        '<span class="mood-row-grip" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 9h8M8 12.5h8M8 16h8"/></svg></span>' +
+      '</div>';
+    }).join('');
+  }
+
+  function openTripTagsPage(raised) {
+    const page = $('#tripTagsPage');
+    renderCategoryList();
+    // 从「新建条目/新建计划」跳进来时抬到日记写作页/计划面板之上
+    page.classList.toggle('raised', !!raised);
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+  }
+
+  function closeTripTagsPage() {
+    const page = $('#tripTagsPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+      page.classList.remove('raised');
+    }, 240);
+  }
+
+  function openMoodPage(raised) {
+    const page = $('#moodPage');
+    renderMoodPage();
+    // 日记写作页里点「自定义」跳过来时，必须盖在写作页之上
+    page.classList.toggle('raised', !!raised);
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+  }
+
+  function closeMoodPage() {
+    const page = $('#moodPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+      page.classList.remove('raised');
+    }, 240);
+  }
+
+  function validateMoodName(name, excludeId) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return T('请填写情绪名称');
+    if (trimmed.length > 12) return T('名称最多 12 个字');
+    const taken = DIARY_MOODS.some(function (m) { return m.zh === trimmed || m.en === trimmed; }) ||
+      customMoods().some(function (m) { return m.id !== excludeId && m.name === trimmed; });
+    if (taken) return T('这个名称已经用过了');
+    return '';
+  }
+
+  let moodEditingId = '';
+
+  function openMoodEditor(id) {
+    const base = id ? customMoods().find(function (m) { return m.id === id; }) : null;
+    moodEditingId = base ? base.id : '';
+    openModal({
+      kind: base ? 'mood-edit' : 'mood-create',
+      title: base ? T('编辑情绪') : T('新建情绪'),
+      field: true,
+      iconMode: 'mood',
+      name: base ? base.name : '',
+      color: base ? base.color : CD_COLORS[0],
+      icon: base ? base.glyph : 'happy',
+      confirmText: T('保存')
+    });
+  }
+
+  async function saveMood(id, name, color, glyph) {
+    const list = customMoods().slice();
+    if (id) {
+      const item = list.find(function (m) { return m.id === id; });
+      if (item) {
+        item.name = name;
+        item.color = color;
+        item.glyph = glyph;
+      }
+    } else {
+      list.push({
+        id: 'cm-' + uid(),
+        name: name,
+        color: color,
+        glyph: glyph,
+        createdAt: Date.now()
+      });
+    }
+    state.meta.moods = list;
+    await persistMeta();
+    renderMoodPage();
+    if (state.diaryDraft) renderDiaryMoods();
+    haptic(10);
+    showToast(id ? T('情绪已更新') : T('已添加情绪'));
+  }
+
+  async function deleteMood(id) {
+    const list = customMoods().filter(function (m) { return m.id !== id; });
+    state.meta.moods = list;
+    await persistMeta();
+    // 删掉情绪后，把引用它的日记清空心情，避免留下无主 id
+    let diaryChanged = false;
+    state.diary.forEach(function (entry) {
+      if (entry.mood === id) { entry.mood = ''; diaryChanged = true; }
+    });
+    if (diaryChanged) await persistDiary(true);
+    closeMoodPage();
+    renderMoodPage();
+    if (state.diaryDraft) renderDiaryMoods();
+    haptic(12);
+    showToast(T('已删除情绪'));
+  }
+
+  function openMoodPop(id) {
+    const row = document.querySelector('[data-mood-row="' + id + '"]');
+    const pop = $('#moodPop');
+    if (!row || !pop) return;
+    moodPopId = id;
+    pop.hidden = false;
+    pop.style.visibility = 'hidden';
+    const b = row.getBoundingClientRect();
+    const w = pop.offsetWidth;
+    const h = pop.offsetHeight;
+    let left = b.right - 10;
+    if (left + w > window.innerWidth - 8) left = Math.min(b.right - w, window.innerWidth - w - 8);
+    left = Math.max(8, left);
+    let top = b.bottom + 6;
+    top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+    pop.style.visibility = '';
+    haptic(12);
+  }
+
+  function closeMoodPop() {
+    const pop = $('#moodPop');
+    if (!pop || pop.hidden) return;
+    pop.hidden = true;
+    moodPopId = '';
+  }
+
+  function moodDragStart(e) {
+    const row = e.target.closest('[data-mood-row]');
+    if (!row) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    moodDrag = {
+      el: row,
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      lastX: e.clientX,
+      dy: 0,
+      active: false,
+      timer: 0
+    };
+    moodDrag.timer = setTimeout(function () {
+      if (!moodDrag) return;
+      moodDrag.active = true;
+      moodDrag.el.classList.add('dragging');
+      $('#moodList').classList.add('dragging');
+      closeMoodPop();
+      try { moodDrag.el.setPointerCapture(moodDrag.pointerId); } catch (err) { /* 忽略 */ }
+      haptic(8);
+    }, MOOD_DRAG_HOLD_MS);
+  }
+
+  function moodDragMove(e) {
+    if (!moodDrag) return;
+    const dy = e.clientY - moodDrag.startY;
+    const dx = e.clientX - moodDrag.lastX;
+    if (!moodDrag.active) {
+      if (Math.abs(dy) > MOOD_DRAG_CANCEL_PX || Math.abs(dx) > MOOD_DRAG_CANCEL_PX) {
+        clearTimeout(moodDrag.timer);
+        moodDrag = null;
+      }
+      return;
+    }
+    e.preventDefault();
+    const el = moodDrag.el;
+    const oldDy = moodDrag.dy;
+    moodDrag.dy = dy;
+    // 拖动中的行不接收命中，才能用它下面的行判断落点
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const target = under ? under.closest('[data-mood-row]') : null;
+    if (target && target !== el) {
+      const box = el.parentNode;
+      const before = new Map();
+      $$('[data-mood-row]', box).forEach(function (r) { before.set(r, r.getBoundingClientRect().top); });
+      const layoutTop = el.getBoundingClientRect().top - oldDy;
+      const r = target.getBoundingClientRect();
+      if (e.clientY > r.top + r.height / 2) box.insertBefore(el, target.nextSibling);
+      else box.insertBefore(el, target);
+      const newLayoutTop = el.getBoundingClientRect().top - oldDy;
+      moodDrag.dy -= (newLayoutTop - layoutTop);
+      $$('[data-mood-row]', box).forEach(function (other) {
+        if (other === el) return;
+        const shift = (before.get(other) || 0) - other.getBoundingClientRect().top;
+        if (!shift) return;
+        other.style.transition = 'none';
+        other.style.transform = 'translateY(' + shift + 'px)';
+        requestAnimationFrame(function () {
+          other.style.transition = 'transform .17s ease';
+          other.style.transform = '';
+        });
+        setTimeout(function () { other.style.transition = ''; }, 220);
+      });
+    }
+    el.style.transform = 'translateY(' + moodDrag.dy + 'px)';
+    moodDrag.lastX = e.clientX;
+  }
+
+  async function moodDragEnd() {
+    if (!moodDrag) return;
+    clearTimeout(moodDrag.timer);
+    const drag = moodDrag;
+    moodDrag = null;
+    drag.el.classList.remove('dragging');
+    drag.el.style.transform = '';
+    $('#moodList').classList.remove('dragging');
+    if (!drag.active) return;
+    moodDragEndAt = Date.now();
+    const ids = $$('[data-mood-row]', $('#moodList')).map(function (el) { return el.dataset.moodRow; });
+    const list = customMoods().slice().sort(function (a, b) {
+      return ids.indexOf(a.id) - ids.indexOf(b.id);
+    });
+    state.meta.moods = list;
+    await persistMeta();
+    renderMoodPage();
+    if (state.diaryDraft) renderDiaryMoods();
+    haptic(8);
   }
 
   // ==================== 分类：新建面板 / 设置页 ====================
@@ -3758,29 +5909,35 @@
     state.categories.forEach(function (cat) {
       const active = draft.categoryId === cat.id;
       html += '<button class="cat-chip' + (active ? ' active' : '') + '" type="button" data-cat-chip="' + cat.id +
-        '" style="--chip-color:' + cat.color + ';--chip-soft:' + hexToRgba(cat.color, 0.12) + '">' +
-        categoryMarkHTML(cat, '--cat-dot:' + cat.color) + esc(cat.name) + '</button>';
+        '" style="--chip-color:' + cat.color + ';--chip-soft:' + hexToRgba(cat.color, 0.12) + ';color:' + cat.color + '">' +
+        categoryMarkHTML(cat, '--chip-color:' + cat.color) + esc(cat.name) + '</button>';
     });
 
-    html += '<button class="cat-manage-chip" id="manageCategoryBtn" type="button">+ 管理分类</button>';
+    html += '<button class="cat-manage-chip" id="manageCategoryBtn" type="button">+ 管理标签</button>';
     box.innerHTML = html;
   }
 
   function renderCategoryList() {
     const list = $('#categoryList');
     if (!list) return;
-    let html = '';
-    state.categories.forEach(function (cat) {
-      const count = countByCategory(cat.id);
-      html += '<button class="cat-bubble" type="button" data-cat-bubble="' + cat.id + '">' +
-        categoryMarkHTML(cat, 'background:' + cat.color) + esc(cat.name) +
-        (count ? '<span class="cat-count">' + count + '</span>' : '') +
-        '</button>';
-    });
-    if (state.categories.length < MAX_CATEGORIES) {
-      html += '<button class="cat-bubble cat-bubble-add" type="button" data-cat-new>+ 新建分类</button>';
+    if (!state.categories.length) {
+      list.innerHTML = '<div class="empty-state">' +
+        '<p class="empty-title">' + esc(T('还没有分类标签')) + '</p>' +
+        '<p class="empty-sub">' + esc(T('点右上角新建，给安排分个类。')) + '</p>' +
+      '</div>';
+      return;
     }
-    list.innerHTML = html;
+    // 与「情绪标签」同一套行结构与样式：图标保持中性，只有名称用标签色
+    list.innerHTML = state.categories.map(function (cat) {
+      const count = countByCategory(cat.id);
+      const mark = categoryGlyphHTML(cat) || '<i class="cat-mini-dot" style="background:' + esc(cat.color) + '"></i>';
+      return '<div class="mood-row" data-cat-row="' + cat.id + '" style="--mood-color:' + esc(cat.color) + '">' +
+        '<span class="mood-row-face cat-row-mark">' + mark + '</span>' +
+        '<span class="mood-row-name">' + esc(cat.name) + '</span>' +
+        (count ? '<span class="cat-count">' + count + '</span>' : '') +
+        '<span class="mood-row-grip" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 9h8M8 12.5h8M8 16h8"/></svg></span>' +
+      '</div>';
+    }).join('');
   }
 
   function validateCategoryName(rawName, excludeId) {
@@ -3854,10 +6011,11 @@
   // ---------- 通用弹窗 ----------
   let modalColor = PRESET_COLORS[0];
   let modalIcon = null;
+  let modalIconMode = 'cat';
   let modalPickerOpen = false;
   let modalPickerDrag = '';
   let modalHsv = hexToHsv(PRESET_COLORS[0]);
-  const modalState = { kind: '', onConfirm: null };
+  const modalState = { kind: '', onConfirm: null, onCancel: null };
 
   function isPresetColor(color) {
     const c = String(color || '').toLowerCase();
@@ -3865,9 +6023,10 @@
   }
 
   function tintModalIcons() {
-    $$('#modalIcons .cat-glyph').forEach(function (el) {
-      el.style.color = modalColor;
-    });
+    // 图标只保留中性色；「默认色点」是色块而非图标，跟随所选颜色
+    const box = $('#modalIcons');
+    const dot = box && box.querySelector('[data-icon=""] .dot');
+    if (dot) dot.style.background = modalColor;
   }
 
   function renderModalPicker() {
@@ -3920,12 +6079,22 @@
   function renderModalIcons() {
     const box = $('#modalIcons');
     if (!box) return;
+    if (modalIconMode === 'mood') {
+      box.innerHTML = MOOD_GLYPHS.map(function (glyph) {
+        return '<button type="button" class="cat-icon-btn' + (modalIcon === glyph.id ? ' active' : '') +
+          '" data-icon="' + glyph.id + '" aria-label="' + esc(glyph.id) + '">' +
+          '<span class="cat-glyph" style="color:' + modalColor + '">' +
+            '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/>' + glyph.face + '</svg>' +
+          '</span></button>';
+      }).join('');
+      return;
+    }
     let html = '<button type="button" class="cat-icon-btn' + (modalIcon ? '' : ' active') +
-      '" data-icon="" aria-label="' + esc(T('默认色点')) + '"><i class="dot"></i></button>';
+      '" data-icon="" aria-label="' + esc(T('默认色点')) + '"><i class="dot" style="background:' + modalColor + '"></i></button>';
     CATEGORY_ICONS.forEach(function (icon) {
       html += '<button type="button" class="cat-icon-btn' + (modalIcon === icon.id ? ' active' : '') +
         '" data-icon="' + icon.id + '" aria-label="' + esc(isEn() ? icon.en : icon.zh) + '">' +
-        '<span class="cat-glyph" style="color:' + modalColor + '">' + categorySvg(icon.svg) + '</span></button>';
+        '<span class="cat-glyph">' + categorySvg(icon.svg, icon.id) + '</span></button>';
     });
     box.innerHTML = html;
   }
@@ -3933,6 +6102,7 @@
   function openModal(cfg) {
     modalState.kind = cfg.kind || '';
     modalState.onConfirm = cfg.onConfirm || null;
+    modalState.onCancel = cfg.onCancel || null;
     $('#modalTitle').textContent = cfg.title || '';
     const text = $('#modalText');
     text.hidden = !cfg.text;
@@ -3948,8 +6118,14 @@
 
     if (cfg.field) {
       $('#modalInput').value = cfg.name || '';
+      $('#modalInput').maxLength = cfg.iconMode === 'mood' ? 12 : 20;
       modalColor = isHexColor(cfg.color) ? cfg.color : PRESET_COLORS[0];
-      modalIcon = cfg.icon && CATEGORY_ICON_BY_ID[cfg.icon] ? cfg.icon : null;
+      modalIconMode = cfg.iconMode === 'mood' ? 'mood' : 'cat';
+      if (modalIconMode === 'mood') {
+        modalIcon = cfg.icon && MOOD_GLYPH_BY_ID[cfg.icon] ? cfg.icon : 'happy';
+      } else {
+        modalIcon = cfg.icon && CATEGORY_ICON_BY_ID[cfg.icon] ? cfg.icon : null;
+      }
       modalHsv = hexToHsv(modalColor);
       modalPickerOpen = false;
       modalPickerDrag = '';
@@ -3976,6 +6152,7 @@
     const card = $('#modalCard');
     const back = $('#modalBackdrop');
     modalState.onConfirm = null;
+    modalState.onCancel = null;
     modalState.kind = '';
     card.classList.remove('open');
     back.classList.remove('open');
@@ -3983,6 +6160,12 @@
       card.hidden = true;
       back.hidden = true;
     }, 180);
+  }
+
+  function cancelModal() {
+    const fn = modalState.onCancel;
+    closeModal();
+    if (fn) fn();
   }
 
   async function submitModal() {
@@ -4002,6 +6185,23 @@
       closeModal();
       if (kind === 'cat-create') await createCategory(trimmed, color, icon);
       else await updateCategory(editId, trimmed, color, icon);
+      return;
+    }
+    if (modalState.kind === 'mood-create' || modalState.kind === 'mood-edit') {
+      const name = $('#modalInput').value;
+      const excludeId = modalState.kind === 'mood-edit' ? moodEditingId : null;
+      const err = validateMoodName(name, excludeId);
+      if (err) {
+        $('#modalHint').textContent = err;
+        return;
+      }
+      const kind = modalState.kind;
+      const editId = moodEditingId;
+      const color = modalColor;
+      const glyph = modalIcon || 'happy';
+      const trimmed = name.trim();
+      closeModal();
+      await saveMood(kind === 'mood-edit' ? editId : '', trimmed, color, glyph);
       return;
     }
     const fn = modalState.onConfirm;
@@ -4040,7 +6240,7 @@
   let catPopId = '';
 
   function openCatPop(id) {
-    const bubble = document.querySelector('[data-cat-bubble="' + id + '"]');
+    const bubble = document.querySelector('[data-cat-row="' + id + '"]');
     const pop = $('#catPop');
     if (!bubble || !pop) return;
     catPopId = id;
@@ -4078,15 +6278,15 @@
 
   function catDragTarget(x, y) {
     const el = document.elementFromPoint(x, y);
-    return el ? el.closest('[data-cat-bubble]') : null;
+    return el ? el.closest('[data-cat-row]') : null;
   }
 
   function catDragStart(e) {
-    const bubble = e.target.closest('[data-cat-bubble]');
+    const bubble = e.target.closest('[data-cat-row]');
     if (!bubble) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     catDrag = {
-      id: bubble.dataset.catBubble,
+      id: bubble.dataset.catRow,
       el: bubble,
       pointerId: e.pointerId,
       startX: e.clientX,
@@ -4119,7 +6319,7 @@
     }
     e.preventDefault();
     const target = catDragTarget(e.clientX, e.clientY);
-    if (!target || target === catDrag.el || target.hasAttribute('data-cat-new')) return;
+    if (!target || target === catDrag.el) return;
     const r = target.getBoundingClientRect();
     const parent = catDrag.el.parentNode;
     if (e.clientY > r.top + r.height / 2) parent.insertBefore(catDrag.el, target.nextSibling);
@@ -4137,14 +6337,17 @@
     catDrag = null;
     if (!active) return;
     catDragEndAt = Date.now();
-    const ids = $$('#categoryList [data-cat-bubble]').map(function (b) {
-      return b.dataset.catBubble;
+    const ids = $$('#categoryList [data-cat-row]').map(function (b) {
+      return b.dataset.catRow;
     });
     let changed = false;
     ids.forEach(function (id, i) {
       const cat = getCategory(id);
       if (cat && cat.order !== i) { cat.order = i; changed = true; }
     });
+    // 关键：order 只是字段，数组本身没按 order 重排时，
+    // renderCategoryList 仍按旧数组顺序渲染 → 看起来「松手回到原处」。
+    if (changed) sortCategories();
     if (changed) persistCategories();
     renderAll();
     haptic(8);
@@ -4187,7 +6390,7 @@
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const wrap = e.target.closest('.plan-swipe');
     if (!wrap || !wrap.hasAttribute('data-plan-current')) return;
-    if (e.target.closest('.check, [data-plan-edit], [data-plan-del]')) return;
+    if (e.target.closest('.check, [data-plan-edit], [data-plan-del], [data-plan-check]')) return;
     const list = wrap.closest('.plan-list');
     if (!list) return;
     planDrag = {
@@ -4264,17 +6467,28 @@
   function renderAll() {
     // 日记页有自己的「写今天」入口，隐藏全局加号，避免两个创建入口打架
     document.body.classList.toggle('diary-view', state.view === 'diary');
+    // 个人页只做设置类操作，不需要新建条目
+    document.body.classList.toggle('profile-view', state.view === 'profile');
+    // 双保险：属性 hidden 的优先级最高，避免样式被其它规则覆盖
+    $('#fab').hidden = state.view === 'profile';
     updateTopbar();
     renderSummary();
     if (state.view === 'calendar') renderCalendar();
-    if (state.view === 'agenda') renderAgenda();
     if (state.view === 'plan') renderPlan();
     if (state.view === 'schedule') renderSchedule();
     if (state.view === 'diary') renderDiary();
+    if (state.view === 'profile') renderProfile();
     renderSettings();
     renderBatchBar();
+    // 「全部安排」是全屏覆盖层，数据变化时同步重绘
+    if (agendaPageOpen()) renderAgenda();
     // 日记编辑页是独立的覆盖层，不随视图重绘，但"写今天/续写今天"要跟着日期与数据变
     syncDiaryWriteButton();
+  }
+
+  function agendaPageOpen() {
+    const page = $('#agendaPage');
+    return !!page && !page.hidden;
   }
 
   function setView(view) {
@@ -4286,20 +6500,45 @@
       tab.classList.toggle('active', tab.dataset.view === view);
     });
     $('#viewCalendar').hidden = view !== 'calendar';
-    $('#viewAgenda').hidden = view !== 'agenda';
     $('#viewPlan').hidden = view !== 'plan';
     $('#viewSchedule').hidden = view !== 'schedule';
     $('#viewDiary').hidden = view !== 'diary';
+    $('#viewProfile').hidden = view !== 'profile';
     $('#content').scrollTop = 0;
     // 离开日历视图时收起年历，避免回来时还停在年历
     if (view !== 'calendar') closeYearView();
     // 切换视图时退出批量模式并清空已选
     if (state.batchMode) clearBatchState();
     renderAll();
-    // 日程是流式的，进入时直接落在焦点日（默认今天）而不是页面顶部
-    if (view === 'agenda' && state.agendaAnchor) {
-      requestAnimationFrame(function () { agendaScrollTo(state.agendaAnchor, false); });
-    }
+  }
+
+  // 「全部安排」：原议程页降级为日历页内的全屏流式入口，能力（连续历史/未来 + 分类筛选）完整保留
+  function openAgenda(anchor) {
+    state.agendaAnchor = anchor || state.agendaAnchor || todayKey();
+    state.agendaBack = '';
+    state.agendaFwd = '';
+    // 每次打开都从全量开始，清掉上次的搜索词
+    agendaSearchQuery = '';
+    const searchInput = $('#agendaSearch');
+    if (searchInput) searchInput.value = '';
+    const searchClear = $('#agendaSearchClear');
+    if (searchClear) searchClear.hidden = true;
+    const page = $('#agendaPage');
+    page.hidden = false;
+    document.body.classList.add('agenda-open');
+    renderAgenda();
+    requestAnimationFrame(function () {
+      page.classList.add('open');
+      agendaScrollTo(state.agendaAnchor, false);
+    });
+  }
+
+  function closeAgenda() {
+    const page = $('#agendaPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    document.body.classList.remove('agenda-open');
+    window.setTimeout(function () { page.hidden = true; }, 260);
   }
 
   // ==================== 存储提示 / 主题 ====================
@@ -4335,6 +6574,14 @@
     const meta = $('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', dark ? '#0F1117' : '#F3F5FA');
     syncStatusBar(dark);
+    const btn = $('#themeBtn');
+    if (btn) {
+      // 浅色显示太阳（点了去深色），深色显示月牙（点了回浅色）
+      btn.setAttribute('aria-label', dark ? T('切换到浅色模式') : T('切换到深色模式'));
+      btn.setAttribute('title', dark ? T('切换到浅色模式') : T('切换到深色模式'));
+    }
+    applyCardStyle();
+    applyFont();
   }
 
   // ==================== Toast / Snackbar ====================
@@ -4386,7 +6633,6 @@
       target.updatedAt = Date.now();
       await persistItems();
       renderAll();
-      scheduleReminders();
       showToast(T('已撤销完成'));
     };
   }
@@ -4450,8 +6696,6 @@
       return;
     }
 
-    scheduleReminders();
-
     const row = button ? button.closest('.row') : null;
     const inDoneList = row && row.parentElement && row.parentElement.classList.contains('done-list');
 
@@ -4479,7 +6723,6 @@
     recurrence: null,
     note: '',
     address: null,
-    remindBefore: null,
     priority: false
   };
 
@@ -4530,6 +6773,11 @@
   }
 
   function syncDateChip() {
+    if (dateSheet.target === 'countdown') {
+      $('#cdDate').value = activeDateDraft().date;
+      syncCdDateChip();
+      return;
+    }
     if (dateSheet.target === 'plan') {
       const planChip = $('#planDateChip');
       if (!planChip) return;
@@ -4544,18 +6792,6 @@
     const label = relativeDayLabel(key);
     setChipText(el, draft.time ? label + ' ' + draft.time : label + ' · ' + T('全天'));
     el.classList.add('active');
-  }
-
-  function syncRemindChip() {
-    const el = $('#remindChip');
-    if (!el) return;
-    if (typeof draft.remindBefore === 'number') {
-      setChipText(el, T('提前 {n} 分钟', { n: draft.remindBefore }));
-      el.classList.add('active');
-    } else {
-      setChipText(el, T('提醒'));
-      el.classList.remove('active');
-    }
   }
 
   function renderRepTypeChips() {
@@ -4755,7 +6991,7 @@
   }
 
   // 详情页统一结构：
-  //   标题（最重要）→ 日期时间 / 分类 / 提醒（主信息）→ 地址 → 备注（在 body 外）
+  //   标题（最重要）→ 日期时间 / 分类（主信息）→ 地址 → 备注（在 body 外）
   //   类型 / 重复 / 优先级等次要字段收进折叠区，避免一屏全是等宽小行
   function detailRowsHTML(opts) {
     const rows = opts.rows || [];
@@ -4791,25 +7027,6 @@
     return html;
   }
 
-  // 该条目在最近一次排程里的真实状态（已排程 / 跳过原因 / 失败原因）
-  function reminderStatusOf(id, key) {
-    const report = Array.isArray(state.reminderReport) ? state.reminderReport : [];
-    const rows = report.filter(function (r) { return r.key.indexOf(String(id) + '|') === 0; });
-    if (!rows.length) return '';
-    const hit = (key && rows.filter(function (r) { return r.key === String(id) + '|' + key; })[0]) || rows[0];
-    if (!hit) return '';
-    const label = {
-      ok: T('已排程'), queued: T('排程中'), timer: T('前台计时器'),
-      skip: T('已跳过'), fail: T('排程失败')
-    }[hit.status] || '';
-    if (hit.status === 'ok') {
-      // 精确闹钟不可用时系统只能延迟投递，详情里必须写明，不能静默
-      return label + ' · ' + hit.fireText +
-        (state.exactAlarmStatus === 'denied' ? ' · ' + T('可能延迟') : '');
-    }
-    return label + (hit.reason ? ' · ' + hit.reason : '');
-  }
-
   function showDetailSheet(rowsHTML, note) {
     $('#detailTitle').textContent = detail.kind === 'plan' ? T('计划详情') : T('条目详情');
     $('#detailBody').innerHTML = rowsHTML;
@@ -4826,13 +7043,6 @@
     });
   }
 
-  // 精确闹钟被系统关闭时，提醒仍会到，但只能按「允许延迟」的方式排，界面如实标注
-  function remindTextOf(before) {
-    if (!before) return T('不提醒');
-    const base = T('提前 {n} 分钟', { n: before });
-    return state.exactAlarmStatus === 'denied' ? base + ' · ' + T('可能延迟') : base;
-  }
-
   function openDetail(id, date) {
     const base = state.items.find(function (i) { return i.id === id; });
     if (!base) return;
@@ -4843,12 +7053,12 @@
     const inst = base.recurrence ? makeInstance(base, detail.date) : base;
     const cat = getCategory(base.categoryId);
     // 分类一栏带图标；未设置图标时只显示名称，不留空白
-    const catCell = cat ? (categoryGlyphHTML(cat) + esc(cat.name)) : esc(T('未分类'));
-    const remindStatus = reminderStatusOf(base.id, inst.date);
+    const catCell = cat
+      ? (categoryGlyphHTML(cat) + '<span style="color:' + cat.color + '">' + esc(cat.name) + '</span>')
+      : esc(T('未分类'));
     const rows = [
       ['日期时间', monthDay(inst.date) + ' · ' + weekdayOf(inst.date) + ' · ' + (inst.time || T('全天'))],
-      ['分类', catCell, 'html'],
-      ['提醒', remindTextOf(inst.remindBefore) + (remindStatus ? ' · ' + remindStatus : '')]
+      ['分类', catCell, 'html']
     ];
     const foldRows = [
       ['类型', T(TYPE_META[inst.type].label)],
@@ -4872,18 +7082,35 @@
     detail.itemId = id;
     detail.date = '';
     const cat = getCategory(plan.categoryId);
-    const catCell = cat ? (categoryGlyphHTML(cat) + esc(cat.name)) : esc(T('未分类'));
-    const remindStatus = reminderStatusOf(plan.id, plan.periodStart);
+    const catCell = cat
+      ? (categoryGlyphHTML(cat) + '<span style="color:' + cat.color + '">' + esc(cat.name) + '</span>')
+      : esc(T('未分类'));
     const rows = [
       ['周期', planPeriodLabel(plan.kind, plan.periodStart)],
-      ['时间', plan.time || T('全天') + ' · ' + T('基准') + ' ' + REMIND_DEFAULT_TIME],
-      ['分类', catCell, 'html'],
-      ['提醒', remindTextOf(plan.remindBefore) + (remindStatus ? ' · ' + remindStatus : '')]
+      ['时间', plan.time || T('全天')],
+      ['分类', catCell, 'html']
     ];
     const foldRows = [
       ['类型', T(PLAN_KINDS[plan.kind])],
       ['优先级', plan.priority === 'high' ? T('高优先级') : T('普通')]
     ];
+
+    // 进度型计划在详情里给「记一次 / 撤销一次 / 重置」，卡面点错了也有退路
+    const p = planProgress(plan);
+    let progressHTML = '';
+    if (p.target > 1) {
+      progressHTML = '<div class="pd-progress">' +
+        '<div class="pd-head"><span class="pd-title">' + esc(T('进度')) + '</span></div>' +
+        '<div class="pd-visual">' + planProgressVisualHTML(p, plan) + '</div>' +
+        '<div class="pd-actions">' +
+          '<button class="pd-btn" type="button" data-plan-minus="' + plan.id + '"' +
+            (p.count ? '' : ' disabled') + '>' + esc(T('撤销一次')) + '</button>' +
+          '<button class="pd-btn primary" type="button" data-plan-plus="' + plan.id + '"' +
+            (p.done ? ' disabled' : '') + '>' + esc(T('记一次')) + '</button>' +
+          '<button class="pd-btn ghost" type="button" data-plan-reset="' + plan.id + '">' + esc(T('重置')) + '</button>' +
+        '</div>' +
+      '</div>';
+    }
 
     showDetailSheet(detailRowsHTML({
       title: plan.title,
@@ -4891,7 +7118,7 @@
       rows: rows,
       foldRows: foldRows,
       address: plan.address
-    }), plan.note);
+    }) + progressHTML, plan.note);
   }
 
   function closeDetail() {
@@ -4925,7 +7152,7 @@
   }
 
   function jumpBaseDate() {
-    if (state.view === 'agenda' && state.agendaAnchor) return keyToDate(state.agendaAnchor);
+    if (agendaPageOpen() && state.agendaAnchor) return keyToDate(state.agendaAnchor);
     if (state.selectedDate) return keyToDate(state.selectedDate);
     return state.month;
   }
@@ -5232,12 +7459,8 @@
 
   function applyJump(year, month, day) {
     const key = year + '-' + pad2(month) + '-' + pad2(Math.min(day, daysInMonth(year, month)));
-    if (state.view === 'agenda') {
-      state.agendaAnchor = key;
-    } else {
-      state.month = new Date(year, month - 1, 1);
-      state.selectedDate = key;
-    }
+    state.month = new Date(year, month - 1, 1);
+    state.selectedDate = key;
   }
 
   function jumpToDate() {
@@ -5254,11 +7477,7 @@
     applyJump(yearPicker.year, yearPicker.month, yearPicker.day);
     closeYearPicker();
     renderAll();
-    if (state.view === 'agenda') {
-      requestAnimationFrame(function () { agendaScrollTo(state.agendaAnchor, false); });
-    } else {
-      revealDayDetail();
-    }
+    revealDayDetail();
   }
 
   // ---------- 日期 + 时间面板 ----------
@@ -5273,10 +7492,15 @@
   };
 
   let dateCloseTimer = null;
+  let cdDateDraft = null;
   const DP_ITEM_H = 40;
 
-  // 日期面板既服务条目，也服务计划；对外只暴露当前正在编辑的对象
+  // 日期面板既服务条目，也服务计划与倒数日；对外只暴露当前正在编辑的对象
   function activeDateDraft() {
+    if (dateSheet.target === 'countdown') {
+      if (!cdDateDraft) cdDateDraft = { date: todayKey(), time: '' };
+      return cdDateDraft;
+    }
     return dateSheet.target === 'plan' ? planDraft : draft;
   }
 
@@ -5290,7 +7514,7 @@
     const grid = $('#dpGrid');
     if (!grid) return;
     const t = todayKey();
-    const selected = draft.date || t;
+    const selected = activeDateDraft().date || t;
     let html = '';
     buildMonthGrid(dateSheet.year, dateSheet.month).forEach(function (key) {
       const d = keyToDate(key);
@@ -5314,6 +7538,48 @@
     html += '<div class="wheel-spacer"></div>';
     el.innerHTML = html;
     el.scrollTop = 0;
+    bindDpWheelDrag(el);
+  }
+
+  // 日期面板的滚轮只有原生滚动，没有拖动绑定；这里补一套指针拖动，
+  // 拖动时临时关掉 scroll-snap，松手再吸附到最近的刻度。
+  function bindDpWheelDrag(el) {
+    if (!el || el.dataset.dragBound === '1') return;
+    el.dataset.dragBound = '1';
+    let startY = 0;
+    let startTop = 0;
+    let moved = false;
+
+    el.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      startY = e.clientY;
+      startTop = el.scrollTop;
+      moved = true;
+      el.classList.add('dragging');
+      el.style.scrollSnapType = 'none';
+      try { el.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    });
+
+    el.addEventListener('pointermove', function (e) {
+      if (!moved) return;
+      if (e.cancelable) e.preventDefault();
+      el.scrollTop = startTop - (e.clientY - startY);
+    });
+
+    function end(e) {
+      if (!moved) return;
+      moved = false;
+      el.classList.remove('dragging');
+      el.style.scrollSnapType = '';
+      const max = Math.max(0, el.children.length - 2);
+      const idx = Math.max(0, Math.min(max, Math.round(el.scrollTop / DP_ITEM_H)));
+      el.scrollTo({ top: idx * DP_ITEM_H, behavior: 'smooth' });
+      markDpWheel(el);
+      try { el.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    }
+
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
   }
 
   function dpWheelIndex(el) {
@@ -5364,12 +7630,18 @@
   }
 
   function openDateSheet(target) {
-    dateSheet.target = target === 'plan' ? 'plan' : 'item';
+    dateSheet.target = target === 'plan' ? 'plan' : (target === 'countdown' ? 'countdown' : 'item');
+    if (dateSheet.target === 'countdown') {
+      cdDateDraft = { date: $('#cdDate').value || addDays(todayKey(), 30), time: '' };
+    }
     const subject = activeDateDraft();
     const key = subject.date || todayKey();
     const d = keyToDate(key);
     dateSheet.year = d.getFullYear();
     dateSheet.month = d.getMonth();
+    // 倒数日只关心日期，隐藏时间分组，避免出现「不设时间」
+    const timeWrap = $('#dateSheet').querySelector('.dp-time');
+    if (timeWrap) timeWrap.hidden = dateSheet.target === 'countdown';
     renderDatePanel();
 
     buildDpWheel('#wheelHour', 24);
@@ -5462,24 +7734,21 @@
     $('#sheetTitle').textContent = T('新建条目');
     $('#saveBtn').textContent = T('保存');
     draft.type = 'event';
-    draft.date = preset || (state.view === 'agenda' && anchor >= t ? anchor : t);
+    draft.date = preset || (agendaPageOpen() && anchor >= t ? anchor : t);
     // 新建条目默认用当前设备时间，与时间滚轮的默认位置一致
     const nowClock = new Date();
     draft.time = pad2(nowClock.getHours()) + ':' + pad2(nowClock.getMinutes());
 
     // 只筛了一个分类时，新条目默认归到它，省一步
-    draft.categoryId = state.view === 'agenda' && state.agendaFilters.length === 1 &&
+    draft.categoryId = agendaPageOpen() && state.agendaFilters.length === 1 &&
       getCategory(state.agendaFilters[0]) ? state.agendaFilters[0] : null;
     draft.recurrence = null;
     draft.note = '';
     draft.address = null;
-    draft.remindBefore = null;
     draft.priority = false;
 
     $('#itemTitle').value = '';
     $('#noteInput').value = '';
-    $('#remindMinutes').value = '';
-    $('#remindEditor').hidden = true;
     $('#saveBtn').disabled = true;
     autoGrowNote();
 
@@ -5488,7 +7757,6 @@
     dateSheet.target = 'item';
     syncTypeChips();
     syncDateChip();
-    syncRemindChip();
     syncRepeatChip();
     syncPriorityChip();
     syncAddressChips();
@@ -5518,15 +7786,12 @@
     draft.recurrence = base.recurrence ? JSON.parse(JSON.stringify(base.recurrence)) : null;
     draft.note = base.note || '';
     draft.address = base.address ? Object.assign({}, base.address) : null;
-    draft.remindBefore = typeof base.remindBefore === 'number' ? base.remindBefore : null;
     draft.priority = base.priority === 'high';
 
     $('#sheetTitle').textContent = T('编辑条目');
     $('#saveBtn').textContent = T('保存修改');
     $('#itemTitle').value = base.title;
     $('#noteInput').value = base.note || '';
-    $('#remindMinutes').value = typeof base.remindBefore === 'number' ? String(base.remindBefore) : '';
-    $('#remindEditor').hidden = typeof base.remindBefore !== 'number';
     $('#saveBtn').disabled = false;
     autoGrowNote();
 
@@ -5535,7 +7800,6 @@
     dateSheet.target = 'item';
     syncTypeChips();
     syncDateChip();
-    syncRemindChip();
     syncRepeatChip();
     syncPriorityChip();
     syncAddressChips();
@@ -5569,41 +7833,6 @@
     }, 300);
   }
 
-  // 保存后立即排程，并把结果直接推到操作现场：
-  // 「已排程 1 条提醒 · 2026-11-07 20:20 触发」或「排程失败：<原因>」。
-  function scheduleAfterSave(item) {
-    if (typeof item.remindBefore !== 'number') {
-      scheduleReminders();
-      return;
-    }
-    const beforeLog = Array.isArray(state.meta.reminderLog) ? state.meta.reminderLog.length : 0;
-    const beforeIds = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.join(',') : '';
-
-    scheduleReminders({
-      done: function (s) {
-        if (s.scheduled > 0) {
-          showToast(T('已排程 {n} 条提醒').replace('{n}', s.scheduled) +
-            (s.firstFire ? ' · ' + s.firstFire + T(' 触发') : ''));
-        } else if (s.error || s.failReason) {
-          showToast(T('排程失败：{r}').replace('{r}', s.error || s.failReason));
-        } else if (s.skipReason) {
-          showToast(T('未排程：{r}').replace('{r}', s.skipReason));
-        } else {
-          showToast(T('没有可排程的提醒实例'));
-        }
-      }
-    });
-
-    // 兜底：2 秒内既没有新增日志、排程 id 也没变化 → 明确提示「排程未生效」
-    setTimeout(function () {
-      const logNow = Array.isArray(state.meta.reminderLog) ? state.meta.reminderLog.length : 0;
-      const idsNow = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.join(',') : '';
-      if (logNow === beforeLog && idsNow === beforeIds) {
-        showToast(T('排程未生效：2 秒内没有新增排程记录，请打开「权限管理 → 通知自查」查看原因'));
-      }
-    }, 2000);
-  }
-
   async function saveItem() {
     if (state.saving) return;
     const title = $('#itemTitle').value.trim();
@@ -5613,19 +7842,6 @@
     }
 
     const date = /^\d{4}-\d{2}-\d{2}$/.test(draft.date) ? draft.date : todayKey();
-    // 兜底：无论提醒编辑条是否收起，都以输入框里的当前值为准。
-    // 之前「输入了数字但没点确定就保存」会沿用旧值，这里彻底堵住。
-    const domRemind = parseRemindMinutes($('#remindMinutes').value);
-    if (Number.isNaN(domRemind)) {
-      showToast(T('提醒分钟数无效：请输入 1–10080 的整数'));
-      $('#remindMinutes').focus();
-      return;
-    }
-    if (domRemind !== null) {
-      draft.remindBefore = domRemind;
-      $('#remindMinutes').value = String(domRemind);
-      syncRemindChip();
-    }
     const base = state.editingId ? state.items.find(function (i) { return i.id === state.editingId; }) : null;
     // 重复条目的时间以 recurrence.time 为准；编辑后同步过去，详情页与编辑面板才不会显示两套
     const recurrence = draft.recurrence
@@ -5645,7 +7861,6 @@
       categoryId: getCategory(draft.categoryId) ? draft.categoryId : null,
       note: draft.note.slice(0, 500),
       address: draft.address,
-      remindBefore: typeof draft.remindBefore === 'number' ? draft.remindBefore : null,
       recurrence: recurrence,
       completions: base && base.completions ? base.completions : {}
     });
@@ -5659,22 +7874,9 @@
     state.saving = false;
     closeSheet();
 
-    if (state.view === 'agenda') state.agendaAnchor = item.date;
+    if (agendaPageOpen()) state.agendaAnchor = item.date;
     renderAll();
-    // 带提醒的条目：保存完成立即排程，并把结果直接告诉用户
-    scheduleAfterSave(item);
-    // 开了「同时写入系统日历」时，增删改立即同步到专用日历
-    if (calendarSyncEnabled()) syncCalendarEvents();
-    // 保存成功后同一帧后再刷新一次自查表：用户能立刻看到这一条是否真的落库、是否排上
-    requestAnimationFrame(function () { renderNotifyDiagnostics(); });
-    // 有提醒时确保拿到系统通知（Android 13+）与精确闹钟（Android 12+）权限
-    if (typeof item.remindBefore === 'number' && isNativeApp()) {
-      if (notifyState.status !== 'granted') ensureReminderPermissions();
-      else maybeAskExactAlarm();
-    }
-    if (!ok) showToast(T('保存失败：未能写入本机，提醒不会生效'));
-    // 有提醒时不再弹「已添加」，避免盖住排程结果提示
-    else if (typeof item.remindBefore === 'number') return;
+    if (!ok) showToast(T('保存失败：未能写入本机'));
     else if (base) showToast(T('已保存修改：{title}', { title: shorten(item.title, 14) }));
     else showToast(T('已添加：{title}', { title: shorten(item.title, 18) }));
   }
@@ -5687,8 +7889,9 @@
     time: null,
     categoryId: null,
     address: null,
-    remindBefore: null,
-    priority: false
+    priority: false,
+    target: 1,
+    progressStyle: 'bar'
   };
 
   let planCloseTimer = null;
@@ -5709,20 +7912,35 @@
     el.classList.add('active');
   }
 
-  function syncPlanRemindChip() {
-    const el = $('#planRemindChip');
-    if (!el) return;
-    const on = typeof planDraft.remindBefore === 'number';
-    setChipText(el, on ? T('提前 {n} 分钟', { n: planDraft.remindBefore }) : T('提醒'));
-    el.classList.toggle('active', on);
-  }
-
   function syncPlanPriorityChip() {
     const el = $('#planPriorityChip');
     if (!el) return;
     setChipText(el, planDraft.priority ? T('高优先级') : T('优先级'));
     el.classList.toggle('active', planDraft.priority);
     el.classList.toggle('high', planDraft.priority);
+  }
+
+  function clampTarget(value) {
+    const n = Math.round(Number(value));
+    if (!isFinite(n) || n < 1) return 1;
+    return Math.min(n, PLAN_TARGET_MAX);
+  }
+
+  function syncPlanTarget(value) {
+    if (value !== undefined) planDraft.target = clampTarget(value);
+    const input = $('#planTarget');
+    if (input) input.value = String(planDraft.target);
+  }
+
+  // 每条计划自己的进度视觉；缺省回落进度条
+  function syncPlanStyleOpts() {
+    const box = $('#planStyleOpts');
+    if (!box) return;
+    $$('.plan-style-opt', box).forEach(function (btn) {
+      const active = btn.dataset.planStyle === planStyleOf(planDraft.progressStyle);
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
   }
 
   function autoGrowPlanNote() {
@@ -5740,10 +7958,10 @@
     state.categories.forEach(function (cat) {
       const active = planDraft.categoryId === cat.id;
       html += '<button class="cat-chip' + (active ? ' active' : '') + '" type="button" data-plan-cat="' + cat.id +
-        '" style="--chip-color:' + cat.color + ';--chip-soft:' + hexToRgba(cat.color, 0.12) + '">' +
+        '" style="--chip-color:' + cat.color + ';--chip-soft:' + hexToRgba(cat.color, 0.12) + ';color:' + cat.color + '">' +
         categoryMarkHTML(cat, '--cat-dot:' + cat.color) + esc(cat.name) + '</button>';
     });
-    html += '<button class="cat-manage-chip" type="button" data-plan-manage>+ 管理分类</button>';
+    html += '<button class="cat-manage-chip" type="button" data-plan-manage>+ 管理标签</button>';
     box.innerHTML = html;
   }
 
@@ -5757,19 +7975,19 @@
     planDraft.time = null;
     planDraft.categoryId = null;
     planDraft.address = null;
-    planDraft.remindBefore = null;
     planDraft.priority = false;
+    planDraft.target = 1;
+    planDraft.progressStyle = 'bar';
 
     $('#planTitle').value = '';
     $('#planNote').value = '';
-    $('#planRemindInput').value = '';
-    $('#planRemindEditor').hidden = true;
     $('#planSave').disabled = true;
+    syncPlanTarget(1);
+    syncPlanStyleOpts();
     autoGrowPlanNote();
 
     syncPlanKindChips();
     syncPlanDateChip();
-    syncPlanRemindChip();
     syncPlanPriorityChip();
     syncAddressChips();
     renderPlanCategoryChips();
@@ -5796,26 +8014,29 @@
     planDraft.time = base.time || null;
     planDraft.categoryId = getCategory(base.categoryId) ? base.categoryId : null;
     planDraft.address = base.address ? Object.assign({}, base.address) : null;
-    planDraft.remindBefore = typeof base.remindBefore === 'number' ? base.remindBefore : null;
     planDraft.priority = base.priority === 'high';
+    planDraft.target = planProgress(base).target;
+    planDraft.progressStyle = planStyleOf(base.progressStyle);
 
     $('#planSheetTitle').textContent = T('编辑计划');
     $('#planSave').textContent = T('保存修改');
     $('#planTitle').value = base.title;
     $('#planNote').value = base.note || '';
-    $('#planRemindInput').value = typeof base.remindBefore === 'number' ? String(base.remindBefore) : '';
-    $('#planRemindEditor').hidden = typeof base.remindBefore !== 'number';
     $('#planSave').disabled = false;
+    syncPlanTarget(planDraft.target);
+    syncPlanStyleOpts();
     autoGrowPlanNote();
 
     syncPlanKindChips();
     syncPlanDateChip();
-    syncPlanRemindChip();
     syncPlanPriorityChip();
     syncAddressChips();
     renderPlanCategoryChips();
 
     clearTimeout(planCloseTimer);
+    // 历史计划页的层级是 50，编辑面板必须抬到页面之上才点得到
+    $('#planBackdrop').classList.add('above-page');
+    $('#planSheet').classList.add('above-page');
     $('#planBackdrop').hidden = false;
     $('#planSheet').hidden = false;
     requestAnimationFrame(function () {
@@ -5833,6 +8054,8 @@
     state.planSheetOpen = false;
     $('#planSheet').classList.remove('open');
     $('#planBackdrop').classList.remove('open');
+    $('#planSheet').classList.remove('above-page');
+    $('#planBackdrop').classList.remove('above-page');
     clearTimeout(planCloseTimer);
     planCloseTimer = setTimeout(function () {
       if (state.planSheetOpen) return;
@@ -5849,32 +8072,26 @@
       return;
     }
     const date = /^\d{4}-\d{2}-\d{2}$/.test(planDraft.date) ? planDraft.date : todayKey();
-    // 同条目：以输入框当前值为准，不依赖是否点过「确定」
-    const domRemind = parseRemindMinutes($('#planRemindInput').value);
-    if (Number.isNaN(domRemind)) {
-      showToast(T('提醒分钟数无效：请输入 1–10080 的整数'));
-      $('#planRemindInput').focus();
-      return;
-    }
-    if (domRemind !== null) {
-      planDraft.remindBefore = domRemind;
-      $('#planRemindInput').value = String(domRemind);
-      syncPlanRemindChip();
-    }
     const base = state.planEditingId ? state.plans.find(function (p) { return p.id === state.planEditingId; }) : null;
+    const nextStart = planPeriodStart(planDraft.kind, date);
+    // 历史计划改了周期就可能离开原分组（甚至回到当前周期），保存后要明确告知
+    const periodChanged = !!base && (base.kind !== planDraft.kind || base.periodStart !== nextStart);
 
     const plan = normalizePlan({
       id: base ? base.id : uid(),
       kind: planDraft.kind,
       title: title,
-      periodStart: planPeriodStart(planDraft.kind, date),
+      periodStart: nextStart,
       time: planDraft.time || null,
       priority: planDraft.priority ? 'high' : 'normal',
       categoryId: getCategory(planDraft.categoryId) ? planDraft.categoryId : null,
       note: $('#planNote').value.slice(0, 500),
       address: planDraft.address,
-      remindBefore: typeof planDraft.remindBefore === 'number' ? planDraft.remindBefore : null,
-      done: base ? !!base.done : false,
+      // 目标次数可改；已完成次数保留，但不能超过新目标
+      target: clampTarget($('#planTarget').value || planDraft.target),
+      count: base ? Math.min(planProgress(base).count, clampTarget($('#planTarget').value || planDraft.target)) : 0,
+      progressStyle: planStyleOf(planDraft.progressStyle),
+      done: false,
       doneAt: base ? (base.doneAt || null) : null,
       createdAt: base ? base.createdAt : Date.now(),
       updatedAt: Date.now()
@@ -5890,29 +8107,165 @@
     state.saving = false;
     closePlanSheet();
     renderPlan();
-    scheduleAfterSave(plan);
-    if (calendarSyncEnabled()) syncCalendarEvents();
-    requestAnimationFrame(function () { renderNotifyDiagnostics(); });
-    if (typeof plan.remindBefore === 'number' && isNativeApp()) {
-      if (notifyState.status !== 'granted') ensureReminderPermissions();
-      else maybeAskExactAlarm();
+    if (!$('#planHistoryPage').hidden) renderPlanHistory();
+    if (!ok) showToast(T('保存失败：未能写入本机'));
+    else if (base) {
+      showToast(periodChanged
+        ? T('周期已变更，计划已移到 {period}', { period: planPeriodLabel(plan.kind, plan.periodStart) })
+        : T('已保存修改：{title}', { title: shorten(plan.title, 14) }));
     }
-    if (!ok) showToast(T('保存失败：未能写入本机，提醒不会生效'));
-    else if (typeof plan.remindBefore === 'number') return;
-    else if (base) showToast(T('已保存修改：{title}', { title: shorten(plan.title, 14) }));
     else showToast(T('已添加{kind}：{title}', { kind: T(PLAN_KINDS[plan.kind]), title: shorten(plan.title, 16) }));
   }
 
   async function togglePlanDone(id) {
     const plan = state.plans.find(function (p) { return p.id === id; });
     if (!plan) return;
-    plan.done = !plan.done;
-    plan.doneAt = plan.done ? Date.now() : null;
+    const p = planProgress(plan);
+    // 一次性计划（目标 = 1）：保持原来的勾选/取消语义
+    if (p.target <= 1) {
+      plan.count = p.done ? 0 : 1;
+      plan.done = !p.done;
+      plan.doneAt = plan.done ? Date.now() : null;
+      plan.updatedAt = Date.now();
+      await persistPlans();
+      renderPlan();
+      haptic(10);
+      if (plan.done) showToast(T('已完成 · {title}', { title: shorten(plan.title, 16) }), 1400);
+      return;
+    }
+    await incrementPlan(id);
+  }
+
+  // 点一次 = 记一次完成：先动数据与卡面，落盘在后台进行，避免等 IO 卡住手感
+  async function incrementPlan(id) {
+    const plan = state.plans.find(function (p) { return p.id === id; });
+    if (!plan) return;
+    const p = planProgress(plan);
+    if (p.done) {
+      haptic(6);
+      showToast(T('目标已达成，可在计划详情里重置'), 1600);
+      return;
+    }
+    plan.count = p.count + 1;
+    plan.updatedAt = Date.now();
+    if (plan.count >= p.target) {
+      plan.done = true;
+      plan.doneAt = Date.now();
+    }
+    haptic(plan.done ? 16 : 9);
+    bumpPlanDom(plan);
+    refreshPlanRing(plan.kind);
+    if (detail.open && detail.kind === 'plan') openPlanDetail(plan.id);
+    if (plan.done) {
+      showToast(T('目标达成 · {title}', { title: shorten(plan.title, 16) }), 1600);
+      // 完成后重排到列表末尾，给完成态一个收尾动画
+      window.setTimeout(function () {
+        if (state.view === 'plan') renderPlan();
+      }, 900);
+    }
+    await persistPlans(true);
+  }
+
+  async function decrementPlan(id) {
+    const plan = state.plans.find(function (p) { return p.id === id; });
+    if (!plan) return;
+    const p = planProgress(plan);
+    if (p.count <= 0) return;
+    plan.count = p.count - 1;
+    plan.done = false;
+    plan.doneAt = null;
     plan.updatedAt = Date.now();
     await persistPlans();
     renderPlan();
-    haptic(10);
-    if (plan.done) showToast(T('已完成 · {title}', { title: shorten(plan.title, 16) }), 1400);
+    if (detail.open && detail.kind === 'plan') openPlanDetail(id);
+    haptic(6);
+    showToast(T('已撤销一次'), 1200);
+  }
+
+  async function resetPlanProgress(id) {
+    const plan = state.plans.find(function (p) { return p.id === id; });
+    if (!plan) return;
+    plan.count = 0;
+    plan.done = false;
+    plan.doneAt = null;
+    plan.updatedAt = Date.now();
+    await persistPlans();
+    renderPlan();
+    if (detail.open && detail.kind === 'plan') openPlanDetail(id);
+    haptic(12);
+    showToast(T('进度已重置'), 1200);
+  }
+
+  // 卡面原地刷新：不重建列表，只改数字、进度条/能量格/环形/百分数/月相
+  function bumpPlanDom(plan) {
+    const p = planProgress(plan);
+    const article = document.querySelector('[data-plan-row="' + plan.id + '"]');
+    if (!article) return;
+    const countEl = article.querySelector('[data-plan-count]');
+    if (countEl) countEl.textContent = String(p.count);
+    const bar = article.querySelector('[data-plan-bar]');
+    if (bar) bar.style.width = (p.ratio * 100).toFixed(1) + '%';
+    const cells = article.querySelectorAll('.plan-cell');
+    if (cells.length) {
+      cells.forEach(function (el, i) { el.classList.toggle('on', i < p.count); });
+    }
+    // 环形：通过 stroke-dashoffset 的过渡动画平滑推进
+    const arc = article.querySelector('[data-plan-arc]');
+    if (arc) arc.style.strokeDashoffset = (100 - p.ratio * 100).toFixed(1);
+    // 环形中心与百分数样式的百分比数字
+    article.querySelectorAll('[data-plan-pct]').forEach(function (el) {
+      el.textContent = Math.round(p.ratio * 100) + '%';
+    });
+    // 月相：完成次数 → 亮面面积，0 = 新月全暗，目标 = 满月全亮，不做整圈相位循环
+    const moon = article.querySelector('[data-plan-moon]');
+    if (moon) {
+      const k = Math.max(0, Math.min(1, p.ratio));
+      const lit = article.querySelector('[data-plan-moon-lit]');
+      if (lit) {
+        const fromK = Math.max(0, Math.min(1, Number(lit.getAttribute('data-k') || 0)));
+        lit.setAttribute('data-k', String(k));
+        // 相位推进只改路径一个属性；按下缩放走 bump 动画，两者互不干扰
+        animateMoonLit(lit, fromK, k);
+      }
+      moon.classList.toggle('is-full', k >= 0.92);
+    }
+    const prog = article.querySelector('.plan-progress');
+    if (prog) {
+      prog.classList.remove('bump');
+      // 强制重排，让动画每次点击都能重新播放
+      void prog.offsetWidth;
+      prog.classList.add('bump');
+    }
+    const card = article.querySelector('.plan-row-card');
+    if (card) {
+      const fly = document.createElement('span');
+      fly.className = 'plan-fly';
+      fly.textContent = '+1';
+      card.appendChild(fly);
+      window.setTimeout(function () {
+        if (fly.parentNode) fly.parentNode.removeChild(fly);
+      }, 700);
+    }
+  }
+
+  // 卡头的完成百分比环跟着进度即时刷新
+  function refreshPlanRing(kind) {
+    const card = document.querySelector('[data-plan-card="' + kind + '"]');
+    if (!card) return;
+    const t = todayKey();
+    const start = planPeriodStart(kind, t);
+    const current = state.plans.filter(function (p) { return p.kind === kind && p.periodStart === start; });
+    const total = current.length;
+    const done = current.filter(function (p) { return p.done; }).length;
+    const pct = total ? Math.round(done / total * 100) : 0;
+    const ring = card.querySelector('[data-plan-ring="' + kind + '"]');
+    const label = card.querySelector('.ring-label b');
+    if (ring) {
+      ring.dataset.pct = String(pct);
+      ring.style.strokeDashoffset = String(100 - pct);
+      ring.classList.toggle('full', pct === 100 && total > 0);
+    }
+    if (label) label.textContent = total ? pct + '%' : '—';
   }
 
   function askDeletePlan(id) {
@@ -5935,57 +8288,7 @@
     state.plans.splice(idx, 1);
     await persistPlans();
     renderPlan();
-    scheduleReminders();
     showToast(T('已删除'), 1200);
-  }
-
-  // ==================== 设置页 ====================
-
-  const notifyState = {
-    status: 'default',
-    checked: false,
-    native: false,
-    // 权限接口的原始返回值：自查面板原样展示，不再只给「已开启 / 未开启」这种推断值
-    lastCheckRaw: '',
-    lastCheckAt: 0,
-    lastRequestRaw: '',
-    lastRequestAt: 0,
-    lastRequestError: '',
-    requestAttempts: 0,
-    // true 表示当前只能走应用内提示：Capacitor WebView 的 Notification.requestPermission()
-    // 不会弹系统授权，必须如实告知用户，不能伪装成「已发送系统通知」
-    webFallback: false
-  };
-
-  function rawResultText(res) {
-    if (res === undefined) return 'undefined';
-    try { return JSON.stringify(res); } catch (err) { return String(res); }
-  }
-
-  function clockTimeText(ts) {
-    if (!ts) return '—';
-    const d = new Date(ts);
-    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
-  }
-
-  function permissionLabel(status) {
-    if (status === 'granted') return T('已允许');
-    if (status === 'denied') return T('已拒绝');
-    if (status === 'unsupported') return T('不支持');
-    if (status === 'not-required') return T('无需授权');
-    if (status === 'unknown') return T('检测中…');
-    return T('未开启');
-  }
-
-  function permissionBadgeClass(status) {
-    if (status === 'granted' || status === 'not-required') return 'ok';
-    if (status === 'denied') return 'danger';
-    if (status === 'default') return 'warn';
-    return '';
-  }
-
-  function notificationLabel() {
-    return notifyState.checked ? permissionLabel(notifyState.status) : T('检测中…');
   }
 
   // ==================== 天气：初始化与城市选择 ====================
@@ -5994,6 +8297,9 @@
   let cityResultsData = [];
   let citySearchTimer = null;
   let citySearchSeq = 0;
+  let cityCommitBusy = false;
+  // 城市面板的三列滚轮状态，与日记位置的 regionPicker 各自独立
+  const cityPicker = { province: 0, city: 0, district: 0 };
 
   function initWeather() {
     if (!window.Weather) return;
@@ -6050,13 +8356,17 @@
     cityResultsData = [];
     $('#citySearch').value = '';
     $('#cityResults').innerHTML = '';
+    setCitySearchExpanded(false);
+    syncCityPickerFromCurrent();
     bg.hidden = false;
     sheet.hidden = false;
+    renderPickerWheels(cityPicker, CITY_WHEEL_IDS);
     requestAnimationFrame(function () {
       sheet.classList.add('open');
       bg.classList.add('open');
+      // 浮层隐藏时 scrollTop 会被重置，打开后必须再贴一次选中项
+      renderPickerWheels(cityPicker, CITY_WHEEL_IDS);
     });
-    setTimeout(function () { $('#citySearch').focus(); }, 280);
   }
 
   function closeCitySheet() {
@@ -6070,6 +8380,8 @@
     citySearchSeq++;
     cityResultsData = [];
     $('#cityResults').innerHTML = '';
+    $('#citySearch').value = '';
+    setCitySearchExpanded(false);
     $('#citySearch').blur();
     setTimeout(function () {
       if (!sheet.classList.contains('open')) {
@@ -6077,6 +8389,103 @@
         bg.hidden = true;
       }
     }, 300);
+  }
+
+  // 搜索是兜底入口：默认收起，点开才出现输入框
+  function setCitySearchExpanded(open) {
+    const toggle = $('#citySearchToggle');
+    const body = $('#citySearchBody');
+    if (!toggle || !body) return;
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    body.hidden = !open;
+    if (!open) $('#citySearch').blur();
+  }
+
+  // 打开时把滚轮停在当前天气城市；匹配不到就回到第一项，不猜
+  function syncCityPickerFromCurrent() {
+    cityPicker.province = 0;
+    cityPicker.city = 0;
+    cityPicker.district = 0;
+    const data = regionData();
+    const cur = window.Weather && typeof window.Weather.city === 'function' ? window.Weather.city() : null;
+    if (!data.length || !cur) return;
+    const segs = String(cur.label || cur.name || '')
+      .split('·').map(function (s) { return s.trim(); }).filter(Boolean);
+    let hitP = -1;
+    let hitC = -1;
+    data.forEach(function (p, pi) {
+      if (hitC !== -1) return;
+      p.cities.forEach(function (c, ci) {
+        if (hitC !== -1) return;
+        if (c === cur.name || segs.indexOf(c) !== -1) { hitP = pi; hitC = ci; }
+      });
+    });
+    if (hitC === -1) return;
+    cityPicker.province = hitP;
+    cityPicker.city = hitC;
+    const opts = districtOptionsFor(cityPicker);
+    segs.forEach(function (s) {
+      const di = opts.indexOf(s);
+      if (di > 0) cityPicker.district = di;
+    });
+  }
+
+  // 内置表只有地名，天气需要经纬度：拿地名再走一次搜索，命中后回填
+  function pickCityHit(list, city, district) {
+    let best = null;
+    list.forEach(function (c) {
+      let score = 0;
+      if (district && c.name === district) score += 3;
+      if (c.name === city) score += 2;
+      if ((c.region || '').indexOf(city) !== -1) score += 1;
+      if (!best || score > best.score) best = { c: c, score: score };
+    });
+    if (best && best.score > 0) return best.c;
+    return list[0];
+  }
+
+  async function commitCityWheel() {
+    if (cityCommitBusy || !window.Weather) return;
+    const data = regionData();
+    if (!data.length) return;
+    const p = data[cityPicker.province] || data[0];
+    const city = p.cities[cityPicker.city] || '';
+    const opts = districtOptionsFor(cityPicker);
+    const district = cityPicker.district > 0 ? (opts[cityPicker.district] || '') : '';
+    if (!city) return;
+    const btn = $('#cityWheelDone');
+    const btnText = btn ? btn.textContent : '';
+    cityCommitBusy = true;
+    if (btn) { btn.disabled = true; btn.textContent = T('正在查询位置…'); }
+    let list = [];
+    let failed = false;
+    try {
+      list = await window.Weather.search(district ? city + district : city);
+    } catch (err) {
+      failed = true;
+    }
+    cityCommitBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = btnText; }
+    if (!failed && list && list.length) {
+      const hit = pickCityHit(list, city, district);
+      if (hit) {
+        window.Weather.setCity(hit);
+        closeCitySheet();
+        showToast(T('天气城市已设为 {city}', { city: hit.label || district || city }));
+        if (state.view === 'calendar') renderDayDetail();
+        renderSettings();
+        return;
+      }
+    }
+    // 查不到就让搜索接手，预填刚选中的地名，用户改两个字就能命中
+    const input = $('#citySearch');
+    if (input) {
+      input.value = district || city;
+      setCitySearchExpanded(true);
+      runCitySearch(input.value);
+      setTimeout(function () { input.focus(); }, 60);
+    }
+    showToast(failed ? T('搜索失败，请检查网络，已保留原来的城市。') : T('没有找到该位置，请用搜索试试。'));
   }
 
   function cityHint(text) {
@@ -6298,13 +8707,30 @@
   function renderSettings() {
     if (!storage.status) return;
 
-    $('#themeToggle').checked = document.documentElement.classList.contains('dark');
     $('#lunarToggle').checked = lunarVisible();
-    if ($('#almanacToggle')) $('#almanacToggle').checked = almanacVisible();
+    const en = isEn();
+    $$('#calendarCardSeg [data-cal-card]').forEach(function (btn) {
+      const key = btn.dataset.calCard;
+      // 英文只有「星座 / 关闭」两段，黄历段隐藏；文案由这里统一下发，避免和字典的「关闭→Close」冲突
+      if (key === 'almanac') btn.hidden = en;
+      const label = key === 'almanac' ? T('黄历') : key === 'zodiac' ? T('星座') : (en ? 'Off' : T('关闭'));
+      if (btn.textContent !== label) btn.textContent = label;
+      const on = key === calendarCardMode();
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const zodiacRow = $('#zodiacPickRow');
+    if (zodiacRow) {
+      const showZodiac = calendarCardMode() === 'zodiac';
+      zodiacRow.hidden = !showZodiac;
+      const cur = $('#zodiacCurrent');
+      if (cur) {
+        const z = zodiacOf();
+        cur.innerHTML = '<span class="ze-glyph" aria-hidden="true">' + z.glyph + '\uFE0E' + '</span>' +
+          '<span class="ze-name">' + esc(isEn() ? z.en : z.zh) + '</span>';
+      }
+    }
     if ($('#weatherToggle')) $('#weatherToggle').checked = weatherEnabled();
-    $('#notifyState').textContent = notifyState.status === 'granted' && state.exactAlarmStatus === 'denied'
-      ? notificationLabel() + ' · ' + T('可能延迟')
-      : notificationLabel();
 
     const cityValue = $('#weatherCityValue');
     if (cityValue) {
@@ -6447,7 +8873,6 @@
       // 存储不可用时仍允许本次使用，但明确告知下次启动会再问一次
       showToast(T('本机存储不可用，同意记录未能保存，下次启动会再次询问'));
     }
-    maybeShowPermissionIntro();
   }
 
   function declineAgreement() {
@@ -6465,10 +8890,7 @@
   }
 
   function maybeShowAgreement() {
-    if (hasValidConsent()) {
-      maybeShowPermissionIntro();
-      return;
-    }
+    if (hasValidConsent()) return;
     openAgreement();
   }
 
@@ -6495,7 +8917,6 @@
   function openSettings() {
     state.settingsOpen = true;
     renderSettings();
-    refreshNotifyState();
     const page = $('#settingsPage');
     page.hidden = false;
     requestAnimationFrame(function () { page.classList.add('open'); });
@@ -6557,7 +8978,7 @@
     setTimeout(finishSplash, 2000);
   }
 
-  // ==================== 权限引导（通知 / 存储） ====================
+  // ==================== 原生能力（Capacitor 插件） ====================
 
   function isNativeApp() {
     if (!window.Capacitor) return false;
@@ -6571,958 +8992,6 @@
     if (!window.Capacitor) return null;
     const plugins = window.Capacitor.Plugins || {};
     return plugins[name] || null;
-  }
-
-  function localNotifyPlugin() {
-    return plugin('LocalNotifications');
-  }
-
-  // 原生自建提醒通道：由 MainActivity 通过 addJavascriptInterface 注入，
-  // 不经过 Capacitor 插件。桥存在时提醒优先走它。
-  function nativeReminderBridge() {
-    const bridge = window.AeroNativeReminders;
-    return bridge && typeof bridge.schedule === 'function' ? bridge : null;
-  }
-
-  function parseBridgeJSON(raw) {
-    if (raw === null || raw === undefined) return null;
-    if (typeof raw === 'object') return raw;
-    try { return JSON.parse(String(raw)); } catch (err) { return null; }
-  }
-
-
-  // 提醒专用渠道：重要性 HIGH 才会横幅弹出；渠道不存在时 Android 会静默丢弃通知。
-  // Android 的渠道参数一旦创建就不可修改：设备上的旧渠道（importance 4）无法升级，
-  // 重建同 id 无效，所以这里改用带版本的新 id，启动时逐个删除旧渠道。
-  const REMIND_CHANNEL_ID = 'aeroplan-reminders-v4';
-  const REMIND_CHANNEL_LEGACY_IDS = [
-    'aeroplan-reminders-v3',
-    'aeroplan-reminders-v2',
-    'qingjihua-reminders-v2',
-    'qingjihua-reminders',
-    'light-schedule-reminders'
-  ];
-  // 设备截图显示 v3 的重要性仍然是 4：AndroidIMPORTANCE_HIGH = 4、IMPORTANCE_MAX = 5，
-  // 要横幅 + 声音必须用 5。渠道参数创建后不可改，只能再换一个新的 id（v4）。
-  const REMIND_CHANNEL_IMPORTANCE = 5;
-  const REMIND_SMALL_ICON = 'ic_stat_icon';
-  const REMIND_SOUND = 'aeroplan_notify';
-
-  // 同一时刻只建一次渠道：启动、授权、排程、测试通知都会调用它
-  let channelTask = null;
-
-  function reminderChannelOptions() {
-    return {
-      id: REMIND_CHANNEL_ID,
-      name: T('日程提醒'),
-      description: T('计划与条目的到点提醒'),
-      // 声音必须给（res/raw 文件名）：Android 8+ 的声音由渠道决定，
-      // 只把 sound 写在单条通知上无效，缺渠道音就会变成静音通知。
-      sound: REMIND_SOUND,
-      importance: REMIND_CHANNEL_IMPORTANCE,
-      visibility: 1,      // 1 = VISIBILITY_PUBLIC，锁屏显示完整内容
-      vibration: true,
-      lights: true,
-      setShowBadge: true
-    };
-  }
-
-  // 旧渠道只做删除尝试：本来不存在或系统不允许删除都无害，不阻塞启动
-  async function dropLegacyReminderChannel(notify) {
-    if (!notify || typeof notify.deleteChannel !== 'function') return [];
-    const removed = [];
-    for (const id of REMIND_CHANNEL_LEGACY_IDS) {
-      try {
-        await notify.deleteChannel({ id: id });
-        removed.push(id);
-      } catch (err) { /* 不存在就跳过 */ }
-    }
-    return removed;
-  }
-
-  async function ensureReminderChannel(notify) {
-    if (!notify || typeof notify.createChannel !== 'function') return false;
-    if (channelTask) return channelTask;
-
-    const task = (async function () {
-      let options = reminderChannelOptions();
-      try {
-        await notify.createChannel(options);
-      } catch (err) {
-        // 提示音资源不合规时，部分 ROM 会拒绝整条渠道：回退成系统默认提示音再试一次，
-        // 至少保证通知能投递，而不是整条被丢弃。
-        console.warn('创建通知渠道失败，改用系统默认提示音重试：', err);
-        try {
-          options = reminderChannelOptions();
-          delete options.sound;
-          options.useDefaultSound = true;
-          await notify.createChannel(options);
-          state.channelFallbackSound = true;
-        } catch (err2) {
-          state.channelReady = false;
-          state.channelInfo = null;
-          state.channelFallbackSound = false;
-          console.warn('创建通知渠道失败：', err2);
-          return false;
-        }
-      }
-      // 建完再读回一次：渠道参数只在首次创建时生效，读回的值才是系统里真正生效的
-      let info = options;
-      try {
-        const res = await notify.listChannels();
-        const list = (res && res.channels) || [];
-        const ch = list.filter(function (c) { return c && c.id === REMIND_CHANNEL_ID; })[0];
-        if (ch) info = ch;
-      } catch (err) { /* 读不到就按期望值展示，自查面板会标注 */ }
-      state.channelInfo = info;
-      state.channelReady = true;
-      return true;
-    })();
-
-    channelTask = task;
-    const ok = await task;
-    // 失败时允许下次重试；成功则保留结果，避免并发重复创建
-    if (!ok) channelTask = null;
-    return ok;
-  }
-
-  function pluginErrorText(err) {
-    if (!err) return '';
-    const raw = String(err.message || err);
-    if (/not enabled/i.test(raw)) return T('系统通知总开关被关闭');
-    if (/exact/i.test(raw)) return T('系统未允许「闹钟和提醒」');
-    if (/channel/i.test(raw)) return T('通知渠道不可用');
-    return raw.slice(0, 120);
-  }
-
-  function showInfo(title, text) {
-    openModal({
-      kind: 'info',
-      title: title,
-      text: text,
-      confirmText: T('知道了'),
-      hideCancel: true
-    });
-  }
-
-  async function openSystemSettings() {
-    const notify = localNotifyPlugin();
-    if (notify && typeof notify.openSettings === 'function') {
-      try {
-        await notify.openSettings();
-        return;
-      } catch (err) {
-        console.warn('打开系统设置失败：', err);
-      }
-    }
-    showInfo(T('去设置'), T('打开手机「设置 → 应用 → 氢计划 → 权限」，手动打开对应权限后，再回到这里点「重新检查」。'));
-  }
-
-  async function refreshNotifyState(options) {
-    const skipSchedule = !!(options && options.skipSchedule);
-    const notify = localNotifyPlugin();
-    notifyState.native = !!notify;
-    notifyState.webFallback = false;
-    if (notify) {
-      try {
-        const res = await notify.checkPermissions();
-        notifyState.lastCheckRaw = rawResultText(res);
-        notifyState.lastCheckAt = Date.now();
-        const display = res && res.display;
-        if (display === 'granted') notifyState.status = 'granted';
-        else if (display === 'denied') notifyState.status = 'denied';
-        else notifyState.status = 'default';
-      } catch (err) {
-        notifyState.lastCheckRaw = 'error: ' + (err && err.message ? err.message : String(err));
-        notifyState.lastCheckAt = Date.now();
-        notifyState.status = 'unsupported';
-      }
-    } else if (isNativeApp()) {
-      // Capacitor WebView 里没有原生插件时，window.Notification 不受支持：
-      // requestPermission() 不会弹系统授权，只会一直停在 default。这里必须标成降级路径。
-      notifyState.status = 'unsupported';
-      notifyState.webFallback = true;
-      notifyState.lastCheckRaw = 'native plugin missing → web fallback (no system dialog)';
-      notifyState.lastCheckAt = Date.now();
-    } else if ('Notification' in window) {
-      notifyState.status = Notification.permission;
-      notifyState.lastCheckRaw = 'web Notification.permission=' + Notification.permission;
-      notifyState.lastCheckAt = Date.now();
-    } else {
-      notifyState.status = 'unsupported';
-      notifyState.lastCheckRaw = 'Notification API unavailable';
-      notifyState.lastCheckAt = Date.now();
-    }
-    notifyState.checked = true;
-    // 精确闹钟状态决定排程精度与界面标注，每次检查权限时一起刷新
-    if (notify) await refreshExactAlarmStatus(notify);
-    renderSettings();
-    renderPermissionSheet();
-    // 必须在 check 完成后重排：启动时 notifyState 还是 default，提前排程会走页面计时器
-    if (!skipSchedule) scheduleReminders();
-    return notifyState.status;
-  }
-
-  async function refreshAllPermissionStates() {
-    await refreshNotifyState();
-    renderPermissionSheet();
-    await renderNotifyDiagnostics();
-  }
-
-  async function askNotifyPermission() {
-    const notify = localNotifyPlugin();
-    notifyState.requestAttempts += 1;
-    notifyState.lastRequestAt = Date.now();
-    notifyState.lastRequestError = '';
-    let status = 'unsupported';
-    if (notify) {
-      try {
-        const res = await notify.requestPermissions();
-        notifyState.lastRequestRaw = rawResultText(res);
-        status = res && res.display === 'granted' ? 'granted' : 'denied';
-      } catch (err) {
-        notifyState.lastRequestRaw = 'error: ' + (err && err.message ? err.message : String(err));
-        notifyState.lastRequestError = notifyState.lastRequestRaw;
-        status = 'denied';
-      }
-    } else if (!isNativeApp() && 'Notification' in window) {
-      try {
-        status = await Notification.requestPermission();
-        notifyState.lastRequestRaw = 'web Notification.requestPermission() → ' + status;
-      } catch (err) {
-        notifyState.lastRequestRaw = 'web error: ' + (err && err.message ? err.message : String(err));
-        notifyState.lastRequestError = notifyState.lastRequestRaw;
-        status = 'denied';
-      }
-    } else {
-      notifyState.lastRequestRaw = 'native plugin missing → webview fallback, no system dialog';
-      notifyState.webFallback = true;
-      status = 'unsupported';
-    }
-    notifyState.status = status;
-    notifyState.checked = true;
-    renderSettings();
-    renderPermissionSheet();
-    if (status === 'granted') showToast(T('通知已开启'));
-    else if (status === 'unsupported') showToast(T('当前构建没有原生通知插件，只能应用内提示'));
-    else showToast(T('系统没有授予通知权限'));
-    scheduleReminders();
-    await renderNotifyDiagnostics();
-    if (status === 'granted') maybeAskExactAlarm();
-    return status;
-  }
-
-  function setPermissionBadge(el, status) {
-    if (!el) return;
-    el.textContent = permissionLabel(status);
-    const cls = permissionBadgeClass(status);
-    el.className = 'perm-badge' + (cls ? ' ' + cls : '');
-  }
-
-  function renderPermissionSheet() {
-    const notifyBadge = $('#permNotifyState');
-    if (!notifyBadge) return;
-
-    setPermissionBadge(notifyBadge, notifyState.status === 'default' ? 'default' : notifyState.status);
-
-    const notifyDenied = notifyState.status === 'denied';
-    $('#permDenied').hidden = !notifyDenied;
-
-    const allowBtn = $('#permAllow');
-    if (allowBtn) {
-      allowBtn.hidden = notifyState.status === 'granted' || notifyState.status === 'unsupported';
-      allowBtn.textContent = notifyDenied ? T('重新检查') : T('允许通知');
-    }
-
-    const later = $('#permLater');
-    if (later) later.textContent = T('开始使用');
-
-    // 显式的手动申请入口：首启自动申请可能因为 Activity 未就绪而失败，
-    // 这个按钮任何时候都能再走一遍 checkPermissions → requestPermissions。
-    const reqBtn = $('#permRequest');
-    if (reqBtn) {
-      reqBtn.textContent = notifyState.webFallback ? T('重新申请（当前降级）') : T('申请通知权限');
-      reqBtn.disabled = notifyState.status === 'granted';
-    }
-    const reqHint = $('#permRequestHint');
-    if (reqHint) {
-      reqHint.hidden = !notifyState.webFallback;
-      reqHint.textContent = T('当前 WebView 拿不到原生通知插件：系统不会弹授权，提醒只会显示为应用内提示。');
-    }
-
-    // 新包名 + 本机无数据：明确告诉用户旧版数据不会自动继承，需要先导出备份再导入
-    const pkgHint = $('#newPackageHint');
-    if (pkgHint) {
-      const empty = state.loaded && !state.items.length && !state.plans.length &&
-        !(Array.isArray(state.diary) && state.diary.length);
-      pkgHint.hidden = !(empty && isNativeApp());
-      pkgHint.textContent = T('这是 AeroPlan 的新安装包（com.aeroplan.app）。如需保留旧数据，请先在旧版「设置 → 备份数据」导出，再在本版「恢复数据」导入；新旧包名不同，不能直接覆盖升级。');
-    }
-
-    // 「通知自查」入口右侧的摘要：不用点进去也能看出权限与排程是否正常
-    const selfCheck = $('#notifySelfCheckState');
-    if (selfCheck) {
-      const pendingCount = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.length : 0;
-      selfCheck.textContent = notifyState.status === 'granted'
-        ? T('已授权 · 排程 {n} 条').replace('{n}', pendingCount)
-        : T('查看权限、渠道与排程');
-    }
-
-    syncCalendarUI();
-  }
-
-  // 通知自查：独立整页，盖在权限引导之上；返回后不会动下层（含写作页）的编辑状态
-  function openNotifyDiagPage() {
-    const page = $('#notifyDiagPage');
-    if (!page || !page.hidden) return;
-    page.hidden = false;
-    const body = page.querySelector('.notify-diag-body');
-    if (body) body.scrollTop = 0;
-    renderNotifyDiagnostics();
-    renderNativeBlock();
-    renderBackgroundGuide();
-    refreshAllPermissionStates();
-  }
-
-  function closeNotifyDiagPage() {
-    const page = $('#notifyDiagPage');
-    if (!page || page.hidden) return;
-    page.hidden = true;
-  }
-
-  // 回到前台时对比「上次排程」与系统队列：被消费了还是从未被消费，日志里能直接看
-  async function logPendingDiff() {
-    // 原生通道：对比的是桥自己的本机排程表，不是插件的 getPending
-    const bridge = nativeReminderBridge();
-    if (bridge && typeof bridge.listScheduled === 'function') {
-      try {
-        const res = parseBridgeJSON(bridge.listScheduled()) || {};
-        const known = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds : [];
-        const items = Array.isArray(res.items) ? res.items : [];
-        const ids = items.map(function (n) { return Number(n.id); });
-        const missing = known.filter(function (id) { return ids.indexOf(Number(id)) === -1; });
-        appendReminderLog([], {
-          plugin: 'AeroNativeReminders',
-          method: 'listScheduled',
-          error: '前台对比（原生通道）：上次排程 ' + known.length + ' 条，仍在系统里 ' + ids.length + ' 条' +
-            (missing.length ? '；已被系统消费/移除：' + missing.join(', ') : '；无缺失')
-        });
-      } catch (err) { /* 对比失败不打扰用户 */ }
-      return;
-    }
-    const notify = localNotifyPlugin();
-    if (!notify || typeof notify.getPending !== 'function') return;
-    try {
-      const res = await notify.getPending();
-      const ids = ((res && res.notifications) || []).map(function (n) { return n.id; });
-      const known = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds : [];
-      const missing = known.filter(function (id) { return ids.indexOf(id) === -1; });
-      appendReminderLog([], {
-        method: 'getPending',
-        error: '前台对比：上次排程 ' + known.length + ' 条，仍在队列 ' + ids.length + ' 条' +
-          (missing.length ? '；已被系统消费/移除：' + missing.join(', ') : '；无缺失')
-      });
-    } catch (err) { /* 对比失败不打扰用户 */ }
-  }
-
-  // 十秒自检：注册监听 → 排 10 秒后的通知 → 读队列 → 等事件 → 读已送达 → 给判据
-  let selfTestRunning = false;
-  async function runNotifySelfTest() {
-    const btn = $('#notifySelfTestBtn');
-    const logEl = $('#notifySelfTestLog');
-    if (selfTestRunning) return;
-    const notify = localNotifyPlugin();
-    if (!notify) {
-      showToast(T('未检测到原生通知插件，无法自检'));
-      return;
-    }
-    selfTestRunning = true;
-    if (btn) { btn.disabled = true; btn.classList.add('busy'); btn.textContent = T('自检进行中…'); }
-    const lines = [];
-    const push = function (text) {
-      lines.push(clockTimeText(Date.now()) + ' · ' + text);
-      if (logEl) {
-        logEl.hidden = false;
-        logEl.innerHTML = lines.map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('');
-        logEl.scrollTop = logEl.scrollHeight;
-      }
-    };
-    const testId = 1999000000 + Math.floor(Math.random() * 900000);
-    let received = false;
-    try {
-      const mk = function (name, fn) {
-        try {
-          const p = notify.addListener(name, fn);
-          if (p && typeof p.then === 'function') p.catch(function () {});
-          return true;
-        } catch (err) { return false; }
-      };
-      const ok1 = mk('localNotificationReceived', function (n) {
-        if (n && Number(n.id) === testId) { received = true; push(T('收到 localNotificationReceived 事件')); }
-      });
-      const ok2 = mk('localNotificationScheduled', function (n) {
-        if (n && Number(n.id) === testId) push(T('收到 localNotificationScheduled 事件'));
-      });
-      const ok3 = mk('localNotificationActionPerformed', function (n) {
-        if (n && n.notification && Number(n.notification.id) === testId) push(T('收到 localNotificationActionPerformed 事件'));
-      });
-      push(T('监听注册：') + [ok1 ? 'Received' : 'Received✗', ok2 ? 'Scheduled' : 'Scheduled✗', ok3 ? 'ActionPerformed' : 'ActionPerformed✗'].join(' / '));
-      push(T('当前是否前台：') + (document.visibilityState === 'visible' ? T('是') : T('否')));
-
-      // 与正式提醒完全相同的参数（渠道、小图标、allowWhileIdle）
-      await notify.schedule({
-        notifications: [{
-          id: testId,
-          title: T('氢计划提醒'),
-          body: T('十秒自检通知'),
-          channelId: REMIND_CHANNEL_ID,
-          smallIcon: REMIND_SMALL_ICON,
-          autoCancel: true,
-          schedule: { at: new Date(Date.now() + 10000), allowWhileIdle: true },
-          extra: { selfTest: true }
-        }]
-      });
-      push(T('已排程：10 秒后触发（') + clockTimeText(Date.now() + 10000) + '）');
-
-      let pendingIds = [];
-      try {
-        const p1 = await notify.getPending();
-        pendingIds = ((p1 && p1.notifications) || []).map(function (n) { return n.id; });
-        push(T('getPending：') + (pendingIds.indexOf(testId) !== -1 ? T('在队列中') : T('不在队列（排程未生效）')));
-      } catch (err) {
-        push(T('getPending 读取失败：') + pluginErrorText(err));
-      }
-
-      push(T('等待 12 秒…'));
-      await new Promise(function (resolve) { setTimeout(resolve, 12000); });
-      push(received ? T('事件：已收到') : T('事件：12 秒内未收到（未触发）'));
-
-      let deliveredIds = [];
-      try {
-        if (typeof notify.getDeliveredNotifications === 'function') {
-          const d = await notify.getDeliveredNotifications();
-          deliveredIds = ((d && d.notifications) || []).map(function (n) { return n.id; });
-          push(T('已送达列表：') + (deliveredIds.indexOf(testId) !== -1 ? T('有本条') : T('无本条')));
-        } else {
-          push(T('已送达列表：插件不支持'));
-        }
-      } catch (err) {
-        push(T('已送达读取失败：') + pluginErrorText(err));
-      }
-
-      let stillPending = null;
-      try {
-        const p2 = await notify.getPending();
-        stillPending = ((p2 && p2.notifications) || []).some(function (n) { return n.id === testId; });
-        push(T('触发后队列：') + (stillPending ? T('仍有该条') : T('已清空')));
-      } catch (err) { /* 忽略 */ }
-      push(T('此刻是否前台：') + (document.visibilityState === 'visible' ? T('是') : T('否')));
-
-      let verdict;
-      if (received && deliveredIds.indexOf(testId) !== -1) {
-        verdict = T('投递成功；屏幕无横幅则是渠道/横幅/勿扰拦截了显示');
-      } else if (received) {
-        verdict = T('投递失败：事件到了但已送达为空，重点查小图标与提示音');
-      } else if (stillPending === false) {
-        verdict = T('闹钟被系统吞掉（后台策略）：队列已清空但事件未触发');
-      } else {
-        verdict = T('排程未生效：队列里仍有该条，系统没有触发');
-      }
-      push(T('结论：') + verdict);
-      appendReminderLog([], { method: 'selfTest', error: verdict });
-      try { await notify.cancel({ notifications: [{ id: testId }] }); } catch (err) { /* 忽略 */ }
-    } catch (err) {
-      push(T('自检失败：') + pluginErrorText(err));
-      appendReminderLog([], { method: 'selfTest', error: 'failed: ' + pluginErrorText(err) });
-    } finally {
-      ['localNotificationReceived', 'localNotificationScheduled', 'localNotificationActionPerformed'].forEach(function (name) {
-        try { if (typeof notify.removeAllListeners === 'function') notify.removeAllListeners(name); } catch (err) { /* 忽略 */ }
-      });
-      selfTestRunning = false;
-      if (btn) { btn.disabled = false; btn.classList.remove('busy'); btn.textContent = T('开始十秒自检'); }
-    }
-  }
-
-  // 自查刷新：重新读数据源 → 权限 → 重排（内含 getPending）→ 整块重绘。
-  // 任何一步失败都写进面板顶部，其他项照常显示；按钮始终会恢复可点，不会「点了没反应」。
-  let selfCheckBusy = false;
-  async function refreshSelfCheck() {
-    if (selfCheckBusy) return;
-    selfCheckBusy = true;
-    const btn = $('#notifyDiagRefresh');
-    const statusEl = $('#notifyDiagStatus');
-    if (btn) {
-      btn.disabled = true;
-      btn.classList.add('busy');
-      btn.textContent = T('刷新中…');
-    }
-    if (statusEl) {
-      statusEl.hidden = false;
-      statusEl.classList.remove('error');
-      statusEl.textContent = T('刷新中…');
-    }
-    const issues = [];
-    try {
-      // 1) 重新读取条目与计划（失败单独标注，不中断后面）
-      try {
-        await loadAll();
-      } catch (err) {
-        issues.push(T('条目/计划读取失败：') + pluginErrorText(err));
-      }
-      // 2) 权限状态（这一步内部会刷新精确闹钟）
-      try {
-        await refreshNotifyState({ skipSchedule: true });
-      } catch (err) {
-        issues.push(T('权限读取失败：') + pluginErrorText(err));
-      }
-      // 3) 渠道：只补建，不让异常打断整个刷新
-      try {
-        await ensureReminderChannel(localNotifyPlugin());
-      } catch (err) {
-        issues.push(T('渠道读取失败：') + pluginErrorText(err));
-      }
-      // 4) 重排并等本轮结束（原生排程有回读，最长等 3 秒），再重绘
-      await new Promise(function (resolve) {
-        let settled = false;
-        const finish = function () { if (!settled) { settled = true; resolve(); } };
-        setTimeout(finish, 3000);
-        try {
-          scheduleReminders({ done: finish });
-        } catch (err) {
-          issues.push(T('排程调用失败：') + pluginErrorText(err));
-          finish();
-        }
-      });
-      try {
-        await renderNotifyDiagnostics();
-      } catch (err) {
-        issues.push(T('面板绘制失败：') + pluginErrorText(err));
-      }
-      try {
-        renderNativeBlock();
-      } catch (err) {
-        issues.push(T('原生通道状态读取失败：') + pluginErrorText(err));
-      }
-      try {
-        renderBackgroundGuide();
-      } catch (err) {
-        issues.push(T('后台限制引导读取失败：') + pluginErrorText(err));
-      }
-      if (!issues.length) {
-        if (statusEl) statusEl.textContent = T('已刷新：') + clockTimeText(Date.now());
-      } else {
-        if (statusEl) {
-          statusEl.classList.add('error');
-          statusEl.textContent = T('刷新完成，但有读取失败：') + issues.join('；');
-        }
-      }
-    } catch (err) {
-      const msg = T('刷新失败：') + pluginErrorText(err);
-      if (statusEl) {
-        statusEl.hidden = false;
-        statusEl.classList.add('error');
-        statusEl.textContent = msg;
-      }
-      showToast(msg);
-    } finally {
-      selfCheckBusy = false;
-      if (btn) {
-        btn.disabled = false;
-        btn.classList.remove('busy');
-        btn.textContent = T('刷新自查');
-      }
-    }
-  }
-
-  // ==================== 原生通道自查 ====================
-
-  let nativeTestRunning = false;
-
-  function readNativeDiagnostics() {
-    const bridge = nativeReminderBridge();
-    if (!bridge) return null;
-    try {
-      return parseBridgeJSON(bridge.getDiagnostics());
-    } catch (err) {
-      return { bridge: false, error: String((err && err.message) || err) };
-    }
-  }
-
-  function renderNativeBlock() {
-    const box = $('#nativeDiag');
-    if (!box) return;
-    const bridge = nativeReminderBridge();
-    const d = readNativeDiagnostics();
-    const line = function (k, v) {
-      return '<div class="diag-row"><span class="diag-key">' + diagEsc(k) + '</span>' +
-        '<span class="diag-value">' + diagEsc(v) + '</span></div>';
-    };
-    if (!bridge) {
-      box.innerHTML = '<p class="diag-empty">' + diagEsc(T('当前环境没有注入原生通道（网页版或旧安装包）。提醒会回落到 Capacitor 插件或页面计时器。')) + '</p>';
-      return;
-    }
-    const fmt = function (ms) { return ms ? clockTimeText(Number(ms)) : T('无'); };
-    let html = line(T('桥注入'), T('已注入 AeroNativeReminders'));
-    if (!d) {
-      html += line(T('读取诊断'), T('读取失败'));
-    } else if (d.error) {
-      html += line(T('读取诊断'), T('失败：') + d.error);
-    } else {
-      html += line(T('已排条数'), String(d.scheduledCount == null ? '?' : d.scheduledCount));
-      html += line(T('最近一次排程'), fmt(d.lastScheduleAt) + (d.lastScheduleResult ? '（' + d.lastScheduleResult + '）' : ''));
-      html += line(T('最近一次投递'), fmt(d.lastDeliveryAt));
-      html += line(T('最近一次错误'), d.lastError || T('无'));
-      html += line(T('原生渠道'), (d.channelId || '—') + ' · ' + T('重要性 ') + (d.channelImportance == null ? '?' : d.channelImportance));
-      html += line(T('通知总开关 / 精确闹钟'),
-        (d.notificationsEnabled ? T('通知已开') : T('通知被关')) + ' / ' +
-        (d.exactAlarms ? T('精确闹钟可用') : T('精确闹钟被关，退化为允许延迟')));
-    }
-    box.innerHTML = html;
-  }
-
-  async function runNativeChannelTest() {
-    const btn = $('#nativeTestBtn');
-    const logEl = $('#nativeTestLog');
-    const bridge = nativeReminderBridge();
-    if (!bridge) {
-      showToast(T('当前安装包没有原生通道'));
-      return;
-    }
-    if (nativeTestRunning) return;
-    nativeTestRunning = true;
-    if (btn) { btn.disabled = true; btn.classList.add('busy'); btn.textContent = T('测试中…'); }
-    const write = function (text) {
-      if (!logEl) return;
-      logEl.hidden = false;
-      logEl.textContent = text;
-    };
-    try {
-      const res = parseBridgeJSON(bridge.postTest(10)) || {};
-      if (res.ok === false) throw new Error(res.error || 'postTest rejected');
-      write(T('已排一条 10 秒后的原生通知（id {id}），请留在本页等待…').replace('{id}', res.id));
-      const before = readNativeDiagnostics() || {};
-      await new Promise(function (r) { setTimeout(r, 11000); });
-      const after = readNativeDiagnostics() || {};
-      const delivered = Number(after.lastDeliveryAt || 0) > Number(before.lastDeliveryAt || 0);
-      write(delivered
-        ? T('已投递：原生通道在 {t} 发出了通知。若屏幕仍无横幅，问题在系统通知开关/横幅权限/勿扰。').replace('{t}', clockTimeText(after.lastDeliveryAt))
-        : T('未投递：10 秒内没有收到原生通道的投递记录。此时问题在系统层（省电、后台限制或 ROM 拦截），而不是应用代码。'));
-      renderNativeBlock();
-    } catch (err) {
-      write(T('测试失败：') + String((err && err.message) || err));
-    } finally {
-      nativeTestRunning = false;
-      if (btn) { btn.disabled = false; btn.classList.remove('busy'); btn.textContent = T('测试原生通道（10 秒）'); }
-    }
-  }
-
-  function diagEsc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
-    });
-  }
-
-  // ==================== 后台限制自查与引导 ====================
-  // 应用无法把自己加进系统白名单，只能按品牌给出可照做的路径。
-  const BG_GUIDES = {
-    xiaomi: {
-      name: '小米 / Redmi（MIUI / HyperOS）',
-      steps: [
-        '设置 → 应用设置 → 应用管理 → 氢计划 → 自启动（打开）',
-        '应用信息 → 省电策略 → 无限制',
-        '通知管理 → 允许通知 → 横幅通知 / 锁屏通知（全部打开）'
-      ]
-    },
-    huawei: {
-      name: '华为 / 荣耀（EMUI / HarmonyOS）',
-      steps: [
-        '设置 → 应用 → 应用启动管理 → 氢计划 → 关闭「自动管理」',
-        '手动勾选：允许自启动、允许关联启动、允许后台活动',
-        '通知管理 → 允许通知 → 横幅通知 / 锁屏通知'
-      ]
-    },
-    oppo: {
-      name: 'OPPO / 一加（ColorOS）',
-      steps: [
-        '设置 → 应用管理 → 氢计划 → 自启动管理（打开）',
-        '耗电管理 → 允许后台运行 / 允许高耗电',
-        '通知管理 → 允许通知 → 横幅通知 / 锁屏通知'
-      ]
-    },
-    vivo: {
-      name: 'vivo / iQOO（OriginOS）',
-      steps: [
-        '设置 → 电池 → 后台耗电管理 → 氢计划 → 允许后台高耗电',
-        '设置 → 应用与权限 → 权限管理 → 自启动（打开）',
-        '通知管理 → 允许通知 → 横幅通知 / 锁屏通知'
-      ]
-    },
-    other: {
-      name: '其他 Android 设备',
-      steps: [
-        '设置 → 应用 → 氢计划 → 电池 → 不限制 / 允许后台运行',
-        '设置 → 应用 → 氢计划 → 自启动 / 关联启动（若有，打开）',
-        '设置 → 应用 → 氢计划 → 通知 → 横幅通知 / 锁屏通知（打开）'
-      ]
-    }
-  };
-
-  function brandKeyOf(brand) {
-    const s = String(brand || '').toLowerCase();
-    if (/xiaomi|redmi|poco|mi\b/.test(s)) return 'xiaomi';
-    if (/huawei|honor|harmony/.test(s)) return 'huawei';
-    if (/oppo|oneplus|realme/.test(s)) return 'oppo';
-    if (/vivo|iqoo/.test(s)) return 'vivo';
-    return 'other';
-  }
-
-  function currentBrandText() {
-    const d = readNativeDiagnostics();
-    if (d && d.brand) return (d.brand + (d.model ? ' ' + d.model : '')).trim();
-    const ua = (navigator.userAgent || '');
-    return ua ? ua : '';
-  }
-
-  function renderBackgroundGuide() {
-    const box = $('#bgGuide');
-    const deviceEl = $('#bgGuideDevice');
-    if (!box) return;
-    const brand = currentBrandText();
-    const key = brandKeyOf(brand);
-    const guide = BG_GUIDES[key] || BG_GUIDES.other;
-    if (deviceEl) {
-      deviceEl.textContent = brand
-        ? T('当前设备：{brand}').replace('{brand}', brand)
-        : T('未能读取设备品牌，按通用路径显示');
-    }
-    box.innerHTML = '<div class="diag-sub">' + diagEsc(guide.name) + '</div>' +
-      guide.steps.map(function (step) {
-        return '<p class="diag-copy">' + diagEsc(step) + '</p>';
-      }).join('') +
-      '<p class="diag-hint">' + diagEsc(T('长按任意一行可复制路径。应用无法把自己加入系统白名单，只能按上面的路径手动开启。')) + '</p>';
-  }
-
-  async function openAppSettingsPage() {
-    const cal = calendarPlugin();
-    if (cal && typeof cal.openAppSettings === 'function') {
-      try {
-        await cal.openAppSettings();
-        return;
-      } catch (err) { /* 落到提示 */ }
-    }
-    showToast(T('请手动进入：设置 → 应用 → 氢计划'));
-  }
-
-  // ==================== 可选：同步到系统日历 ====================
-  // 专用日历「AeroPlan 提醒」，只写本应用的事件；关闭开关时清空该日历下的事件。
-  const CALENDAR_NAME = 'AeroPlan 提醒';
-  const CALENDAR_MARK = 'AeroPlan:';
-
-  function calendarPlugin() {
-    if (!window.Capacitor) return null;
-    // 原生 self-registered 插件用 registerPlugin 拿代理最稳；老实现则回落到 Plugins 表
-    if (typeof window.Capacitor.registerPlugin === 'function') {
-      try {
-        const p = window.Capacitor.registerPlugin('AeroCalendar');
-        if (p) return p;
-      } catch (err) { /* 回落到下面的 Plugins 表 */ }
-    }
-    return plugin('AeroCalendar');
-  }
-
-  function calendarSyncEnabled() {
-    return !!(state.meta && state.meta.calendarSync === true);
-  }
-
-  function setCalendarStateText(text, isError) {
-    const el = $('#calendarSyncState');
-    if (!el) return;
-    el.hidden = !text;
-    el.classList.toggle('error', !!isError);
-    el.textContent = text || '';
-  }
-
-  function syncCalendarUI() {
-    const toggle = $('#calendarSyncToggle');
-    if (toggle) toggle.checked = calendarSyncEnabled();
-    if (calendarSyncEnabled()) {
-      setCalendarStateText(T('已开启：条目会写入专用日历「{name}」，由系统日历负责提醒').replace('{name}', CALENDAR_NAME), false);
-    }
-  }
-
-  function calendarEventTimes(item) {
-    const info = reminderFireTime(item, item.date, 0);
-    const begin = info.at;
-    const duration = item.type === 'event' ? 60 * 60 * 1000 : 30 * 60 * 1000;
-    return { begin: begin, end: begin + duration };
-  }
-
-  async function syncCalendarEvents() {
-    if (!calendarSyncEnabled()) return { ok: false, reason: 'disabled' };
-    const cal = calendarPlugin();
-    if (!cal) return { ok: false, reason: 'plugin-missing' };
-    try {
-      const ensured = await cal.ensureCalendar({ name: CALENDAR_NAME });
-      if (!ensured || !ensured.calendarId) {
-        return { ok: false, reason: (ensured && ensured.error) || T('没有可写的日历账户') };
-      }
-      const desired = {};
-      state.items.forEach(function (item) {
-        if (typeof item.remindBefore !== 'number') return;
-        if (!item.recurrence && item.done) return;
-        const times = calendarEventTimes(item);
-        const key = String(item.id) + '|' + item.date;
-        desired[key] = {
-          title: CALENDAR_MARK + ' ' + (item.title || ''),
-          description: CALENDAR_MARK + item.id + '|' + item.date,
-          begin: times.begin,
-          end: times.end,
-          remind: Math.max(0, Math.round(item.remindBefore)),
-          location: item.address || ''
-        };
-      });
-      const prev = (state.meta.calendarEventIds && typeof state.meta.calendarEventIds === 'object')
-        ? state.meta.calendarEventIds : {};
-      const next = {};
-      let added = 0;
-      let updated = 0;
-      for (const key of Object.keys(desired)) {
-        const ev = desired[key];
-        const payload = Object.assign({
-          calendarId: ensured.calendarId,
-          eventId: prev[key] || null
-        }, ev);
-        const res = await cal.upsertEvent(payload);
-        if (res && res.eventId) {
-          next[key] = res.eventId;
-          if (prev[key]) updated += 1;
-          else added += 1;
-        }
-      }
-      let removed = 0;
-      for (const key of Object.keys(prev)) {
-        if (desired[key]) continue;
-        try {
-          await cal.deleteEvent({ eventId: prev[key] });
-          removed += 1;
-        } catch (err) { /* 单条删除失败不影响其余 */ }
-      }
-      state.meta.calendarEventIds = next;
-      state.meta.calendarLastSync = Date.now();
-      await persistMeta();
-      return { ok: true, added: added, updated: updated, removed: removed };
-    } catch (err) {
-      return { ok: false, reason: pluginErrorText(err) };
-    }
-  }
-
-  async function clearCalendarEvents() {
-    const cal = calendarPlugin();
-    if (!cal) return { ok: false, reason: 'plugin-missing' };
-    try {
-      const res = await cal.clearCalendar({ name: CALENDAR_NAME });
-      state.meta.calendarEventIds = {};
-      await persistMeta();
-      return { ok: true, removed: (res && res.removed) || 0 };
-    } catch (err) {
-      return { ok: false, reason: pluginErrorText(err) };
-    }
-  }
-
-  async function setCalendarSyncEnabled(enabled) {
-    const toggle = $('#calendarSyncToggle');
-    if (!enabled) {
-      state.meta.calendarSync = false;
-      await persistMeta();
-      const cleared = await clearCalendarEvents();
-      syncCalendarUI();
-      setCalendarStateText(cleared.ok
-        ? T('已关闭，并清空「{name}」里由本应用写入的事件').replace('{name}', CALENDAR_NAME)
-        : T('已关闭；清空日历失败：') + (cleared.reason || ''), !cleared.ok);
-      return;
-    }
-    const cal = calendarPlugin();
-    if (!cal) {
-      if (toggle) toggle.checked = false;
-      state.meta.calendarSync = false;
-      await persistMeta();
-      setCalendarStateText(T('当前安装包没有日历插件（网页版不支持），开关保持关闭'), true);
-      return;
-    }
-    let perm = null;
-    try { perm = await cal.checkCalendarPermission(); } catch (err) { /* 当作未授权 */ }
-    if (!perm || !perm.read || !perm.write) {
-      try { perm = await cal.requestCalendarPermission(); } catch (err) { perm = null; }
-    }
-    if (!perm || !perm.read || !perm.write) {
-      if (toggle) toggle.checked = false;
-      state.meta.calendarSync = false;
-      await persistMeta();
-      setCalendarStateText(T('没有日历读写权限，开关保持关闭。可在系统设置里允许后再打开。'), true);
-      return;
-    }
-    const ensured = await (async function () {
-      try { return await cal.ensureCalendar({ name: CALENDAR_NAME }); } catch (err) { return { error: pluginErrorText(err) }; }
-    })();
-    if (!ensured || !ensured.calendarId) {
-      if (toggle) toggle.checked = false;
-      state.meta.calendarSync = false;
-      await persistMeta();
-      setCalendarStateText(T('没有可写的日历账户，已自动关闭：') + ((ensured && ensured.error) || ''), true);
-      return;
-    }
-    state.meta.calendarSync = true;
-    await persistMeta();
-    const res = await syncCalendarEvents();
-    syncCalendarUI();
-    if (!res.ok) {
-      setCalendarStateText(T('已开启，但首次同步失败：') + (res.reason || ''), true);
-    } else {
-      setCalendarStateText(T('已开启：已同步 {n} 条到「{name}」').replace('{n}', res.added + res.updated).replace('{name}', CALENDAR_NAME), false);
-    }
-  }
-
-  function openPermissionSheet() {
-    const page = $('#permSheet');
-    if (!page || !page.hidden) return;
-    renderPermissionSheet();
-    refreshAllPermissionStates();
-    // 打开面板时顺手重排一次：保证实例表里的触发时间/状态是最新的
-    scheduleReminders();
-    renderNotifyDiagnostics();
-    renderNativeBlock();
-    renderBackgroundGuide();
-    syncCalendarUI();
-    $('#permBackdrop').hidden = false;
-    page.hidden = false;
-    requestAnimationFrame(function () {
-      page.classList.add('open');
-      $('#permBackdrop').classList.add('open');
-    });
-  }
-
-  function closePermissionSheet() {
-    const page = $('#permSheet');
-    if (!page || page.hidden) return;
-    page.classList.remove('open');
-    $('#permBackdrop').classList.remove('open');
-    setTimeout(function () {
-      page.hidden = true;
-      $('#permBackdrop').hidden = true;
-    }, 280);
-  }
-
-  async function finishPermissionIntro() {
-    closePermissionSheet();
-    if (!state.meta.permissionIntroDone) {
-      state.meta.permissionIntroDone = 1;
-      await persistMeta();
-    }
-  }
-
-  function maybeShowPermissionIntro() {
-    if (state.meta.permissionIntroDone) return;
-    openPermissionSheet();
   }
 
   // ==================== 导出 / 导入 ====================
@@ -7640,26 +9109,32 @@
       schema: 'aeroplan-backup',
       manifest: {
         formatVersion: 1,
-        schemaVersion: 8,
+        schemaVersion: 10,
         appVersion: APP_VERSION,
         createdAt: new Date().toISOString(),
         includeAttachments: withFiles,
         counts: {
           items: state.items.length,
           plans: state.plans.length,
+          countdowns: state.countdowns.length,
           categories: state.categories.length,
-          diary: state.diary.length
+          diary: state.diary.length,
+          moods: customMoods().length
         },
         encrypted: false
       },
       settings: {
         theme: preferredTheme(),
         language: window.I18N ? window.I18N.lang : 'zh',
-        weatherEnabled: weatherEnabled()
+        weatherEnabled: weatherEnabled(),
+        cardStyle: cardStyleId(),
+        progressStyle: state.meta.progressStyle
       },
       categories: state.categories,
       items: state.items,
       plans: state.plans,
+      countdowns: state.countdowns,
+      moods: customMoods(),
       diary: state.diary,
       consent: state.meta.consent || null
     };
@@ -7764,6 +9239,10 @@
     const rawPlans = !isArrayFile && data && Array.isArray(data.plans) ? data.plans : [];
     const cleanedPlans = rawPlans.map(normalizePlan).filter(Boolean);
     const cleanedDiary = rawDiary.map(normalizeDiary).filter(Boolean);
+    const rawCountdowns = !isArrayFile && Array.isArray(data.countdowns) ? data.countdowns : [];
+    const cleanedCountdowns = rawCountdowns.map(normalizeCountdown).filter(Boolean);
+    const rawMoods = !isArrayFile && Array.isArray(data.moods) ? data.moods : [];
+    const cleanedMoods = normalizeMoods(rawMoods);
     const rawDiaryFiles = !isArrayFile && Array.isArray(data.diaryFiles) ? data.diaryFiles : [];
     const includeAttachments = !isArrayFile && !!(data.manifest && data.manifest.includeAttachments === true);
 
@@ -7775,7 +9254,9 @@
       else skipped += 1;
     });
 
-    if (!cleaned.length && !cleanedPlans.length && !cleanedDiary.length) {
+    // 倒数日也算有效内容，避免「只有倒数日」的备份被判成空文件
+    const hasAnyContent = cleaned.length || cleanedPlans.length || cleanedDiary.length || cleanedCountdowns.length;
+    if (!hasAnyContent) {
       showToast(T('导入失败：没有可识别的条目'));
       return;
     }
@@ -7804,6 +9285,17 @@
       hasDiary: hasDiary,
       includeAttachments: includeAttachments,
       hasCategories: !isArrayFile && !!data && Array.isArray(data.categories),
+      countdowns: cleanedCountdowns,
+      hasCountdowns: !isArrayFile && !!data && Array.isArray(data.countdowns),
+      moods: cleanedMoods,
+      hasMoods: !isArrayFile && !!data && Array.isArray(data.moods),
+      // 旧备份里的 paper / glass / ink 也按新键值映射，不因认不出而丢掉设置
+      cardStyle: !isArrayFile && data && data.settings && typeof data.settings.cardStyle === 'string' && data.settings.cardStyle
+        ? normalizeCardStyleId(data.settings.cardStyle)
+        : null,
+      progressStyle: !isArrayFile && data && data.settings && data.settings.progressStyle === 'battery'
+        ? 'battery'
+        : (isArrayFile || !data || !data.settings ? null : 'bar'),
       consent: importedConsent,
       // 旧备份没有 settings.weatherEnabled：保持本机当前设置，不回滚成默认值
       weatherEnabled: !isArrayFile && data && data.settings && typeof data.settings.weatherEnabled === 'boolean'
@@ -7897,6 +9389,13 @@
       sortCategories();
       state.items = sanitizeItemCategories(pendingImport.items, state.categories);
       state.plans = sanitizePlanCategories(pendingImport.plans || [], state.categories);
+      if (pendingImport.hasCountdowns) {
+        state.countdowns = pendingImport.countdowns.map(function (cd) { return Object.assign({}, cd); });
+        sortCountdowns();
+      }
+      if (pendingImport.hasMoods) state.meta.moods = pendingImport.moods.slice();
+      if (pendingImport.cardStyle) state.meta.cardStyle = pendingImport.cardStyle;
+      if (pendingImport.progressStyle) state.meta.progressStyle = pendingImport.progressStyle;
       // 旧备份没有 diary：替换时保持本机日记不动，避免「用旧备份覆盖」时误删日记
       if (pendingImport.hasDiary) {
         // 被替换掉的旧日记，如果它的附件不再被新数据引用，一并清掉，避免 Blob 泄漏
@@ -7933,6 +9432,22 @@
       (pendingImport.plans || []).forEach(function (plan) { planMap.set(plan.id, Object.assign({}, plan)); });
       state.plans = sanitizePlanCategories(Array.from(planMap.values()), state.categories);
 
+      if (pendingImport.hasCountdowns) {
+        const cdMap = new Map();
+        state.countdowns.forEach(function (cd) { cdMap.set(cd.id, cd); });
+        pendingImport.countdowns.forEach(function (cd) { cdMap.set(cd.id, Object.assign({}, cd)); });
+        state.countdowns = Array.from(cdMap.values());
+        sortCountdowns();
+      }
+      if (pendingImport.hasMoods) {
+        const moodMap = new Map();
+        customMoods().forEach(function (m) { moodMap.set(m.id, m); });
+        pendingImport.moods.forEach(function (m) { moodMap.set(m.id, Object.assign({}, m)); });
+        state.meta.moods = Array.from(moodMap.values());
+      }
+      if (pendingImport.cardStyle) state.meta.cardStyle = pendingImport.cardStyle;
+      if (pendingImport.progressStyle) state.meta.progressStyle = pendingImport.progressStyle;
+
       // 日记按 date 合并：同一天以导入的那篇为准
       if (pendingImport.hasDiary) {
         const diaryMap = new Map();
@@ -7950,6 +9465,9 @@
     await persistCategories();
     await persistItems();
     await persistPlans();
+    await persistCountdowns();
+    await persistMeta();
+    applyCardStyle();
     sortDiary();
     await persistDiary(true);
     if (importedFiles && importedFiles.length) {
@@ -7972,7 +9490,6 @@
     }
     $('#importPreview').hidden = true;
     renderAll();
-    scheduleReminders();
     showToast(mode === 'replace' ? T('已替换为备份数据') : T('已合并导入'));
   }
 
@@ -7980,7 +9497,7 @@
     openModal({
       kind: 'clear-all',
       title: T('删除所有数据'),
-      text: T('将删除 {items} 条安排、{plans} 条计划、{diary} 篇日记、{cats} 个分类，以及全部设置、本地缓存与已排程的提醒。\n\n删除后无法恢复，建议先备份。', {
+      text: T('将删除 {items} 条安排、{plans} 条计划、{diary} 篇日记、{cats} 个分类，以及全部设置与本地缓存。\n\n删除后无法恢复，建议先备份。', {
         items: state.items.length,
         plans: state.plans.length,
         diary: state.diary.length,
@@ -8004,6 +9521,7 @@
           ['items', []],
           ['plans', []],
           ['categories', []],
+          ['countdowns', []],
           ['diary', []],
           ['meta', meta]
         ]);
@@ -8011,11 +9529,13 @@
         localStorage.setItem(LS_ITEMS_KEY, '[]');
         localStorage.setItem(LS_PLANS_KEY, '[]');
         localStorage.setItem(LS_CATS_KEY, '[]');
+        localStorage.setItem(LS_CD_KEY, '[]');
         localStorage.setItem(LS_DIARY_KEY, '[]');
         localStorage.setItem(LS_META_KEY, JSON.stringify(meta));
       } else {
         storage.memoryItems = [];
         storage.memoryPlans = [];
+        storage.memoryCountdowns = [];
         storage.memoryCats = [];
         storage.memoryDiary = [];
         storage.memoryMeta = meta;
@@ -8028,26 +9548,15 @@
   }
 
   async function performClearAll() {
-    // 先取消旧提醒预约：meta 重置后就找不到上一轮的 id 了
-    const oldReminderIds = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.slice() : [];
-    const notify = plugin('LocalNotifications');
-    if (notify && oldReminderIds.length) {
-      try {
-        await notify.cancel({ notifications: oldReminderIds.map(function (id) { return { id: id }; }) });
-      } catch (err) {
-        console.warn('取消旧提醒失败：', err);
-      }
-    }
-    state.reminderTimers.forEach(function (timer) { clearTimeout(timer); });
-    state.reminderTimers = [];
-    state.firedReminders = {};
-    state.nativeReminderIds = [];
-
     state.items = [];
     state.plans = [];
+    state.countdowns = [];
     state.diary = [];
     state.categories = [];
     state.agendaFilters = [];
+    state.meta.moods = [];
+    state.meta.cardStyle = CARD_STYLE_DEFAULT;
+    state.meta.progressStyle = 'bar';
     state.editCategoryId = '';
     draft.categoryId = null;
 
@@ -8072,9 +9581,9 @@
     }
     try { await diaryFileClear(); } catch (err) { console.warn('清空日记附件失败：', err); }
 
-    // 整体重置 meta：语言、主题、农历、提醒列表、权限引导标记、备份记录、
-    // 天气城市和同意记录全部回到出厂状态。界面随后按默认值重新渲染。
-    state.meta = { samplesCleared: true, reminderIds: [] };
+    // 整体重置 meta：语言、主题、农历、备份记录、天气城市和同意记录全部回到出厂状态。
+    // 界面随后按默认值重新渲染。
+    state.meta = { samplesCleared: true };
     // Weather 模块持有 meta 引用；换了对象要重新注入，否则之后选的城市写不进新 meta
     if (window.Weather && typeof window.Weather.configure === 'function') {
       window.Weather.configure({ meta: state.meta });
@@ -8121,1228 +9630,9 @@
     applyWeatherSetting();
     // 渲染当前视图会重新填充当月的日期换算结果；这里再清一次，确保清空后自检为 0
     clearAllCaches();
-    scheduleReminders();
     showToast(saved ? T('已删除所有数据') : T('已删除，但未能写入本机'));
     // 不重启应用：立即弹出协议页，必须重新同意才回到主界面
     openAgreement();
-  }
-
-  // ==================== 提醒（前台兜底 + 系统排程） ====================
-  // 保存条目时就把提醒交给系统（LocalNotifications）按触发时刻预约，
-  // 这样 App 退到后台、锁屏、甚至被关掉也能按时弹出；前台仍保留页面内提示作为兜底。
-
-  // 排程窗口覆盖 60 天：原来只看「今天起 14 天」，明天以后的条目也不会漏。
-  const REMIND_HORIZON_DAYS = 60;
-  const REMIND_PER_ITEM = 60;
-  const REMIND_MAX = 180;
-  // 宽限窗口：触发时刻刚过去（≤2 分钟）时不丢弃，而是立刻补发一次。
-  // 真机证据：19:30 的条目提前 1 分钟 → 触发 19:29:00，自查时已 19:29:11，
-  // 旧逻辑直接把「已经过去 11 秒」判为过期，于是这条提醒永远不响。
-  const REMIND_GRACE_MS = 2 * 60 * 1000;
-  // 补发排在「现在 + 5 秒」，给系统一点调度余量，避免又被当成过去时刻丢掉
-  const REMIND_CATCHUP_DELAY_MS = 5 * 1000;
-  // 补发记录保留 24 小时：过期后清理，防止 meta 无限增长
-  const REMIND_CATCHUP_TTL_MS = 24 * 60 * 60 * 1000;
-  // 全天 / 未设时间的条目没有基准时刻，统一按当天 09:00 计算，
-  // 详情页会注明这一基准，避免「设了提醒却永远不响」。
-  const REMIND_DEFAULT_TIME = '09:00';
-
-  function clearReminderTimers() {
-    state.reminderTimers.forEach(function (timer) { clearTimeout(timer); });
-    state.reminderTimers = [];
-  }
-
-  // 读取并顺带清理宽限补发记录：只保留 24 小时内的，避免 meta 无限增长
-  function readCatchUpMap() {
-    const raw = state.meta && state.meta.reminderCatchUp;
-    const map = {};
-    if (!raw || typeof raw !== 'object') return map;
-    const now = Date.now();
-    Object.keys(raw).forEach(function (k) {
-      const ts = Number(raw[k]);
-      if (isFinite(ts) && ts > 0 && now - ts < REMIND_CATCHUP_TTL_MS) map[k] = ts;
-    });
-    return map;
-  }
-
-  function effectiveRemind(item) {
-    return typeof item.remindBefore === 'number' ? item.remindBefore : null;
-  }
-
-  // 系统按整秒触发：只做向上取整。已经过去的时间必须如实返回过去值，
-  // 由调用方跳过并写进自查表；旧实现把它钳到「现在 +1 秒」，导致过期提醒被当成
-  // 立即提醒排进去，而真正要排的过去判断永远不会生效。
-  function wholeSecond(ms) {
-    return Math.ceil(ms / 1000) * 1000;
-  }
-
-  // 条目 / 计划在某一天的实际触发时刻。没有具体时间时用 REMIND_DEFAULT_TIME 作基准。
-  function reminderFireTime(item, key, before) {
-    const raw = (item.recurrence && item.recurrence.time) || item.time || '';
-    const timeText = raw || REMIND_DEFAULT_TIME;
-    const parts = timeText.split(':').map(Number);
-    const target = keyToDate(key);
-    target.setHours(parts[0] || 0, parts[1] || 0, 0, 0);
-    return {
-      at: wholeSecond(target.getTime() - before * 60000),
-      allDay: !raw,
-      timeText: timeText
-    };
-  }
-
-  function reminderClockText(ms) {
-    const d = new Date(ms);
-    return dateKey(d) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
-  }
-
-  // 每条排程都要带齐的四项：渠道、小图标、允许待机、点开自动消失。
-  // 缺渠道 Android 会静默丢通知；缺小图标构建会失败；autoCancel 避免用户点开后还留在通知栏。
-  function nativeNotificationPayload(id, title, body, fireAt, extra) {
-    return {
-      id: id,
-      title: title,
-      body: body,
-      channelId: REMIND_CHANNEL_ID,
-      smallIcon: REMIND_SMALL_ICON,
-      autoCancel: true,
-      schedule: { at: new Date(wholeSecond(fireAt)), allowWhileIdle: true },
-      extra: extra || {}
-    };
-  }
-
-  // 把一轮排程结果汇总成一句话，保存后直接提示用户「排上了没有」
-  function summarizeReminderRound(rows) {
-    const okRows = rows.filter(function (r) { return r.status === 'ok'; });
-    const timerRows = rows.filter(function (r) { return r.status === 'timer'; });
-    const failRows = rows.filter(function (r) { return r.status === 'fail'; });
-    const skipRows = rows.filter(function (r) { return r.status === 'skip'; });
-    const first = okRows.concat(timerRows)[0];
-    return {
-      scheduled: okRows.length + timerRows.length,
-      timerOnly: okRows.length === 0 && timerRows.length > 0,
-      firstFire: first ? (first.fireText || first.computedText) : '',
-      fail: failRows.length,
-      failReason: failRows.length ? failRows[0].reason : '',
-      skip: skipRows.length,
-      skipReason: skipRows.length ? skipRows[0].reason : ''
-    };
-  }
-
-  // 排程尝试写进本地环形日志（最近 200 条，重启后仍在，自查页可查）
-  function appendReminderLog(rows, roundNote) {
-    if (!state.meta) return;
-    const prev = Array.isArray(state.meta.reminderLog) ? state.meta.reminderLog.slice() : [];
-    const at = Date.now();
-    const defaultPlugin = 'Capacitor.Plugins.LocalNotifications';
-    rows.forEach(function (r) {
-      prev.push({
-        at: at,
-        key: r.key,
-        fire: r.fireText || r.computedText || '',
-        status: r.status,
-        type: r.failType || '',
-        id: r.numericId || '',
-        params: r.paramText || '',
-        plugin: r.plugin || defaultPlugin,
-        method: r.method || 'schedule',
-        error: r.reason || ''
-      });
-    });
-    if (roundNote) {
-      prev.push({
-        at: at,
-        key: '（本轮）',
-        fire: '',
-        status: 'note',
-        id: '',
-        params: '',
-        plugin: roundNote.plugin || defaultPlugin,
-        method: roundNote.method || 'schedule',
-        error: roundNote.error || ''
-      });
-    }
-    state.meta.reminderLog = prev.slice(-200);
-    persistMeta();
-  }
-
-  function scheduleReminders(options) {
-    const done = options && typeof options.done === 'function' ? options.done : null;
-    clearReminderTimers();
-    const now = Date.now();
-    const t = todayKey();
-    const windowEnd = addDays(t, REMIND_HORIZON_DAYS);
-
-    // 原生端：有 LocalNotifications 且已授权时，交给系统排程（App 关掉、锁屏也能弹）
-    const notify = localNotifyPlugin();
-    // 优先走自建原生通道：不依赖 Capacitor 插件，也不受它的权限状态影响
-    const bridge = nativeReminderBridge();
-    const useBridge = !!bridge;
-    const useNative = useBridge || !!(notify && typeof notify.schedule === 'function' &&
-      notifyState.status === 'granted' && !notifyState.webFallback);
-    // 记录这一轮扫描的时间与规模：自查面板据此区分「还没算」与「确实没有提醒」
-    state.reminderScan = {
-      at: now,
-      items: state.items.length,
-      plans: state.plans.length,
-      useNative: useNative,
-      status: notifyState.status,
-      loaded: state.loaded
-    };
-    const pending = [];
-    // 诊断表：每一行对应「一个带提醒的实例」，记录它为什么排上或为什么没排上
-    const report = [];
-    const usedIds = {};
-
-    function pushRow(row) {
-      report.push(row);
-      return row;
-    }
-
-    function baseRow(item, key, before, info) {
-      return {
-        key: String(item.id) + '|' + key,
-        title: item.title || '',
-        when: key + ' ' + (info.allDay
-          ? T('未设时间') + '（' + T('基准') + ' ' + REMIND_DEFAULT_TIME + '）'
-          : info.timeText),
-        before: before,
-        // 按「条目时间 − 提前量」算出来的触发时刻，永不被改写，方便核对边界
-        computedText: reminderClockText(info.at),
-        // 真正交给系统/计时器的时间：宽限补发会改成「现在 + 5 秒」，跳过时留空
-        fireText: '',
-        status: 'queued',
-        numericId: '',
-        reason: '',
-        catchUp: false,
-        // 「本轮排程调用时间 / 条目最后更新时间」，用来核对保存是否真的触发了排程
-        callText: clockTimeText(now) + ' / ' + (item.updatedAt ? clockTimeText(item.updatedAt) : '—'),
-        // 调用参数摘要与失败的类别，写进排程日志
-        paramText: '',
-        failType: '',
-        method: 'schedule'
-      };
-    }
-
-    function skipRow(item, key, before, info, reason) {
-      const row = baseRow(item, key, before, info);
-      row.status = 'skip';
-      row.method = 'skip';
-      row.reason = reason;
-      return pushRow(row);
-    }
-
-    // 补发记录：{ '条目id|日期|提前量': 补发时间戳 }。同一实例只补发一次，
-    // 否则每次回到前台重排都会再弹一遍。
-    const catchUp = readCatchUpMap();
-
-    function consider(item, key, before, kind) {
-      const info = reminderFireTime(item, key, before);
-      const row = baseRow(item, key, before, info);
-      const computedAt = info.at;
-      let diff = computedAt - now;
-      let fireAt = computedAt;
-
-      if (diff <= 0) {
-        const late = -diff;
-        if (late > REMIND_GRACE_MS) {
-          row.status = 'skip';
-          row.method = 'skip';
-          row.failType = 'expired';
-          row.reason = T('已过期：触发时间已过去 {n} 分钟，超过 {g} 分钟宽限，不补发（预期行为，不是提醒失效）')
-            .replace('{n}', Math.max(1, Math.round(late / 60000)))
-            .replace('{g}', Math.round(REMIND_GRACE_MS / 60000));
-          pushRow(row);
-          return false;
-        }
-        const stamp = String(item.id) + '|' + key + '|' + before;
-        const prevAt = catchUp[stamp];
-        if (prevAt) {
-          row.status = 'skip';
-          row.method = 'skip';
-          row.failType = 'catchup-done';
-          row.reason = T('宽限期内已补发过一次（{t}），不重复提醒').replace('{t}', clockTimeText(prevAt));
-          pushRow(row);
-          return false;
-        }
-        catchUp[stamp] = now;
-        fireAt = now + REMIND_CATCHUP_DELAY_MS;
-        diff = REMIND_CATCHUP_DELAY_MS;
-        row.catchUp = true;
-        row.reason = T('触发时间刚过去 {n} 秒，宽限期内立即补发一次')
-          .replace('{n}', Math.max(0, Math.round(late / 1000)));
-      }
-      row.fireText = reminderClockText(fireAt);
-
-      // 网页端只留 24 小时内的页面计时器；原生端按较长的日历窗口预约
-      if (!useNative && diff >= 24 * 60 * 60 * 1000) {
-        row.status = 'skip';
-        row.method = 'skip';
-        row.reason = T('网页版只排 24 小时内');
-        pushRow(row);
-        return false;
-      }
-      // 通知 id 按「条目 + 日期」生成；万一两条撞到同一个 id，就顺延到下一个空位，
-      // 避免后一条把前一条覆盖掉（同一个 id 在系统里只会保留最后一条）。
-      let numericId = reminderNumericId(item, key);
-      let guard = 0;
-      while (usedIds[numericId] && guard < 16) {
-        numericId = (numericId % 2147483646) + 1;
-        guard += 1;
-      }
-      usedIds[numericId] = true;
-      row.status = 'queued';
-      row.numericId = String(numericId);
-      // 调用参数摘要：日志里能对照「到底按什么参数排的」
-      row.paramText = useBridge
-        ? 'AeroNativeReminders.schedule, channel=aeroplan-native-v1, at=' + new Date(fireAt).toISOString()
-        : 'channel=' + REMIND_CHANNEL_ID + ', smallIcon=' + REMIND_SMALL_ICON +
-          ', at=' + new Date(fireAt).toISOString() + ', allowWhileIdle=true' +
-          ', exact=' + (state.exactAlarmStatus !== 'denied');
-      if (guard > 0) {
-        row.reason = (row.reason ? row.reason + '；' : '') + T('id 碰撞，已顺延');
-      }
-      pushRow(row);
-      pending.push({ item: item, key: key, fireAt: fireAt, diff: diff, kind: kind, numericId: numericId, row: row });
-      return true;
-    }
-
-    state.items.forEach(function (item) {
-      const before = effectiveRemind(item);
-      if (before === null) return;
-      if (!item.recurrence && item.done) {
-        skipRow(item, item.date, before, reminderFireTime(item, item.date, before), T('条目已完成，不再提醒'));
-        return;
-      }
-
-      const keys = occurrenceDatesIn(item, t, windowEnd);
-      if (!keys.length) {
-        if (!item.recurrence) {
-          skipRow(item, item.date, before, reminderFireTime(item, item.date, before),
-            item.date < t ? T('条目日期已过去') : T('超出 {n} 天排程窗口').replace('{n}', REMIND_HORIZON_DAYS));
-        }
-        return;
-      }
-
-      let added = 0;
-      keys.some(function (key) {
-        if (item.recurrence && item.completions[key]) return false;
-        if (consider(item, key, before, 'item')) added += 1;
-        return added >= REMIND_PER_ITEM;
-      });
-    });
-
-    // 计划提醒：以周期首日 + 设定时间（未设时用 REMIND_DEFAULT_TIME）触发
-    state.plans.forEach(function (plan) {
-      const before = effectiveRemind(plan);
-      if (before === null) return;
-      const key = plan.periodStart || '';
-      if (plan.done) {
-        skipRow(plan, key, before, reminderFireTime(plan, key, before), T('计划已完成，不再提醒'));
-        return;
-      }
-      if (!key || key < t) {
-        skipRow(plan, key, before, reminderFireTime(plan, key, before), T('周期已过去'));
-        return;
-      }
-      if (key > windowEnd) {
-        skipRow(plan, key, before, reminderFireTime(plan, key, before),
-          T('超出 {n} 天排程窗口').replace('{n}', REMIND_HORIZON_DAYS));
-        return;
-      }
-      consider(plan, key, before, 'plan');
-    });
-
-    state.reminderReport = report;
-    // 立即把补发记录写回 meta：这样重排/回前台时能看到「已补发过」，不会连续弹
-    state.meta.reminderCatchUp = catchUp;
-    persistMeta();
-
-    // 本轮收尾：写排程日志（环形 200 条）+ 刷新自查 + 回调保存提示
-    const finishRound = function (noteObj) {
-      state.reminderReport = report;
-      appendReminderLog(report, noteObj || null);
-      renderNotifyDiagnostics();
-      if (done) done(summarizeReminderRound(report));
-    };
-
-    // 原生环境但插件不存在：这是「plugin-missing」，不能当成网页版悄悄降级
-    if (isNativeApp() && !useBridge && !notify) {
-      report.forEach(function (r) {
-        if (r.status !== 'queued') return;
-        r.status = 'fail';
-        r.failType = 'plugin-missing';
-        r.method = 'schedule';
-        r.reason = T('排程失败：原生通知插件缺失（@capacitor/local-notifications 未注册）');
-      });
-      state.nativeScheduleError = T('原生通知插件缺失');
-      finishRound({ method: 'loadPlugin', error: '@capacitor/local-notifications not registered' });
-      return;
-    }
-
-    // ---------- 自建原生通道（优先） ----------
-    // 不经过 Capacitor 插件：JS 把 JSON 交给 @JavascriptInterface，
-    // Java 侧用 AlarmManager + BroadcastReceiver + NotificationCompat 投递。
-    if (useBridge) {
-      const ordered = pending.slice().sort(function (a, b) { return a.fireAt - b.fireAt; });
-      ordered.slice(REMIND_MAX).forEach(function (p) {
-        p.row.status = 'fail';
-        p.row.failType = 'over-limit';
-        p.row.method = 'schedule';
-        p.row.plugin = 'AeroNativeReminders';
-        p.row.reason = T('超过并发上限：超出本轮排程上限 {n} 条').replace('{n}', REMIND_MAX);
-      });
-      const list = ordered.slice(0, REMIND_MAX).map(function (p) {
-        const timeText = (p.item.recurrence && p.item.recurrence.time) || p.item.time || '';
-        return {
-          id: p.numericId,
-          at: p.fireAt,
-          title: T('氢计划提醒'),
-          body: (timeText || T('全天')) + ' · ' + monthDay(p.key) + ' · ' + p.item.title,
-          itemId: p.item.id,
-          date: p.key,
-          kind: p.kind
-        };
-      });
-      const newIds = list.map(function (n) { return n.id; });
-      try {
-        // 先清掉上一轮的全部原生闹钟，再按本轮重新排，避免旧 id 留在系统里继续弹
-        if (typeof bridge.cancelAll === 'function') {
-          try { bridge.cancelAll(); } catch (err) { /* 清理失败不阻塞排程 */ }
-        }
-        const raw = bridge.schedule(JSON.stringify({ notifications: list }));
-        const res = parseBridgeJSON(raw) || {};
-        if (res && res.ok === false) throw new Error(res.error || 'native bridge rejected');
-        const acceptedRaw = res && res.ids ? (Array.isArray(res.ids) ? res.ids : [res.ids]) : newIds;
-        const accepted = acceptedRaw.map(Number);
-        state.meta.reminderIds = list.length ? newIds : [];
-        state.nativeReminderIds = state.meta.reminderIds.slice();
-        state.nativeScheduleError = '';
-        persistMeta();
-        list.forEach(function (n) {
-          const p = pending.filter(function (row) { return row.numericId === n.id; })[0];
-          if (!p) return;
-          p.row.plugin = 'AeroNativeReminders';
-          p.row.method = 'schedule';
-          if (accepted.indexOf(n.id) === -1) {
-            p.row.status = 'fail';
-            p.row.failType = 'not-accepted';
-            p.row.reason = T('原生通道没有接受该排程');
-          } else {
-            p.row.status = 'ok';
-          }
-        });
-        finishRound({ plugin: 'AeroNativeReminders', method: 'schedule', error: '' });
-      } catch (err) {
-        const rawError = String((err && (err.message || err)) || 'unknown error');
-        state.nativeScheduleError = rawError;
-        pending.forEach(function (p) {
-          if (p.row.status !== 'queued') return;
-          p.row.status = 'fail';
-          p.row.failType = 'native-bridge-error';
-          p.row.plugin = 'AeroNativeReminders';
-          p.row.method = 'schedule';
-          p.row.reason = T('原生通道排程失败：') + rawError;
-        });
-        finishRound({ plugin: 'AeroNativeReminders', method: 'schedule', error: rawError });
-        pending.forEach(function (p) {
-          if (p.diff >= 24 * 60 * 60 * 1000) return;
-          const timer = setTimeout(function () {
-            fireReminder(p.item, p.key);
-          }, p.diff);
-          state.reminderTimers.push(timer);
-        });
-      }
-      return;
-    }
-
-    if (useNative) {
-      const ordered = pending.slice().sort(function (a, b) { return a.fireAt - b.fireAt; });
-      // 超出单轮上限的实例如实标出来，而不是悄悄丢掉
-      ordered.slice(REMIND_MAX).forEach(function (p) {
-        p.row.status = 'fail';
-        p.row.failType = 'over-limit';
-        p.row.method = 'schedule';
-        p.row.reason = T('超过并发上限：超出本轮排程上限 {n} 条').replace('{n}', REMIND_MAX);
-      });
-
-      const notifications = ordered
-        .slice(0, REMIND_MAX)
-        .map(function (p) {
-          const timeText = (p.item.recurrence && p.item.recurrence.time) || p.item.time || '';
-          return nativeNotificationPayload(
-            p.numericId,
-            T('氢计划提醒'),
-            (timeText || T('全天')) + ' · ' + monthDay(p.key) + ' · ' + p.item.title,
-            p.fireAt,
-            {
-              itemId: p.item.id,
-              date: p.key,
-              kind: p.kind,
-              // 记录本条是按精确还是允许延迟排的，排查时可以对照系统设置
-              exact: state.exactAlarmStatus !== 'denied'
-            }
-          );
-        });
-
-      // 排程 id 记到 meta 里：App 重启后仍能准确取消上一轮预约
-      const previous = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.slice() : [];
-      const newIds = notifications.map(function (n) { return n.id; });
-      // 只清掉本轮不再需要的旧 id；同一 id 重新排程会覆盖旧闹钟，不会重复弹
-      const stale = previous.filter(function (id) { return newIds.indexOf(id) === -1; });
-
-      const gen = ++state.nativeReminderGen;
-      let readbackEmpty = false;
-
-      const cancelIds = function (ids) {
-        if (!ids.length) return Promise.resolve();
-        return Promise.resolve(notify.cancel({
-          notifications: ids.map(function (id) { return { id: id }; })
-        })).catch(function (err) {
-          console.warn('取消旧提醒失败：', err);
-        });
-      };
-
-      // 顺序：建渠道 → 先排程 → 再清理旧 id。
-      // 先排程后清理：即使排程被系统拒绝，上一轮的提醒仍留在系统里，不会「旧的被取消、新的没排上」。
-      Promise.resolve(ensureReminderChannel(notify))
-        .then(function (channelOk) {
-          if (gen !== state.nativeReminderGen) return null;
-          if (!channelOk) throw new Error('notification channel unavailable');
-          if (!notifications.length) return { ids: [] };
-          // 运行时兜底：smallIcon 资源缺失/不合规时，系统会在投递阶段静默丢弃整条通知。
-          // 先用正式参数排；抛错就退化为「不传 smallIcon」（插件回退到默认图标）再试一次。
-          const withoutIcon = notifications.map(function (n) {
-            const copy = Object.assign({}, n);
-            delete copy.smallIcon;
-            return copy;
-          });
-          state.reminderIconVariant = 'ic_stat_icon';
-          return Promise.resolve(notify.schedule({ notifications: notifications }))
-            .catch(function (err) {
-              console.warn('按 ic_stat_icon 排程失败，改用默认小图标重试：', err);
-              state.reminderIconVariant = 'default(ic_launcher)';
-              return Promise.resolve(notify.schedule({ notifications: withoutIcon }));
-            })
-            .then(function () {
-              // 回读系统里的排程：排程调用成功但被系统丢掉时，自查表能直接看出来
-              return Promise.resolve(notify.getPending()).then(function (res) {
-                return { ids: ((res && res.notifications) || []).map(function (n) { return n.id; }) };
-              }).catch(function () { return { ids: null }; });
-            });
-        })
-        .then(function (result) {
-          if (gen !== state.nativeReminderGen) return;
-          // 只有排程成功才改写 meta，失败时保留上一轮 id 以便下次继续清理
-          state.meta.reminderIds = notifications.length ? newIds : [];
-          state.nativeReminderIds = state.meta.reminderIds.slice();
-          persistMeta();
-          const readback = result && result.ids;
-          // 排程调用没抛错、但 getPending() 里一条都看不到：说明调用可能打到了
-          // 错误的插件实例，或系统直接丢弃了排程。日志里单列一条 note。
-          readbackEmpty = !!(readback && notifications.length > 0 && readback.length === 0);
-          const missing = readback ? newIds.filter(function (id) { return readback.indexOf(id) === -1; }) : [];
-          notifications.forEach(function (n) {
-            const p = pending.filter(function (row) { return row.numericId === n.id; })[0];
-            if (!p) return;
-            p.row.status = 'ok';
-            if (readback && readback.indexOf(n.id) === -1) {
-              p.row.status = 'fail';
-              p.row.failType = 'not-accepted';
-              p.row.reason = T('系统未接受该排程（getPending 里没有这个 id）');
-            }
-          });
-          state.nativeScheduleError = missing.length
-            ? T('系统未回读 {n} 条排程，可能被省电策略拦截').replace('{n}', missing.length)
-            : '';
-          return cancelIds(stale);
-        })
-        .then(function () {
-          if (gen !== state.nativeReminderGen) return;
-          finishRound(readbackEmpty ? {
-            method: 'getPending',
-            error: 'schedule() 未抛错，但 getPending() 返回空队列；请核对调用的插件实例是否为 Capacitor.Plugins.LocalNotifications'
-          } : null);
-        })
-        .catch(function (err) {
-          if (gen !== state.nativeReminderGen) return;
-          // 系统拒绝排程时不再“装作已排程”：记录原因，并保留前台页面计时器兜底
-          state.nativeScheduleError = pluginErrorText(err);
-          const rawError = String((err && (err.message || err.code || err)) || 'unknown error');
-          console.warn('本地通知排程失败：', err);
-          pending.forEach(function (p) {
-            if (p.row.status === 'queued') {
-              p.row.status = 'fail';
-              p.row.failType = 'schedule-error';
-              p.row.reason = state.nativeScheduleError || T('排程失败');
-            }
-          });
-          finishRound({ method: 'schedule', error: rawError });
-          pending.forEach(function (p) {
-            // setTimeout 超过 2^31ms 会溢出成立即触发，只兜底 24 小时内的
-            if (p.diff >= 24 * 60 * 60 * 1000) return;
-            const timer = setTimeout(function () {
-              fireReminder(p.item, p.key);
-            }, p.diff);
-            state.reminderTimers.push(timer);
-          });
-        });
-      return;
-    }
-
-    // 网页版：没有系统排程，只能用页面计时器兜底，表格里标明
-    pending.forEach(function (p) {
-      // 原生环境里权限没给：连系统排程都不会发生，如实写进表里，方便用户对照
-      if (!useNative && notify && notifyState.status !== 'granted') {
-        p.row.status = 'fail';
-        p.row.failType = 'permission-denied';
-        p.row.method = 'requestPermissions';
-        p.row.reason = T('排程失败：通知权限未授予');
-        return;
-      }
-      p.row.status = p.row.status === 'queued' ? 'timer' : p.row.status;
-      const timer = setTimeout(function () {
-        fireReminder(p.item, p.key);
-      }, p.diff);
-      state.reminderTimers.push(timer);
-    });
-    finishRound(useNative ? null : {
-      method: 'schedule',
-      error: notify ? 'permission not granted' : 'native notification plugin unavailable; using in-page timer'
-    });
-  }
-
-  // 申请通知权限；Android 12+ 再检查「精确闹钟」权限。返回是否已授权
-  async function ensureReminderPermissions(options) {
-    const notify = localNotifyPlugin();
-    if (!notify) {
-      notifyState.webFallback = isNativeApp();
-      return false;
-    }
-    let granted = false;
-    try {
-      const cur = await notify.checkPermissions();
-      notifyState.lastCheckRaw = rawResultText(cur);
-      notifyState.lastCheckAt = Date.now();
-      granted = cur && cur.display === 'granted';
-      if (!granted) {
-        notifyState.requestAttempts += 1;
-        notifyState.lastRequestAt = Date.now();
-        const res = await notify.requestPermissions();
-        notifyState.lastRequestRaw = rawResultText(res);
-        granted = res && res.display === 'granted';
-      }
-    } catch (err) {
-      notifyState.lastRequestError = err && err.message ? err.message : String(err);
-      granted = false;
-    }
-    notifyState.native = true;
-    notifyState.checked = true;
-    notifyState.status = granted ? 'granted' : 'denied';
-    renderSettings();
-    renderPermissionSheet();
-    if (!granted) {
-      if (!(options && options.quiet)) showToast(T('系统没有授予通知权限，提醒可能不会弹出'));
-      await renderNotifyDiagnostics();
-      return false;
-    }
-
-    await ensureReminderChannel(notify);
-    await maybeAskExactAlarm(options && options.quiet);
-    scheduleReminders();
-    await renderNotifyDiagnostics();
-    return true;
-  }
-
-  // 精确闹钟：Android 13+ 用 USE_EXACT_ALARM 自动授予（没有用户开关）；
-  // Android 12/12L 依赖 SCHEDULE_EXACT_ALARM，被关闭时只能退化到「允许延迟」的排程。
-  // 优先问原生的 canScheduleExactAlarms()，没有这个接口时退回插件自带的检查。
-  async function canScheduleExactAlarms(notify) {
-    const target = notify || localNotifyPlugin();
-    if (!target) return 'unsupported';
-    if (typeof target.canScheduleExactAlarms === 'function') {
-      try {
-        const res = await target.canScheduleExactAlarms();
-        const granted = res && (res.granted === true || res.granted === 'granted' || res.exact_alarm === 'granted');
-        return granted ? 'granted' : 'denied';
-      } catch (err) { /* 原生接口不可用，继续用插件自带的检查 */ }
-    }
-    if (typeof target.checkExactNotificationSetting === 'function') {
-      try {
-        const res = await target.checkExactNotificationSetting();
-        const value = res && (res.exact_alarm || res.exactAlarm) || '';
-        if (value === 'granted') return 'granted';
-        if (value === 'denied') return 'denied';
-        return 'not-required';
-      } catch (err) {
-        return 'unknown';
-      }
-    }
-    return 'unsupported';
-  }
-
-  async function refreshExactAlarmStatus(notify) {
-    state.exactAlarmStatus = await canScheduleExactAlarms(notify);
-    renderSettings();
-    return state.exactAlarmStatus;
-  }
-
-  async function maybeAskExactAlarm(quiet) {
-    const notify = localNotifyPlugin();
-    if (!notify) return;
-    const value = await refreshExactAlarmStatus(notify);
-    if (value !== 'denied') return;
-    if (quiet || state.meta.exactAlarmAsked) return;
-    state.meta.exactAlarmAsked = 1;
-    persistMeta();
-    openModal({
-      kind: 'exact-alarm',
-      title: T('允许精确提醒'),
-      text: T('系统里「闹钟和提醒」未允许：提醒会退化为非精确排程，可能延迟（通常几分钟内）。允许后可准时；若系统里找不到这一项，请在「自启动 / 后台运行」里允许本应用，并把电池策略设为「不限制」。'),
-      confirmText: T('去允许'),
-      onConfirm: function () {
-        if (typeof notify.changeExactNotificationSetting === 'function') {
-          Promise.resolve(notify.changeExactNotificationSetting()).catch(function (err) {
-            console.warn('打开精确闹钟设置失败：', err);
-          });
-        }
-      }
-    });
-  }
-
-  // 读取存储里的原始 remindBefore：自查面板要看到「存的是什么」，
-  // 而不是只看到内存里规范化后的结果，否则分不清「没存」和「存了但没读出来」。
-  async function readRawRemindMap(storeKey) {
-    const map = {};
-    try {
-      let raw = null;
-      if (storage.status === 'idb') {
-        raw = await idbGet(storeKey);
-      } else if (storage.status === 'local') {
-        const key = storeKey === 'plans' ? LS_PLANS_KEY : LS_ITEMS_KEY;
-        raw = JSON.parse(localStorage.getItem(key) || '[]');
-      } else {
-        raw = storeKey === 'plans' ? storage.memoryPlans : storage.memoryItems;
-      }
-      (raw || []).forEach(function (record) {
-        if (!record || !record.id) return;
-        const has = Object.prototype.hasOwnProperty.call(record, 'remindBefore');
-        map[record.id] = {
-          has: has,
-          value: record.remindBefore,
-          type: has ? typeof record.remindBefore : 'missing'
-        };
-      });
-    } catch (err) { /* 读不到就按未知展示 */ }
-    return map;
-  }
-
-  function rawRemindText(raw) {
-    if (!raw) return isEn() ? 'unknown' : '未知';
-    if (!raw.has) return isEn() ? 'missing key' : '字段不存在';
-    if (raw.value === null) return 'null';
-    if (raw.value === undefined) return 'undefined';
-    return String(raw.value);
-  }
-
-  function rawRemindVerdict(raw, normalized) {
-    if (typeof normalized === 'number') return isEn() ? 'set' : '已设置';
-    if (!raw) return isEn() ? 'unknown' : '未知';
-    if (!raw.has || raw.value === null || raw.value === undefined) {
-      return isEn() ? 'not set (null)' : '未设置（null）';
-    }
-    if (Number(raw.value) === 0) return isEn() ? '0 → treated as not set' : '0 → 按未设置处理';
-    return isEn() ? 'invalid value' : '非法值';
-  }
-
-  // 自查面板：把「权限 / 渠道 / 精确闹钟 / 系统里已排程数量 / 最近错误」一次列清楚，
-  // 并逐条列出「存储原值」与「这一轮的排程结果」，用户不用猜是哪一环断了。
-  async function collectNotifyDiagnostics() {
-    const L = function (zh, en) { return isEn() ? en : zh; };
-    const notify = localNotifyPlugin();
-    const rows = [];
-
-    const statusText = function (status) {
-      if (status === 'granted') return L('已允许', 'Allowed');
-      if (status === 'denied') return L('已拒绝', 'Denied');
-      if (status === 'unsupported') return L('不支持', 'Unsupported');
-      return L('未询问', 'Not asked');
-    };
-    rows.push([L('通知权限', 'Notification permission'), statusText(notifyState.status)]);
-    rows.push([L('checkPermissions 原始', 'checkPermissions raw'),
-      (notifyState.lastCheckRaw || L('尚未调用', 'not called yet')) +
-      L('（' + clockTimeText(notifyState.lastCheckAt) + '）', ' (' + clockTimeText(notifyState.lastCheckAt) + ')')]);
-    rows.push([L('requestPermissions 原始', 'requestPermissions raw'),
-      (notifyState.lastRequestRaw || L('尚未调用', 'not called yet')) +
-      L('（' + clockTimeText(notifyState.lastRequestAt) + '，共 ' + notifyState.requestAttempts + ' 次）',
-        ' (' + clockTimeText(notifyState.lastRequestAt) + ', attempts ' + notifyState.requestAttempts + ')')]);
-    if (notifyState.lastRequestError) {
-      rows.push([L('申请失败原因', 'Request error'), notifyState.lastRequestError]);
-    }
-    rows.push([L('通知通道', 'Notification path'),
-      nativeReminderBridge()
-        ? L('原生通道（AeroNativeReminders，不经插件）', 'Native bridge (AeroNativeReminders, no plugin)')
-        : (notifyState.webFallback
-          ? L('降级：应用内提示（不会弹系统通知）', 'Fallback: in-app alert only (no system notification)')
-          : (notify ? L('原生系统通知', 'Native system notification') : L('不支持', 'Unsupported')))]);
-    rows.push([L('数据加载', 'Data loaded'),
-      state.loaded
-        ? L('已加载 ' + state.items.length + ' 条条目 / ' + state.plans.length + ' 条计划', 'Loaded ' + state.items.length + ' items / ' + state.plans.length + ' plans')
-        : L('尚未加载完（先不要据此判断）', 'Not loaded yet (do not judge from this)')]);
-    rows.push([L('最近扫描', 'Last scan'),
-      state.reminderScan
-        ? L('扫描 ' + state.reminderScan.items + ' 条条目、' + state.reminderScan.plans + ' 条计划 · 权限 ' + statusText(state.reminderScan.status),
-          'Scanned ' + state.reminderScan.items + ' items, ' + state.reminderScan.plans + ' plans · ' + statusText(state.reminderScan.status))
-        : L('尚未扫描', 'not scanned yet')]);
-
-    if (!notify && nativeReminderBridge()) {
-      const nd = readNativeDiagnostics() || {};
-      rows.push([L('原生通道', 'Native bridge'), L('已注入 AeroNativeReminders（不经 Capacitor 插件）', 'Injected AeroNativeReminders (no plugin)')]);
-      rows.push([L('原生通道渠道', 'Native channel'),
-        (nd.channelId || 'aeroplan-native-v1') + L(' · 回读重要性 ', ' · importance ') +
-        (nd.channelImportance == null ? '?' : nd.channelImportance)]);
-      rows.push([L('原生通道已排条数', 'Native scheduled'),
-        nd.scheduledCount == null ? L('未知', 'Unknown') : String(nd.scheduledCount) + L(' 条', '')]);
-      rows.push([L('原生通道最近排程', 'Native last schedule'),
-        nd.lastScheduleAt ? clockTimeText(nd.lastScheduleAt) : L('尚未排程', 'never')]);
-      rows.push([L('原生通道最近投递', 'Native last delivery'),
-        nd.lastDeliveryAt ? clockTimeText(nd.lastDeliveryAt) : L('尚未投递', 'never')]);
-      rows.push([L('原生通道最近错误', 'Native last error'), nd.lastError || L('无', 'none')]);
-      if (Array.isArray(state.meta.migrationLog) && state.meta.migrationLog.length) {
-        rows.push([L('旧数据迁移', 'Legacy migration'), state.meta.migrationLog.join('；')]);
-      }
-      return rows;
-    }
-
-    if (!notify) {
-      rows.push([L('原生插件', 'Native plugin'),
-        notifyState.webFallback
-          ? L('缺失（WebView 降级）', 'Missing (webview fallback)')
-          : L('不可用（网页版）', 'Unavailable (web)')]);
-      if (Array.isArray(state.meta.migrationLog) && state.meta.migrationLog.length) {
-        rows.push([L('旧数据迁移', 'Legacy migration'), state.meta.migrationLog.join('；')]);
-      }
-      return rows;
-    }
-
-    let channelText = L('未创建', 'Missing');
-    let actualImportance = null;
-    let readbackFailed = false;
-    try {
-      const res = await notify.listChannels();
-      const list = (res && res.channels) || [];
-      const ch = list.filter(function (c) { return c && c.id === REMIND_CHANNEL_ID; })[0];
-      const legacy = list.filter(function (c) {
-        return c && REMIND_CHANNEL_LEGACY_IDS.indexOf(c.id) !== -1;
-      });
-      if (ch) {
-        state.channelInfo = ch;
-        actualImportance = typeof ch.importance === 'number' ? ch.importance : null;
-        channelText = L('已创建 · 重要性 ', 'Created · importance ') + ch.importance;
-        if (ch.importance < 5) channelText += L('（不是 5，可能不弹横幅；渠道参数不可改，需要换新 id）', ' (not 5, may not pop; channel settings are immutable, use a new id)');
-        channelText += ch.sound ? L(' · 含提示音', ' · sound on') : L(' · 无提示音', ' · no sound');
-        channelText += ch.vibration ? L(' · 振动', ' · vibrate') : '';
-      }
-      if (legacy.length) channelText += L(' · 旧渠道仍在：' + legacy.map(function (c) { return c.id; }).join('、'), ' · legacy present: ' + legacy.map(function (c) { return c.id; }).join(', '));
-    } catch (err) {
-      readbackFailed = true;
-      channelText = state.channelInfo
-        ? L('已创建（未回读）· 重要性 ', 'Created (not read back) · importance ') + state.channelInfo.importance
-        : L('读取失败', 'Unreadable');
-    }
-    rows.push([L('通知渠道', 'Channel'), channelText]);
-    rows.push([L('渠道 id', 'Channel id'), REMIND_CHANNEL_ID]);
-    // 渠道参数创建后不可修改：把「请求值」和「系统回读值」并排列出，
-    // 两者不一致基本等于设备上还是旧构建建的渠道，必须换新 id 或重装。
-    rows.push([L('创建时请求的重要性', 'Requested importance'),
-      String(REMIND_CHANNEL_IMPORTANCE) + L('（5 = IMPORTANCE_MAX，才有横幅与声音）', ' (5 = IMPORTANCE_MAX: banner + sound)')]);
-    rows.push([L('系统回读的重要性', 'Read-back importance'),
-      actualImportance === null
-        ? L(readbackFailed ? '回读失败' : '未回读到（渠道可能尚未创建）', readbackFailed ? 'read-back failed' : 'not read back (channel may not exist yet)')
-        : String(actualImportance)]);
-    if (actualImportance !== null && actualImportance !== REMIND_CHANNEL_IMPORTANCE) {
-      rows.push([L('重要性与请求不一致', 'Importance mismatch'),
-        L('系统里的渠道仍是旧参数（旧构建或旧 id 创建），渠道不可修改：请确认安装的是最新构建并重装以删除旧渠道',
-          'The channel still has older settings (created by an old build/id); channels are immutable — install the latest build and reinstall to drop old channels')]);
-    }
-    rows.push([L('本轮使用的小图标', 'Small icon in use'), state.reminderIconVariant || REMIND_SMALL_ICON]);
-    if (state.channelFallbackSound) {
-      rows.push([L('渠道提示音', 'Channel sound'),
-        L('自定义提示音不可用，已回退为系统默认（避免整条通知被丢弃）', 'Custom sound unavailable; fell back to system default')]);
-    }
-
-    // 小图标与提示音是否存在只能构建时校验；这里亮出配置值，便于和构建日志对照
-    rows.push([L('通知小图标', 'Small icon'), REMIND_SMALL_ICON + L('（构建时校验在 APK 内）', ' (verified in APK at build)')]);
-    rows.push([L('提示音', 'Sound'), REMIND_SOUND + L('（res/raw，构建时校验）', ' (res/raw, verified at build)')]);
-
-    let exactText = L('不适用', 'Not required');
-    const isAndroid = !!(window.Capacitor && typeof Capacitor.getPlatform === 'function' && Capacitor.getPlatform() === 'android');
-    if (isAndroid) {
-      const value = await canScheduleExactAlarms(notify);
-      state.exactAlarmStatus = value;
-      if (value === 'granted') exactText = L('已允许，提醒准时', 'Allowed; reminders are on time');
-      else if (value === 'denied') exactText = L('被系统关闭，已退化为允许延迟的排程（可能延迟几分钟）', 'Blocked; using inexact scheduling (may be a few minutes late)');
-      else if (value === 'unsupported' || value === 'unknown') exactText = L('无法读取', 'Unreadable');
-      else exactText = L('不适用', 'Not required');
-    }
-    rows.push([L('精确闹钟', 'Exact alarms'), exactText]);
-    rows.push([L('排程精度', 'Precision'),
-      state.exactAlarmStatus === 'denied' ? L('允许延迟', 'Inexact (may be delayed)') : L('精确', 'Exact')]);
-
-    let pendingText = L('未知', 'Unknown');
-    let pendingIdsText = L('未知', 'Unknown');
-    try {
-      const res = await notify.getPending();
-      const list = (res && res.notifications) || [];
-      pendingText = String(list.length) + L(' 条', '');
-      // 原始 id 列表：直接看系统队列里到底有没有东西在排队，不依赖代码推断
-      pendingIdsText = list.length
-        ? list.map(function (n) { return n.id; }).join(', ')
-        : L('（空队列）', '(empty queue)');
-    } catch (err) {
-      pendingText = L('读取失败', 'Unreadable');
-      pendingIdsText = L('读取失败：' + String((err && err.message) || err), 'Read failed: ' + String((err && err.message) || err));
-    }
-    rows.push([L('系统里已排程', 'Pending in system'), pendingText]);
-    rows.push([L('系统队列 id（getPending 原始）', 'Pending ids (raw getPending)'), pendingIdsText]);
-
-    // 原生通道存在时，上面两项只是插件队列（通常为 0），真正生效的是下面的原生通道
-    if (nativeReminderBridge()) {
-      const nd = readNativeDiagnostics() || {};
-      rows.push([L('实际提醒通道', 'Active channel'),
-        L('原生通道 AeroNativeReminders（不经 Capacitor 插件）', 'Native bridge AeroNativeReminders (no Capacitor plugin)')]);
-      rows.push([L('原生通道渠道', 'Native channel'),
-        (nd.channelId || 'aeroplan-native-v1') + L(' · 回读重要性 ', ' · importance ') +
-        (nd.channelImportance == null ? '?' : nd.channelImportance)]);
-      rows.push([L('原生通道已排条数', 'Native scheduled'),
-        nd.scheduledCount == null ? L('未知', 'Unknown') : String(nd.scheduledCount) + L(' 条', '')]);
-      rows.push([L('原生通道最近投递', 'Native last delivery'),
-        nd.lastDeliveryAt ? clockTimeText(nd.lastDeliveryAt) : L('尚未投递', 'never')]);
-      rows.push([L('原生通道最近错误', 'Native last error'), nd.lastError || L('无', 'none')]);
-    }
-
-    // 已送达通知：到点后这里有没有本条，是区分「投递失败」与「渠道静默」的关键
-    let deliveredText = L('未知', 'Unknown');
-    try {
-      if (typeof notify.getDeliveredNotifications === 'function') {
-        const res = await notify.getDeliveredNotifications();
-        const list = (res && res.notifications) || [];
-        deliveredText = list.length
-          ? list.map(function (n) { return n.id + (n.title ? '(' + n.title + ')' : ''); }).join(', ')
-          : L('（空）：到点后仍为空 → 投递阶段失败，重点查小图标与提示音', '(empty): delivery failed; check small icon and sound');
-      } else {
-        deliveredText = L('插件不支持该接口', 'not supported');
-      }
-    } catch (err) {
-      deliveredText = L('读取失败：', 'read failed: ') + pluginErrorText(err);
-    }
-    rows.push([L('已送达通知（getDeliveredNotifications 原始）', 'Delivered (raw getDeliveredNotifications)'), deliveredText]);
-
-    const scan = state.reminderScan || null;
-    rows.push([L('最近一次排程调用', 'Last schedule call'), scan && scan.at ? clockTimeText(scan.at) : L('尚未排程', 'never')]);
-    const lastUpdated = state.items.concat(state.plans).reduce(function (max, it) {
-      const t = Number(it && it.updatedAt) || 0;
-      return t > max ? t : max;
-    }, 0);
-    rows.push([L('最近一次条目更新', 'Last item update'), lastUpdated ? clockTimeText(lastUpdated) : L('无', 'none')]);
-
-    const recorded = Array.isArray(state.meta.reminderIds) ? state.meta.reminderIds.length : 0;
-    rows.push([L('本轮记录的排程', 'Recorded this round'), String(recorded) + L(' 条', '')]);
-
-    if (state.nativeScheduleError) rows.push([L('最近排程错误', 'Last schedule error'), state.nativeScheduleError]);
-    if (Array.isArray(state.meta.migrationLog) && state.meta.migrationLog.length) {
-      rows.push([L('旧数据迁移', 'Legacy migration'), state.meta.migrationLog.join('；')]);
-    }
-    return rows;
-  }
-
-  async function renderNotifyDiagnostics() {
-    const box = $('#notifyDiag');
-    if (!box) return;
-    const rows = await collectNotifyDiagnostics();
-    const esc = function (s) {
-      return String(s).replace(/[&<>"]/g, function (c) {
-        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
-      });
-    };
-    const head = isEn() ? 'Self-check' : '状态自查';
-    const hint = isEn()
-      ? 'If permission is allowed, the channel exists and pending count > 0 but still nothing pops, the system is blocking background delivery — allow autostart / background activity / battery unrestricted for this app.'
-      : '权限已允许、渠道已创建、排程数量大于 0，但仍然不响时，多半是系统后台限制：请在系统设置里允许本应用「自启动 / 后台运行」，并把省电策略设为「不限制」。';
-
-    const statusText = function (status) {
-      const map = {
-        ok: ['已排程', 'Scheduled'],
-        queued: ['排程中', 'Queued'],
-        timer: ['前台计时器', 'In-page timer'],
-        skip: ['已跳过', 'Skipped'],
-        fail: ['排程失败', 'Failed']
-      };
-      const pair = map[status] || [status, status];
-      return isEn() ? pair[1] : pair[0];
-    };
-
-    // ---------- 表一：全部条目 / 计划的存储原值（不按 remindBefore > 0 过滤） ----------
-    const rawItems = await readRawRemindMap('items');
-    const rawPlans = await readRawRemindMap('plans');
-    const allRows = [];
-    state.items.forEach(function (item) {
-      allRows.push({
-        key: String(item.id) + '|' + item.date,
-        kind: item.type === 'event' ? (isEn() ? 'event' : '日程') : (isEn() ? 'todo' : '待办'),
-        title: item.title || '',
-        time: item.time || ((item.recurrence && item.recurrence.time) || (isEn() ? 'all-day' : '未设时间')),
-        raw: rawItems[item.id],
-        normalized: item.remindBefore
-      });
-    });
-    state.plans.forEach(function (plan) {
-      allRows.push({
-        key: String(plan.id) + '|' + (plan.periodStart || ''),
-        kind: isEn() ? 'plan' : '计划',
-        title: plan.title || '',
-        time: plan.time || (isEn() ? 'all-day' : '未设时间'),
-        raw: rawPlans[plan.id],
-        normalized: plan.remindBefore
-      });
-    });
-
-    let rawTableHTML = '<div class="diag-sub">' +
-      esc(isEn() ? 'All entries · stored reminder value' : '全部条目 · 提醒存储原值') + '</div>';
-    if (!state.loaded) {
-      rawTableHTML += '<p class="diag-empty">' +
-        esc(isEn() ? 'Data has not finished loading — wait a moment and refresh, this is not "no reminders".'
-          : '数据尚未加载完，稍等后点「刷新自查」，这不等同于「没有提醒条目」。') + '</p>';
-    } else if (!allRows.length) {
-      rawTableHTML += '<p class="diag-empty">' +
-        esc(isEn() ? 'No entries at all (0 items, 0 plans).' : '当前确实一条条目都没有（0 条条目、0 条计划）。') + '</p>';
-    } else {
-      const rawHead = isEn()
-        ? ['Instance', 'Kind', 'Title', 'Item time', 'Stored value', 'Type', 'Verdict']
-        : ['实例键', '类型', '标题', '条目时间', '存储原值', '类型', '判定'];
-      const withRemind = allRows.filter(function (r) { return typeof r.normalized === 'number'; }).length;
-      rawTableHTML += '<div class="diag-table-wrap"><table class="diag-table diag-raw"><thead><tr>' +
-        rawHead.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
-        '</tr></thead><tbody>' +
-        allRows.map(function (r) {
-          return '<tr class="' + (typeof r.normalized === 'number' ? 'diag-ok' : 'diag-skip') + '">' +
-            '<td class="diag-mono">' + esc(r.key) + '</td>' +
-            '<td>' + esc(r.kind) + '</td>' +
-            '<td>' + esc(r.title) + '</td>' +
-            '<td>' + esc(r.time) + '</td>' +
-            '<td class="diag-mono">' + esc(rawRemindText(r.raw)) + '</td>' +
-            '<td class="diag-mono">' + esc(r.raw ? r.raw.type : (isEn() ? 'unknown' : '未知')) + '</td>' +
-            '<td>' + esc(rawRemindVerdict(r.raw, r.normalized)) + '</td>' +
-            '</tr>';
-        }).join('') +
-        '</tbody></table></div>' +
-        '<p class="diag-empty">' + esc(isEn()
-          ? 'Entries with a reminder: ' + withRemind + ' / ' + allRows.length
-          : '其中已设置提醒：' + withRemind + ' / ' + allRows.length + ' 条') + '</p>';
-    }
-
-    // ---------- 表二：这一轮的排程结果 ----------
-    const report = Array.isArray(state.reminderReport) ? state.reminderReport : null;
-    let tableHTML = '';
-    if (report) {
-      const tHead = isEn()
-        ? ['Instance', 'Title', 'Item time', 'Before', 'Computed fire time', 'Scheduled at', 'Scheduled', 'id', 'Schedule call / item updated', 'Reason']
-        : ['实例键', '标题', '条目时间', '提前', '计算触发时间', '实际排程时间', '是否已排程', '排程 id', '排程调用 / 条目更新', '失败或跳过原因'];
-      if (!report.length) {
-        tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Scheduling result' : '带提醒的实例（排程结果）') + '</div>' +
-          '<p class="diag-empty">' + esc(state.loaded
-            ? (isEn() ? 'No entry has a reminder, so nothing was scheduled.' : '确实没有设置提醒的条目，因此没有可排程的实例。')
-            : (isEn() ? 'Data not loaded yet.' : '数据尚未加载完，还不能下结论。')) + '</p>';
-      } else {
-        tableHTML = '<div class="diag-sub">' + esc(isEn() ? 'Scheduling result' : '带提醒的实例（排程结果）') + '</div>' +
-          '<div class="diag-table-wrap"><table class="diag-table"><thead><tr>' +
-          tHead.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
-          '</tr></thead><tbody>' +
-          report.map(function (r) {
-            return '<tr class="diag-' + esc(r.status) + '">' +
-              '<td class="diag-mono">' + esc(r.key) + '</td>' +
-              '<td>' + esc(r.title) + '</td>' +
-              '<td>' + esc(r.when) + '</td>' +
-              '<td>' + esc(r.before + ' ' + (isEn() ? 'min' : '分钟')) + '</td>' +
-              '<td class="diag-mono">' + esc(r.computedText || '—') + '</td>' +
-              '<td class="diag-mono">' + esc(r.fireText || '—') + '</td>' +
-              '<td>' + esc(statusText(r.status)) + '</td>' +
-              '<td class="diag-mono">' + esc(r.numericId || '—') + '</td>' +
-              '<td class="diag-mono">' + esc(r.callText || '—') + '</td>' +
-              '<td>' + esc(r.reason || '—') + '</td>' +
-              '</tr>';
-          }).join('') +
-          '</tbody></table></div>';
-      }
-    }
-
-    // 「已跳过」不等于「提醒失效」：把原因写清楚，避免用户误判
-    const hasSkip = !!(report && report.some(function (r) { return r.status === 'skip'; }));
-    const skipNote = hasSkip
-      ? '<p class="diag-empty">' + esc(isEn()
-        ? '“Skipped” means the computed fire time has already passed. Within 2 minutes it is delivered once immediately (catch-up); beyond 2 minutes it counts as expired and is not rescheduled — that is a time already gone, not a broken reminder. To test, create an entry 30 minutes ahead with a 10-minute lead.'
-        : '「已跳过」表示该实例的计算触发时间已经过去：2 分钟内会立即补发一次（实际排程时间＝现在+5 秒）；超过 2 分钟才判定过期、不再重排——这不是提醒失效，而是这个时间点已经过去了。验证请用「30 分钟后的条目 + 提前 10 分钟」。') + '</p>'
-      : '';
-
-    // ---------- 表三：排程日志（持久化，最近 200 条，页面只渲染最近 40 条） ----------
-    const logAll = Array.isArray(state.meta.reminderLog) ? state.meta.reminderLog : [];
-    const logRows = logAll.slice(-40).reverse();
-    const logHead = isEn()
-      ? ['Time', 'Instance', 'Fire', 'Status/type', 'id', 'Plugin · method', 'Params', 'Error']
-      : ['时间', '实例键', '触发时间', '状态/类别', 'id', '插件·方法', '调用参数', '错误原文'];
-    const logHTML = '<div class="diag-sub">' + esc(isEn()
-      ? 'Schedule log (latest ' + logRows.length + ' of ' + logAll.length + ')'
-      : '排程日志（最近 ' + logRows.length + ' 条，共 ' + logAll.length + ' 条）') + '</div>' +
-      (logRows.length
-        ? '<div class="diag-table-wrap"><table class="diag-table diag-log"><thead><tr>' +
-          logHead.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
-          '</tr></thead><tbody>' +
-          logRows.map(function (e) {
-            return '<tr>' +
-              '<td class="diag-mono">' + esc(clockTimeText(e.at)) + '</td>' +
-              '<td class="diag-mono">' + esc(e.key || '') + '</td>' +
-              '<td class="diag-mono">' + esc(e.fire || '—') + '</td>' +
-              '<td>' + esc((e.status || '') + (e.type ? ' · ' + e.type : '')) + '</td>' +
-              '<td class="diag-mono">' + esc(e.id || '—') + '</td>' +
-              '<td class="diag-mono">' + esc((e.plugin || '—') + ' · ' + (e.method || '—')) + '</td>' +
-              '<td class="diag-mono">' + esc(e.params || '—') + '</td>' +
-              '<td>' + esc(e.error || '—') + '</td>' +
-              '</tr>';
-          }).join('') +
-          '</tbody></table></div>'
-        : '<p class="diag-empty">' + esc(isEn()
-          ? 'No scheduling attempt logged yet. Save an entry with a reminder and it will appear here immediately.'
-          : '还没有排程记录；保存一条带提醒的条目后这里会立即出现。') + '</p>');
-
-    box.innerHTML = '<div class="diag-title">' + esc(head) + '</div>' +
-      rows.map(function (r) {
-        return '<div class="diag-row"><span class="diag-key">' + esc(r[0]) + '</span>' +
-          '<span class="diag-value">' + esc(r[1]) + '</span></div>';
-      }).join('') +
-      '<p class="diag-hint">' + esc(hint) + '</p>' + rawTableHTML + tableHTML + skipNote + logHTML;
-    box.hidden = false;
-  }
-
-  // 系统通知真正弹出 / 用户点开通知时：把后续重复条目继续往后排
-  function bindNotificationEvents() {
-    const notify = localNotifyPlugin();
-    if (!notify || typeof notify.addListener !== 'function') return;
-    try {
-      Promise.resolve(notify.addListener('localNotificationReceived', function () {
-        scheduleReminders();
-        renderSummary();
-      })).catch(function () {});
-      Promise.resolve(notify.addListener('localNotificationActionPerformed', function (action) {
-        const extra = action && action.notification && action.notification.extra;
-        scheduleReminders();
-        if (!extra || !extra.itemId) return;
-        if (!state.items.some(function (i) { return i.id === extra.itemId; })) return;
-        state.agendaAnchor = extra.date || todayKey();
-        setView('agenda');
-        openDetail(extra.itemId, extra.date || '');
-      })).catch(function () {});
-    } catch (err) {
-      console.warn('注册通知监听失败：', err);
-    }
-  }
-
-  // 通知 id 必须是 32 位正整数；按「条目 + 日期」生成稳定值，避免同一条重复排程
-  function reminderNumericId(item, key) {
-    const s = String(item.id) + '|' + String(key);
-    let h = 2166136261;
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return ((h >>> 0) % 2147483646) + 1;
-  }
-
-  function fireReminder(item, key) {
-    const timeText = (item.recurrence && item.recurrence.time) || item.time || '';
-    // 同一「条目 + 日期 + 时间 + 提前量」只弹一次，防止重复调度或页面重排后重复提醒
-    const stamp = String(item.id) + '|' + (key || item.date) + '|' + timeText + '|' +
-      String(effectiveRemind(item));
-    if (state.firedReminders[stamp]) return;
-    state.firedReminders[stamp] = true;
-    const meta = (timeText || T('全天')) + ' · ' + monthDay(key);
-    if ('Notification' in window && Notification.permission === 'granted') {
-      try {
-        const n = new Notification(T('氢计划提醒'), {
-          body: meta + ' · ' + item.title,
-          icon: './icons/icon-192.png',
-          tag: 'reminder-' + item.id + '-' + (key || item.date)
-        });
-        n.onclick = function () {
-          window.focus();
-          n.close();
-          openDetail(item.id, key || item.date);
-        };
-        renderSummary();
-        return;
-      } catch (err) {
-        console.warn('系统通知发送失败：', err);
-      }
-    }
-    showReminderAlert(item.title, meta);
-    renderSummary();
-  }
-
-  function showReminderAlert(title, meta) {
-    const box = $('#reminderAlert');
-    if (!box) return;
-    $('#raTitle').textContent = title;
-    $('#raTime').textContent = T('提醒 · {time}', { time: meta });
-    box.hidden = false;
-    requestAnimationFrame(function () { box.classList.add('show'); });
-  }
-
-  function hideReminderAlert() {
-    const box = $('#reminderAlert');
-    if (!box || box.hidden) return;
-    box.classList.remove('show');
-    setTimeout(function () { box.hidden = true; }, 220);
-  }
-
-  // 提醒分钟数上限：7 天。超过按上限处理，非数字/负数直接判为无效
-  const REMIND_MAX_MINUTES = 10080;
-
-  // 返回 null（空）、NaN（无效）或归一化后的整数
-  function parseRemindMinutes(raw) {
-    const text = String(raw == null ? '' : raw).trim();
-    if (!text) return null;
-    const n = Number(text);
-    if (!isFinite(n) || Math.round(n) !== n || n < 1) return NaN;
-    return Math.min(n, REMIND_MAX_MINUTES);
-  }
-
-  function remindEditorValue() {
-    return parseRemindMinutes($('#remindMinutes').value);
-  }
-
-  function openRemindEditor() {
-    const box = $('#remindEditor');
-    if (!box) return;
-    $('#remindMinutes').value = typeof draft.remindBefore === 'number' ? draft.remindBefore : '';
-    box.hidden = false;
-    setTimeout(function () { $('#remindMinutes').focus(); }, 60);
-  }
-
-  function closeRemindEditor() {
-    const box = $('#remindEditor');
-    if (box) box.hidden = true;
-  }
-
-  function applyRemindEditor() {
-    const n = remindEditorValue();
-    if (!n) {
-      showToast(T('请输入 1–10080 的整数分钟'));
-      $('#remindMinutes').focus();
-      return;
-    }
-    draft.remindBefore = n;
-    // 归一化后回显，保证气泡、详情页、诊断表看到的是同一个数字
-    $('#remindMinutes').value = String(n);
-    syncRemindChip();
-    closeRemindEditor();
   }
 
   async function ensurePersist() {
@@ -9388,6 +9678,12 @@
   // ==================== 事件绑定 ====================
 
   function bindEvents() {
+    // 这两个二级页会被日记写作页 / 计划面板直接调起，
+    // 挪到 body 下才不受 #viewProfile 的子层叠上下文限制（否则会被上层元素盖住）。
+    ['#tripTagsPage', '#moodPage'].forEach(function (sel) {
+      const page = $(sel);
+      if (page && page.parentNode !== document.body) document.body.appendChild(page);
+    });
     $('#prevBtn').addEventListener('click', function () {
       if (state.view === 'calendar') {
         if (state.yearView) {
@@ -9398,11 +9694,6 @@
         if (!shiftMonthBy(-1)) return;
         renderCalendar();
         updateTopbar();
-      } else if (state.view === 'agenda') {
-        state.agendaAnchor = addDays(state.agendaAnchor || todayKey(), -1);
-        renderAgenda();
-        updateTopbar();
-        agendaScrollTo(state.agendaAnchor, false);
       } else if (state.view === 'schedule') {
         state.scheduleAnchor = addDays(state.scheduleAnchor || startOfWeek(todayKey()), -7);
         renderSchedule();
@@ -9421,11 +9712,6 @@
         if (!shiftMonthBy(1)) return;
         renderCalendar();
         updateTopbar();
-      } else if (state.view === 'agenda') {
-        state.agendaAnchor = addDays(state.agendaAnchor || todayKey(), 1);
-        renderAgenda();
-        updateTopbar();
-        agendaScrollTo(state.agendaAnchor, false);
       } else if (state.view === 'schedule') {
         state.scheduleAnchor = addDays(state.scheduleAnchor || startOfWeek(todayKey()), 7);
         renderSchedule();
@@ -9444,10 +9730,8 @@
         $('#content').scrollTop = 0;
         return;
       }
-      if (state.view === 'agenda' || state.view === 'plan') {
-        state.agendaAnchor = t;
-        setView('agenda');
-        requestAnimationFrame(function () { agendaScrollTo(t, true); });
+      if (state.view === 'plan') {
+        openAgenda(t);
       } else {
         // 年历里点今天：回到月历的今天
         closeYearView();
@@ -9478,12 +9762,49 @@
     });
 
     $('#summaryBtn').addEventListener('click', function () {
-      state.agendaAnchor = todayKey();
-      setView('agenda');
+      openAgenda(todayKey());
     });
 
     $('#topbarTitle').addEventListener('click', function () {
-      if (state.view === 'calendar' || state.view === 'agenda') openYearPicker();
+      if (state.view === 'calendar') openYearPicker();
+    });
+
+    // 日历页 → 全部安排（原议程页）：全屏流式入口
+    $('#agendaEntryBtn').addEventListener('click', function () { openAgenda(todayKey()); });
+    $('#agendaBack').addEventListener('click', closeAgenda);
+    $('#agendaToday').addEventListener('click', function () {
+      state.agendaAnchor = todayKey();
+      renderAgenda();
+      agendaScrollTo(state.agendaAnchor, true);
+    });
+    $('#agendaPrev').addEventListener('click', function () {
+      state.agendaAnchor = addDays(state.agendaAnchor || todayKey(), -1);
+      renderAgenda();
+      agendaScrollTo(state.agendaAnchor, false);
+    });
+    $('#agendaNext').addEventListener('click', function () {
+      state.agendaAnchor = addDays(state.agendaAnchor || todayKey(), 1);
+      renderAgenda();
+      agendaScrollTo(state.agendaAnchor, false);
+    });
+    // 「全部安排」搜索：输入即时过滤（200ms 防抖），清空恢复全量
+    let agendaSearchTimer = null;
+    $('#agendaSearch').addEventListener('input', function () {
+      const el = this;
+      if (agendaSearchTimer) clearTimeout(agendaSearchTimer);
+      agendaSearchTimer = setTimeout(function () {
+        agendaSearchQuery = el.value;
+        $('#agendaSearchClear').hidden = !el.value;
+        renderAgenda();
+      }, 200);
+    });
+    $('#agendaSearchClear').addEventListener('click', function () {
+      $('#agendaSearch').value = '';
+      agendaSearchQuery = '';
+      this.hidden = true;
+      if (agendaSearchTimer) clearTimeout(agendaSearchTimer);
+      renderAgenda();
+      $('#agendaSearch').focus();
     });
 
     $('#yearClose').addEventListener('click', closeYearPicker);
@@ -9500,9 +9821,11 @@
     bindSwipe($('#agendaList'));
     bindSwipe($('#dayDetailInner'));
     bindSwipe($('#planContent'));
+    bindSwipe($('#planHistoryBody'));
     bindBatchPress($('#dayDetailInner'));
     bindBatchPress($('#agendaList'));
     $('#batchCancel').addEventListener('click', function () { exitBatchMode(); });
+    $('#batchAll').addEventListener('click', selectAllBatchCards);
     $('#batchDelete').addEventListener('click', askBatchDelete);
     bindMonthSwipe();
     bindPinchYear();
@@ -9513,8 +9836,23 @@
 
     // 天气：城市选择
     $('#weatherCityBtn').addEventListener('click', openCitySheet);
+    // 日历页顶部的天气条由 weather.js 自行渲染在 #ddWeather 里，
+    // 它不在 #dayDetailInner 内，所以这里单独委托一次，避免「点了没反应」。
+    const calWeatherEl = $('#ddWeather');
+    if (calWeatherEl) {
+      calWeatherEl.addEventListener('click', function (e) {
+        if (e.target.closest('[data-weather-city]')) openCitySheet();
+      });
+    }
     $('#cityClose').addEventListener('click', closeCitySheet);
     $('#cityBackdrop').addEventListener('click', closeCitySheet);
+    $('#cityWheelDone').addEventListener('click', commitCityWheel);
+    $('#citySearchToggle').addEventListener('click', function () {
+      const body = $('#citySearchBody');
+      const expand = !!(body && body.hidden);
+      setCitySearchExpanded(expand);
+      if (expand) setTimeout(function () { $('#citySearch').focus(); }, 60);
+    });
     $('#cityResults').addEventListener('click', function (e) {
       const item = e.target.closest('[data-city-index]');
       if (!item) return;
@@ -9570,6 +9908,21 @@
       }
     });
     $('#detailBody').addEventListener('click', function (e) {
+      const plus = e.target.closest('[data-plan-plus]');
+      if (plus) {
+        incrementPlan(plus.dataset.planPlus);
+        return;
+      }
+      const minus = e.target.closest('[data-plan-minus]');
+      if (minus) {
+        decrementPlan(minus.dataset.planMinus);
+        return;
+      }
+      const reset = e.target.closest('[data-plan-reset]');
+      if (reset) {
+        resetPlanProgress(reset.dataset.planReset);
+        return;
+      }
       if (!e.target.closest('#detailMapBtn')) return;
       const list = detail.kind === 'plan' ? state.plans : state.items;
       const target = list.find(function (i) { return i.id === detail.itemId; });
@@ -9587,7 +9940,7 @@
       if (state.swipeLock && Date.now() < state.swipeLock) return;
       // 黄历卡片下方的「那天写了什么」入口：直接打开该日全文
       const diaryEntry = e.target.closest('[data-diary-open]');
-      if (diaryEntry) { openDiaryEditor(diaryEntry.dataset.diaryOpen); return; }
+      if (diaryEntry) { if (diaryEntry.tagName !== 'SECTION' && !diaryEntry.closest('#diaryBody')) openDiaryDetail(diaryEntry.dataset.diaryOpen); return; }
       const cityBtn = e.target.closest('[data-weather-city]');
       if (cityBtn) { openCitySheet(); return; }
       if (handleSharedListClick(e)) return;
@@ -9658,34 +10011,6 @@
         clearTimeout(scrollTimer);
         scrollTimer = setTimeout(applyDpWheelTime, 70);
       }, { passive: true });
-    });
-
-    $('#remindChip').addEventListener('click', function () {
-      if ($('#remindEditor').hidden) openRemindEditor();
-      else closeRemindEditor();
-    });
-    $('#remindApply').addEventListener('click', applyRemindEditor);
-    $('#remindClear').addEventListener('click', function () {
-      draft.remindBefore = null;
-      $('#remindMinutes').value = '';
-      syncRemindChip();
-      closeRemindEditor();
-    });
-    $('#remindMinutes').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        applyRemindEditor();
-      }
-    });
-    // 输入过程中就写回草稿：即使不点「确定」直接保存，也不会用到旧值
-    ['input', 'change', 'blur'].forEach(function (evt) {
-      $('#remindMinutes').addEventListener(evt, function () {
-        const n = remindEditorValue();
-        if (n) {
-          draft.remindBefore = n;
-          syncRemindChip();
-        }
-      });
     });
 
     $('#detailNote').addEventListener('input', updateDetailNoteCount);
@@ -9788,7 +10113,8 @@
     $('#categoryChips').addEventListener('click', function (e) {
       if (e.target.closest('#manageCategoryBtn')) {
         closeSheet();
-        openSettings();
+        // 直接落到「分类标签」整页，并压在面板之上
+        openTripTagsPage(true);
         return;
       }
       const chip = e.target.closest('[data-cat-chip]');
@@ -9851,51 +10177,16 @@
 
     $('#planNote').addEventListener('input', autoGrowPlanNote);
 
-    $('#planRemindChip').addEventListener('click', function () {
-      const editor = $('#planRemindEditor');
-      const opening = editor.hidden;
-      editor.hidden = !opening;
-      if (opening) {
-        $('#planRemindInput').value = typeof planDraft.remindBefore === 'number' ? planDraft.remindBefore : '';
-        $('#planRemindInput').focus();
-      }
+    $('.stepper', $('#planSheet')).addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-plan-step]');
+      if (!btn) return;
+      syncPlanTarget(planDraft.target + Number(btn.dataset.planStep));
     });
-
-    $('#planRemindApply').addEventListener('click', function () {
-      const n = parseRemindMinutes($('#planRemindInput').value);
-      if (!n) {
-        showToast(T('请输入 1–10080 的整数分钟'));
-        $('#planRemindInput').focus();
-        return;
-      }
-      planDraft.remindBefore = n;
-      $('#planRemindInput').value = String(n);
-      $('#planRemindEditor').hidden = true;
-      syncPlanRemindChip();
+    $('#planTarget').addEventListener('input', function () {
+      planDraft.target = clampTarget($('#planTarget').value);
     });
-
-    ['input', 'change', 'blur'].forEach(function (evt) {
-      $('#planRemindInput').addEventListener(evt, function () {
-        const n = parseRemindMinutes($('#planRemindInput').value);
-        if (n) {
-          planDraft.remindBefore = n;
-          syncPlanRemindChip();
-        }
-      });
-    });
-
-    $('#planRemindInput').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        $('#planRemindApply').click();
-      }
-    });
-
-    $('#planRemindClear').addEventListener('click', function () {
-      planDraft.remindBefore = null;
-      $('#planRemindInput').value = '';
-      $('#planRemindEditor').hidden = true;
-      syncPlanRemindChip();
+    $('#planTarget').addEventListener('blur', function () {
+      syncPlanTarget(clampTarget($('#planTarget').value));
     });
 
     $('#planPriorityChip').addEventListener('click', function () {
@@ -9903,10 +10194,18 @@
       syncPlanPriorityChip();
     });
 
+    $('#planStyleOpts').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-plan-style]');
+      if (!btn) return;
+      planDraft.progressStyle = planStyleOf(btn.dataset.planStyle);
+      syncPlanStyleOpts();
+      haptic(6);
+    });
+
     $('#planCategoryChips').addEventListener('click', function (e) {
       if (e.target.closest('[data-plan-manage]')) {
         closePlanSheet();
-        openSettings();
+        openTripTagsPage(true);
         return;
       }
       const chip = e.target.closest('[data-plan-cat]');
@@ -9922,28 +10221,318 @@
       if (state.undoFn) state.undoFn();
     });
 
-    $('#settingsBtn').addEventListener('click', openSettings);
+    $('#profileSettingsBtn').addEventListener('click', openSettings);
     $('#settingsClose').addEventListener('click', closeSettings);
+
+    // ---------- 个人页 ----------
+    $('#cardStyleEntryBtn').addEventListener('click', openCardStylePage);
+    $('#cardStyleBack').addEventListener('click', closeCardStylePage);
+    $('#cardStyleGrid').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-card-style]');
+      if (btn) chooseCardStyle(btn.dataset.cardStyle);
+    });
+    // 卡片样式筛选：仅改展示，不写设置、不动当前已选皮肤
+    $('#cardStyleFilter').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-skin-filter]');
+      if (!btn) return;
+      cardStyleFilter = btn.dataset.skinFilter;
+      Array.prototype.forEach.call(this.querySelectorAll('[data-skin-filter]'), function (b) {
+        b.classList.toggle('active', b === btn);
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+      });
+      renderCardStylePage();
+    });
+    // ---------- 字体：默认字体 / 系统字体 ----------
+    $('#fontEntryBtn').addEventListener('click', openFontPage);
+    $('#fontBack').addEventListener('click', closeFontPage);
+    $('#fontList').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-font-mode]');
+      if (btn) chooseFontMode(btn.dataset.fontMode);
+    });
+    $('#profileCountdownBtn').addEventListener('click', openCountdownPage);
+    $('#profileTripTagsBtn').addEventListener('click', openTripTagsPage);
+    $('#profileMoodTagsBtn').addEventListener('click', openMoodPage);
+    $('#tripTagsBack').addEventListener('click', closeTripTagsPage);
+    $('#planHistoryBack').addEventListener('click', closePlanHistoryPage);
+    // 历史计划搜索：与「全部安排」一致，200ms 防抖，清空恢复全量
+    let planHistorySearchTimer = null;
+    $('#planHistorySearch').addEventListener('input', function () {
+      const el = this;
+      if (planHistorySearchTimer) clearTimeout(planHistorySearchTimer);
+      planHistorySearchTimer = setTimeout(function () {
+        planHistorySearch = el.value;
+        $('#planHistorySearchClear').hidden = !el.value;
+        renderPlanHistory();
+      }, 200);
+    });
+    $('#planHistorySearchClear').addEventListener('click', function () {
+      $('#planHistorySearch').value = '';
+      planHistorySearch = '';
+      this.hidden = true;
+      if (planHistorySearchTimer) clearTimeout(planHistorySearchTimer);
+      renderPlanHistory();
+      $('#planHistorySearch').focus();
+    });
+    // 左滑露出编辑按钮，点击进入编辑（复用新建计划面板）
+    $('#planHistoryBody').addEventListener('click', function (e) {
+      const edit = e.target.closest('[data-plan-edit]');
+      if (edit) {
+        if (Date.now() < state.swipeClickLock) return;
+        closeAllSwipes();
+        openPlanEditSheet(edit.dataset.planEdit);
+        return;
+      }
+      if (handleSwipeClick(e)) return;
+    });
+
+    // ---------- 倒数日 ----------
+    $('#countdownBack').addEventListener('click', closeCountdownPage);
+    $('#countdownAdd').addEventListener('click', function () { openCdSheet(''); });
+    // 横滑条现在挂在日记页，监听挂在长期存在的 #viewDiary 上
+    $('#viewDiary').addEventListener('click', function (e) {
+      const btn = e.target.closest('#countdownCards [data-cd-open]');
+      if (!btn) return;
+      haptic(8);
+      openCdSheet(btn.dataset.cdOpen || '');
+    });
+
+    // 纪念日横滑条：原生嵌套横向滚动在部分 Android WebView 下会被父级纵向滚动吃掉，
+    // 这里用 pointer 手势直接改写 scrollLeft；纵向手势放行给页面，横向位移超过 8px 才接管，
+    // 松手后短暂抑制点击，避免滑动被误判成「打开纪念日」。
+    (function bindCdStripDrag() {
+      const strip = $('#countdownCards');
+      if (!strip) return;
+      let drag = null;
+      let suppressUntil = 0;
+      strip.addEventListener('pointerdown', function (e) {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        drag = { id: e.pointerId, x: e.clientX, y: e.clientY, left: strip.scrollLeft, active: false };
+      });
+      strip.addEventListener('pointermove', function (e) {
+        if (!drag || e.pointerId !== drag.id) return;
+        const dx = e.clientX - drag.x;
+        const dy = e.clientY - drag.y;
+        if (!drag.active) {
+          // 位移太小或更像纵向滑动：不接管，交给页面滚动
+          if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy)) return;
+          drag.active = true;
+          try { strip.setPointerCapture(drag.id); } catch (err) { /* 忽略 */ }
+        }
+        if (e.cancelable) e.preventDefault();
+        strip.scrollLeft = drag.left - dx;
+      }, { passive: false });
+      function endDrag(e) {
+        if (!drag || e.pointerId !== drag.id) return;
+        if (drag.active) suppressUntil = Date.now() + 400;
+        drag = null;
+      }
+      strip.addEventListener('pointerup', endDrag);
+      strip.addEventListener('pointercancel', endDrag);
+      strip.addEventListener('click', function (e) {
+        if (Date.now() < suppressUntil) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, true);
+    })();
+    $('#countdownListBody').addEventListener('pointerdown', cdDragStart);
+    $('#countdownListBody').addEventListener('pointermove', cdDragMove);
+    document.addEventListener('pointerup', cdDragEnd);
+    document.addEventListener('pointercancel', cdDragEnd);
+    document.addEventListener('touchmove', function (e) {
+      if (cdDrag && cdDrag.active) e.preventDefault();
+    }, { passive: false });
+    $('#countdownListBody').addEventListener('click', function (e) {
+      if (Date.now() - cdDragEndAt < 260) return;
+      const pin = e.target.closest('[data-cd-pin]');
+      if (pin) {
+        e.stopPropagation();
+        toggleCountdownPin(pin.dataset.cdPin);
+        return;
+      }
+      const row = e.target.closest('[data-cd-open]');
+      if (!row) return;
+      haptic(8);
+      openCdSheet(row.dataset.cdOpen || '');
+    });
+    $('#cdPop').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-cd-pop]');
+      if (!btn || !cdPopId) return;
+      const id = cdPopId;
+      closeCdPop();
+      if (btn.dataset.cdPop === 'edit') {
+        openCdSheet(id);
+        return;
+      }
+      const cd = state.countdowns.find(function (c) { return c.id === id; });
+      openModal({
+        kind: 'cd-del',
+        title: T('删除纪念日「{name}」？', { name: cd ? cd.title : '' }),
+        text: T('删除后不可恢复'),
+        confirmText: T('删除'),
+        danger: true,
+        onConfirm: function () { deleteCountdown(id); }
+      });
+    });
+    document.addEventListener('pointerdown', function (e) {
+      if (cdPopId && !e.target.closest('#cdPop') && !e.target.closest('#countdownListBody')) closeCdPop();
+    });
+    $('#cdClose').addEventListener('click', closeCdSheet);
+    $('#cdBackdrop').addEventListener('click', closeCdSheet);
+    $('#cdTitle').addEventListener('input', syncCdSave);
+    $('#cdDateChip').addEventListener('click', function () {
+      openDateSheet('countdown');
+    });
+    // 公历 / 农历：切换时把当前日期换算过去，选择器不会是空的
+    $('#cdCalSeg').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-cd-cal]');
+      if (!btn || !cdDraft) return;
+      const cal = btn.dataset.cdCal;
+      if (cal !== 'solar' && cal !== 'lunar') return;
+      if (cdDraft.calendar === cal) return;
+      if (cal === 'lunar') {
+        const l = cdDraftLunarOf(cdDraft.date);
+        if (l) {
+          cdDraft.lunarYear = l.year;
+          cdDraft.lunarMonth = l.month;
+          cdDraft.lunarDay = l.day;
+          cdDraft.lunarLeap = l.isLeap && lunarLeapMonth(l.year) === l.month;
+        }
+      } else {
+        const key = cdEffectiveKey();
+        if (key) {
+          cdDraft.date = key;
+          cdDateDraft = { date: key, time: '' };
+        }
+      }
+      cdDraft.calendar = cal;
+      if (cal === 'lunar' && cdDraft.repeat === 'monthly') cdDraft.repeat = 'none';
+      renderCdChoices();
+      renderCdLunarPickers();
+      haptic(6);
+    });
+    $('#cdDirSeg').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-cd-dir]');
+      if (!btn || !cdDraft) return;
+      cdDraft.direction = btn.dataset.cdDir === 'up' ? 'up' : 'down';
+      renderCdChoices();
+      syncCdSave();
+      haptic(6);
+    });
+    $('#cdRepeatSeg').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-cd-repeat]');
+      if (!btn || !cdDraft || btn.disabled) return;
+      cdDraft.repeat = CD_REPEATS.indexOf(btn.dataset.cdRepeat) !== -1 ? btn.dataset.cdRepeat : 'none';
+      renderCdChoices();
+      syncCdSave();
+      haptic(6);
+    });
+    ['#cdLunarYearBtn', '#cdLunarMonthBtn', '#cdLunarDayBtn'].forEach(function (sel) {
+      const btn = $(sel);
+      if (btn) btn.addEventListener('click', openCdWheelSheet);
+    });
+    const leapToggle = $('#cdLunarLeap');
+    if (leapToggle) leapToggle.addEventListener('change', function () {
+      if (!cdDraft) return;
+      cdDraft.lunarLeap = !!this.checked && lunarLeapMonth(cdDraft.lunarYear) === cdDraft.lunarMonth;
+      renderCdLunarPickers();
+      haptic(6);
+    });
+    if ($('#cdWheelBackdrop')) $('#cdWheelBackdrop').addEventListener('click', closeCdWheelSheet);
+    if ($('#cdWheelClose')) $('#cdWheelClose').addEventListener('click', closeCdWheelSheet);
+    if ($('#cdWheelDone')) $('#cdWheelDone').addEventListener('click', confirmCdWheel);
+    if ($('#cdWheelLeap')) $('#cdWheelLeap').addEventListener('change', function () {
+      if (!cdWheelDraft) return;
+      cdWheelDraft.leap = !!this.checked && lunarLeapMonth(cdWheelDraft.year) === cdWheelDraft.month;
+      renderCdWheelSheet();
+      haptic(6);
+    });
+    $('#cdSwatches').addEventListener('click', function (e) {
+      const sw = e.target.closest('[data-cd-color]');
+      if (!sw) return;
+      $('#cdSheet').dataset.color = sw.dataset.cdColor;
+      $$('#cdSwatches .swatch').forEach(function (el) {
+        el.classList.toggle('active', el === sw);
+      });
+      haptic(6);
+    });
+    // 自定义颜色：原生取色器，不重建节点，取色过程中保持打开
+    $('#cdSwatches').addEventListener('input', function (e) {
+      if (!e.target || e.target.id !== 'cdCustomColor') return;
+      const color = isHexColor(e.target.value) ? e.target.value : PRESET_COLORS[0];
+      $('#cdSheet').dataset.color = color;
+      const label = e.target.closest('.cd-custom-swatch');
+      if (label) {
+        label.style.setProperty('--sw', color);
+        $$('#cdSwatches .swatch').forEach(function (el) {
+          el.classList.toggle('active', el === label);
+        });
+      }
+    });
+    $('#cdCats').addEventListener('click', function (e) {
+      const chip = e.target.closest('[data-cd-cat]');
+      if (!chip) return;
+      const id = chip.dataset.cdCat === 'none' ? '' : chip.dataset.cdCat;
+      $('#cdSheet').dataset.cat = id;
+      renderCdCats();
+      haptic(6);
+    });
+    $('#cdSave').addEventListener('click', saveCountdown);
+    $('#cdDelete').addEventListener('click', function () {
+      if (cdEditingId) deleteCountdown(cdEditingId);
+    });
+
+    // ---------- 自定义情绪 ----------
+    $('#moodBack').addEventListener('click', closeMoodPage);
+    $('#moodAdd').addEventListener('click', function () { openMoodEditor(''); });
+    $('#moodList').addEventListener('pointerdown', moodDragStart);
+    $('#moodList').addEventListener('pointermove', moodDragMove);
+    document.addEventListener('pointerup', moodDragEnd);
+    document.addEventListener('pointercancel', moodDragEnd);
+    $('#moodList').addEventListener('click', function (e) {
+      if (Date.now() - moodDragEndAt < 220) return;
+      const row = e.target.closest('[data-mood-row]');
+      if (!row) return;
+      haptic(10);
+      openMoodPop(row.dataset.moodRow);
+    });
+    $('#moodPop').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-mood-pop]');
+      if (!btn || !moodPopId) return;
+      const id = moodPopId;
+      closeMoodPop();
+      if (btn.dataset.moodPop === 'edit') openMoodEditor(id);
+      else {
+        openModal({
+          kind: 'mood-del',
+          title: T('删除情绪「{name}」？', { name: (customMoods().find(function (m) { return m.id === id; }) || {}).name || '' }),
+          text: T('引用它的日记会清空心情，其他内容保留'),
+          confirmText: T('删除'),
+          danger: true,
+          onConfirm: function () { deleteMood(id); }
+        });
+      }
+    });
+    document.addEventListener('pointerdown', function (e) {
+      if (e.target.closest('#moodPop') || e.target.closest('[data-mood-row]')) return;
+      closeMoodPop();
+    });
     $('#clearAllBtn').addEventListener('click', clearAllItems);
 
-    // 分类：点标签直接在气泡右下角弹出编辑/删除
+    // 分类：点标签行直接在右下角弹出编辑/删除
     $('#categoryList').addEventListener('click', function (e) {
       // 刚结束拖动的那一下不当作点击，避免松手后误开编辑浮层
       if (Date.now() - catDragEndAt < CAT_DRAG_CLICK_MS) return;
-      if (e.target.closest('[data-cat-new]')) {
-        closeCatPop();
-        openCategoryEditor(null);
-        return;
-      }
-      const bubble = e.target.closest('[data-cat-bubble]');
-      if (!bubble) return;
-      const id = bubble.dataset.catBubble;
+      const row = e.target.closest('[data-cat-row]');
+      if (!row) return;
+      const id = row.dataset.catRow;
       if (!$('#catPop').hidden && catPopId === id) {
         closeCatPop();
         return;
       }
       openCatPop(id);
     });
+    $('#tripTagsAdd').addEventListener('click', function () { openCategoryEditor(null); });
 
     // 长按气泡后拖动排序：pointer 事件负责判定，touchmove 在拖动期间锁滚动
     $('#categoryList').addEventListener('pointerdown', catDragStart);
@@ -9966,7 +10555,7 @@
     document.addEventListener('pointerdown', function (e) {
       if (!$('#catPop').hidden &&
           !e.target.closest('#catPop') &&
-          !e.target.closest('[data-cat-bubble]')) {
+          !e.target.closest('[data-cat-row]')) {
         closeCatPop();
       }
     });
@@ -9974,7 +10563,7 @@
     $('#settingsPage').addEventListener('scroll', function () { closeCatPop(); }, { passive: true });
 
     // 通用弹窗
-    $('#modalCancel').addEventListener('click', closeModal);
+    $('#modalCancel').addEventListener('click', cancelModal);
     $('#modalBackdrop').addEventListener('click', closeModal);
     $('#modalConfirm').addEventListener('click', submitModal);
 
@@ -10035,7 +10624,9 @@
     }, { passive: false });
 
     $('#modalIcons').addEventListener('click', function (e) {
-      const btn = e.target.closest('[data-icon]');
+      // 必须锚定按钮本身：内联 svg 也带 data-icon，直接 closest('[data-icon]')
+      // 会把点击判定落在图形上，导致部分图标「点不中」
+      const btn = e.target.closest('.cat-icon-btn');
       if (!btn) return;
       modalIcon = btn.dataset.icon || null;
       $$('#modalIcons .cat-icon-btn').forEach(function (el) {
@@ -10049,8 +10640,6 @@
         submitModal();
       }
     });
-
-    $('#raOk').addEventListener('click', hideReminderAlert);
 
     $('#importBtn').addEventListener('click', function () {
       $('#importFile').value = '';
@@ -10076,72 +10665,22 @@
       changeLanguage(chip.dataset.lang);
     });
 
-    $('#permissionGuideBtn').addEventListener('click', function () {
-      openPermissionSheet();
-    });
-
     $('#aboutEntryBtn').addEventListener('click', openAbout);
     $('#aboutClose').addEventListener('click', closeAbout);
     $('#agreementAccept').addEventListener('click', acceptAgreement);
     $('#agreementDecline').addEventListener('click', declineAgreement);
 
-    $('#permClose').addEventListener('click', finishPermissionIntro);
-    $('#permBackdrop').addEventListener('click', finishPermissionIntro);
-    $('#permLater').addEventListener('click', finishPermissionIntro);
-    $('#permAllow').addEventListener('click', function () { askNotifyPermission(); });
-    $('#permRequest').addEventListener('click', function () { askNotifyPermission(); });
-    // 「通知自查」入口 / 返回 / 「刷新自查」统一用事件委托绑在 document 上：
-    // 面板或按钮被重绘后监听依然有效，不会出现「点了没反应」。
-    document.addEventListener('click', function (e) {
-      const refresh = e.target.closest && e.target.closest('#notifyDiagRefresh');
-      if (refresh) {
-        e.preventDefault();
-        refreshSelfCheck();
-        return;
-      }
-      const open = e.target.closest && e.target.closest('#notifySelfCheckBtn');
-      if (open) {
-        e.preventDefault();
-        openNotifyDiagPage();
-        return;
-      }
-      const close = e.target.closest && e.target.closest('#notifyDiagClose');
-      if (close) {
-        e.preventDefault();
-        closeNotifyDiagPage();
-        return;
-      }
-      const selfTest = e.target.closest && e.target.closest('#notifySelfTestBtn');
-      if (selfTest) {
-        e.preventDefault();
-        runNotifySelfTest();
-        return;
-      }
-      const nativeTest = e.target.closest && e.target.closest('#nativeTestBtn');
-      if (nativeTest) {
-        e.preventDefault();
-        runNativeChannelTest();
-        return;
-      }
-      const bgSettings = e.target.closest && e.target.closest('#bgGuideSettingsBtn');
-      if (bgSettings) {
-        e.preventDefault();
-        openAppSettingsPage();
-      }
-    });
-
-    // 日历开关：change 不冒泡到 click，单独绑在 document 上，面板重绘后依然有效
-    document.addEventListener('change', function (e) {
-      if (e.target && e.target.id === 'calendarSyncToggle') {
-        setCalendarSyncEnabled(!!e.target.checked);
-      }
-    });
-
-    $('#themeToggle').addEventListener('change', function () {
-      state.meta.theme = $('#themeToggle').checked ? 'dark' : 'light';
+    // 顶栏深浅色切换：唯一开关，点一下立即生效，并持久保存
+    $('#themeBtn').addEventListener('click', function () {
+      state.meta.theme = preferredTheme() === 'dark' ? 'light' : 'dark';
       applyTheme();
       persistMeta();
-      renderSettings();
+      haptic(8);
+    });
+
+    // 页面切到后台时暂停皮肤动效（CSS 只认这个开关，避免后台空转）
+    document.addEventListener('visibilitychange', function () {
+      document.documentElement.classList.toggle('app-paused', document.hidden);
     });
 
     $('#lunarToggle').addEventListener('change', function () {
@@ -10152,10 +10691,32 @@
       if (state.yearView) renderYearView();
     });
 
-    $('#almanacToggle').addEventListener('change', function () {
-      state.meta.almanacVisible = $('#almanacToggle').checked;
+    $('#calendarCardSeg').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-cal-card]');
+      if (!btn || btn.dataset.calCard === calendarCardMode()) return;
+      state.meta.calendarCard = btn.dataset.calCard;
+      // 同步老字段，避免降级到旧版本时仍按旧开关判断
+      state.meta.almanacVisible = btn.dataset.calCard !== 'off';
       persistMeta();
-      renderAll();
+      renderSettings();
+      renderDayDetail();
+      haptic(8);
+    });
+
+    $('#zodiacOpen').addEventListener('click', openZodiacPage);
+    $('#zodiacBack').addEventListener('click', closeZodiacPage);
+    $('#zodiacGrid').addEventListener('click', function (e) {
+      const item = e.target.closest('[data-zodiac]');
+      if (!item || item.dataset.zodiac === zodiacOf().id) {
+        if (item) closeZodiacPage();
+        return;
+      }
+      state.meta.zodiacSign = item.dataset.zodiac;
+      persistMeta();
+      renderSettings();
+      renderDayDetail();
+      closeZodiacPage();
+      haptic(8);
     });
 
     $('#weatherToggle').addEventListener('change', function () {
@@ -10217,6 +10778,53 @@
 
     // 长按卡片后拖动排序：pointer 事件判定，拖动期间锁滚动，松手后短暂抑制点击
     $('#planContent').addEventListener('pointerdown', planDragStart);
+
+    // 计划卡「+」长按 400ms：减一次，与点击加一次形成对称
+    let planMinusTimer = 0;
+    let planMinusEl = null;
+    let planMinusFrom = null;
+    let planMinusUntil = 0;
+    $('#planContent').addEventListener('pointerdown', function (e) {
+      const btn = e.target.closest('[data-plan-check]');
+      if (!btn) return;
+      planMinusEl = btn;
+      planMinusFrom = { x: e.clientX, y: e.clientY };
+      clearTimeout(planMinusTimer);
+      planMinusTimer = window.setTimeout(function () {
+        planMinusTimer = 0;
+        if (!planMinusEl) return;
+        // 抑制长按松手后浏览器补发的 click，避免「减一次又加一次」
+        planMinusUntil = Date.now() + 620;
+        const id = planMinusEl.dataset.planCheck;
+        planMinusEl.classList.add('minus-flash');
+        haptic(14);
+        // 减完之后列表会整段重渲染，闪光要补到新节点上才看得见
+        decrementPlan(id).then(function () {
+          const fresh = document.querySelector('[data-plan-row="' + id + '"] [data-plan-check]');
+          if (!fresh || fresh === planMinusEl) return;
+          fresh.classList.add('minus-flash');
+          window.setTimeout(function () { fresh.classList.remove('minus-flash'); }, 340);
+        });
+        window.setTimeout(function () {
+          if (planMinusEl) planMinusEl.classList.remove('minus-flash');
+        }, 340);
+      }, 400);
+    });
+    $('#planContent').addEventListener('pointermove', function (e) {
+      if (!planMinusTimer || !planMinusFrom) return;
+      if (Math.abs(e.clientX - planMinusFrom.x) > 10 || Math.abs(e.clientY - planMinusFrom.y) > 10) {
+        clearTimeout(planMinusTimer);
+        planMinusTimer = 0;
+      }
+    });
+    function cancelPlanMinus() {
+      clearTimeout(planMinusTimer);
+      planMinusTimer = 0;
+      planMinusEl = null;
+      planMinusFrom = null;
+    }
+    $('#planContent').addEventListener('pointerup', cancelPlanMinus);
+    $('#planContent').addEventListener('pointercancel', cancelPlanMinus);
     document.addEventListener('pointermove', planDragMove, { passive: false });
     document.addEventListener('pointerup', planDragEnd);
     document.addEventListener('pointercancel', planDragEnd);
@@ -10226,6 +10834,34 @@
 
     $('#planContent').addEventListener('click', function (e) {
       if (Date.now() - planDragEndAt < 320) return;
+      if (e.target.closest('#planHistoryBtn')) {
+        openPlanHistoryPage();
+        return;
+      }
+      const seg = e.target.closest('[data-plan-kind]');
+      if (seg) {
+        const kind = seg.dataset.planKind;
+        if (kind !== state.planKind) {
+          const from = state.planKind === 'week' ? 0 : state.planKind === 'month' ? 1 : 2;
+          const to = kind === 'week' ? 0 : kind === 'month' ? 1 : 2;
+          state.planKind = kind;
+          renderPlan();
+          // 重绘后让高亮块从旧档位滑到新档位（先落旧值、关过渡，再在下一帧开启）
+          const segEl = $('#planSeg');
+          const thumb = segEl ? segEl.querySelector('.plan-seg-thumb') : null;
+          if (segEl && thumb) {
+            thumb.style.transition = 'none';
+            segEl.style.setProperty('--seg-i', from);
+            requestAnimationFrame(function () {
+              thumb.style.transition = '';
+              segEl.style.setProperty('--seg-i', to);
+            });
+          }
+          const content = $('#content');
+          if (content) content.scrollTop = 0;
+        }
+        return;
+      }
       if (e.target.closest('#planAdd')) {
         openPlanSheet('week');
         return;
@@ -10244,6 +10880,7 @@
       if (handleSwipeClick(e)) return;
       const check = e.target.closest('[data-plan-check]');
       if (check) {
+        if (Date.now() < planMinusUntil) return;
         togglePlanDone(check.dataset.planCheck);
         return;
       }
@@ -10272,7 +10909,7 @@
           if (i === -1) state.agendaFilters.push(val);
           else state.agendaFilters.splice(i, 1);
         }
-        if (state.view === 'agenda') renderAgenda();
+        if (agendaPageOpen()) renderAgenda();
       }
     });
 
@@ -10282,7 +10919,6 @@
     });
 
     bindBackGesture();
-    bindNotificationEvents();
     bindDiaryEvents();
 
     document.addEventListener('visibilitychange', function () {
@@ -10294,10 +10930,6 @@
           renderSummary();
         }
         if (weatherEnabled() && window.Weather) window.Weather.refresh();
-        // 用户可能刚在系统里改过「闹钟和提醒」：回到前台先同步一次，再按最新状态排程
-        const backNotify = localNotifyPlugin();
-        if (backNotify) refreshExactAlarmStatus(backNotify).then(function () { scheduleReminders(); });
-        else scheduleReminders();
       }
     });
 
@@ -10317,10 +10949,13 @@
     if (dateSheet.open) { closeDateSheet(); return true; }
     if (addressSheet.open) { closeAddressSheet(); return true; }
     if (!$('#citySheet').hidden) { closeCitySheet(); return true; }
+    if (!$('#cdSheet').hidden) { closeCdSheet(); return true; }
+    if (!$('#moodPop').hidden) { closeMoodPop(); return true; }
+    if (!$('#planHistoryPage').hidden) { closePlanHistoryPage(); return true; }
+    if (!$('#moodPage').hidden) { closeMoodPage(); return true; }
+    if (!$('#countdownPage').hidden) { closeCountdownPage(); return true; }
+    if (!$('#agendaPage').hidden) { closeAgenda(); return true; }
     if (!$('#catPop').hidden) { closeCatPop(); return true; }
-    // 通知自查是盖在权限引导之上的整页：返回键先关它，再关权限引导
-    if ($('#notifyDiagPage') && !$('#notifyDiagPage').hidden) { closeNotifyDiagPage(); return true; }
-    if (!$('#permSheet').hidden) { finishPermissionIntro(); return true; }
     if (!$('#modalCard').hidden) { closeModal(); return true; }
     // 日记：预览 → 写作页 → 附件/备份选择 → 管理态，逐层退出
     if (!$('#diaryViewer').hidden) { closeDiaryViewer(); return true; }
@@ -10401,6 +11036,7 @@
 
     state.meta.lang = target;
     try { localStorage.setItem(LANG_MIRROR_KEY, target); } catch (err) { /* 忽略 */ }
+    migrateCalendarCardForLang(target);
     persistMeta();
 
     window.I18N.setLang(target);
@@ -10460,12 +11096,15 @@
     return bits.join(' · ');
   }
 
-  // 卡片上的位置只到市：省 · 市，缺一项就只显示另一项；具体位置只在写作页与详情里出现
+  // 卡片上的位置只到区县：省 · 市 · 区，缺一项就跳过；具体位置只在写作页与详情里出现
   function diaryLocationBrief(entry) {
     const loc = entry && entry.location;
     if (!loc) return '';
-    if (loc.province && loc.city) return loc.province + ' · ' + loc.city;
-    return loc.city || loc.province || '';
+    const parts = [];
+    [loc.province, loc.city, loc.district].forEach(function (p) {
+      if (p && parts.indexOf(p) === -1) parts.push(p);
+    });
+    return parts.join(' · ');
   }
 
   // 详情用完整位置：省市 + 手写的具体位置
@@ -10623,11 +11262,12 @@
     const mood = entry.mood
       ? '<span class="dc-mood">' + moodIconHTML(entry.mood, 'dc-face') + esc(moodText) + '</span>'
       : '';
-    // 位置在卡片上只到市，具体位置留给详情
+    // 位置在卡片上只到区县，具体位置留给详情
     const locBrief = diaryLocationBrief(entry);
     const loc = locBrief
       ? '<span class="dc-loc">' + esc(locBrief) + '</span>'
       : '';
+    const wx = diaryWeatherBrief(entry);
     const tags = entry.tags.length
       ? '<div class="dc-tags">' + entry.tags.map(function (t) {
           return '<span class="dc-tag">' + diaryHighlight(t, query) + '</span>';
@@ -10652,7 +11292,7 @@
         '<div class="dc-meta">' +
           '<span class="dc-date">' + esc(diaryCardDate(entry.date)) + '</span>' +
           (future ? '<span class="dc-ahead">' + esc(T('预告')) + '</span>' : '') +
-          mood + loc +
+          mood + loc + wx +
         '</div>' +
       '</div>' +
       body + tags +
@@ -10674,7 +11314,13 @@
             '<div class="day-sub">' + esc(diarySubText(entry.date)) + '</div>' +
           '</div>' +
         '</div>' +
-        diaryCardHTML(entry) +
+        '<div class="dc-swipe" data-dc-swipe="' + entry.date + '">' +
+          '<div class="dc-swipe-actions">' +
+            '<button type="button" data-diary-act="edit" data-date="' + entry.date + '">' + T('编辑') + '</button>' +
+            '<button type="button" class="danger" data-diary-act="del" data-date="' + entry.date + '">' + T('删除') + '</button>' +
+          '</div>' +
+          diaryCardHTML(entry) +
+        '</div>' +
       '</section>';
     });
     return html;
@@ -10713,6 +11359,7 @@
             (future ? '<span class="dcard-ahead">' + esc(T('预告')) + '</span>' : '') +
             (entry.mood ? moodIconHTML(entry.mood, 'dcard-face') : '') +
             (locBrief ? '<span class="dcard-loc">' + esc(locBrief) + '</span>' : '') +
+            diaryWeatherBrief(entry) +
           '</span>' +
         '</span>' +
         inner +
@@ -10723,6 +11370,680 @@
       '</article>';
     });
     return html + '</div>';
+  }
+
+  // ---------- 日记详情：朋友圈式排版 ----------
+  let diaryDetailDate = '';
+  let diaryDetailUrls = [];
+
+  function diaryMoodLabel(id) {
+    if (!id) return '';
+    const preset = DIARY_MOODS.find(function (m) { return m.id === id; });
+    if (preset) return preset.zh;
+    const custom = customMoods().find(function (m) { return m.id === id; });
+    return custom ? custom.name : '';
+  }
+
+  function openDiaryDetail(date) {
+    const entry = diaryByDate(date);
+    if (!entry) { openDiaryEditor(date); return; }
+    diaryDetailDate = date;
+    renderDiaryDetail(entry);
+    const page = $('#diaryDetailPage');
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+  }
+
+  function closeDiaryDetail() {
+    const page = $('#diaryDetailPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    diaryDetailUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (err) { /* 忽略 */ } });
+    diaryDetailUrls = [];
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+      $('#ddBody').innerHTML = '';
+    }, 240);
+  }
+
+  function renderDiaryDetail(entry) {
+    $('#ddTitle').textContent = diaryDateTitle(entry.date);
+    const mood = diaryMoodLabel(entry.mood);
+    const loc = diaryLocationBrief(entry);
+    const whtml = diaryWeatherHTML(entry);
+    const bits = ['<span>' + esc(diaryCardDate(entry.date)) + '</span>'];
+    if (mood) {
+      bits.push('<span class="dd-mood">' + moodIconHTML(entry.mood, 'dd-face') + esc(mood) + '</span>');
+    }
+    if (loc) bits.push('<span>' + esc(loc) + '</span>');
+
+    const media = entry.attachments.map(function (a) {
+      if (a.kind === 'image') {
+        return '<button class="dd-media-item" type="button" data-dd-media="' + a.id + '">' +
+          '<img alt="" data-dd-thumb="' + a.id + '"></button>';
+      }
+      if (a.kind === 'video') {
+        return '<button class="dd-media-item dd-media-video" type="button" data-dd-media="' + a.id + '">' +
+          '<span class="dd-play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>' +
+          (a.duration ? '<span class="dd-dur">' + esc(diaryDurationText(a.duration)) + '</span>' : '') +
+        '</button>';
+      }
+      return '<button class="dd-doc" type="button" data-dd-media="' + a.id + '">' +
+        '<span class="dd-doc-name">' + esc(a.name) + '</span>' +
+      '</button>';
+    }).join('');
+
+    $('#ddBody').innerHTML =
+      '<div class="dd-meta">' + bits.join('') + '</div>' +
+      (whtml ? '<div class="dd-wx-line">' + whtml + '</div>' : '') +
+      (entry.text.trim()
+        ? '<div class="dd-text">' + esc(entry.text.trim()).replace(/\n/g, '<br>') + '</div>'
+        : '') +
+      (media ? '<div class="dd-media">' + media + '</div>' : '') +
+      (entry.tags.length
+        ? '<div class="dd-tags">' + entry.tags.map(function (t) {
+            return '<span class="dd-tag">' + esc(t) + '</span>';
+          }).join('') + '</div>'
+        : '') +
+      '<div class="dd-foot"><button class="soft-chip" type="button" data-dd-share="1">分享长图</button></div>';
+
+    hydrateDiaryDetail();
+  }
+
+  async function hydrateDiaryDetail() {
+    const nodes = $$('#ddBody [data-dd-thumb]');
+    for (const node of nodes) {
+      try {
+        const rec = await diaryFileGet(node.dataset.ddThumb);
+        if (!rec || !rec.data) continue;
+        const url = URL.createObjectURL(rec.data);
+        diaryDetailUrls.push(url);
+        node.src = url;
+      } catch (err) { /* 忽略 */ }
+    }
+  }
+
+  async function openDiaryDetailMedia(id) {
+    const entry = diaryByDate(diaryDetailDate);
+    if (!entry) return;
+    await openDiaryAttachment(id, entry.attachments);
+  }
+
+  function wrapCanvasLines(ctx, text, maxW) {
+    const out = [];
+    text.split('\n').forEach(function (para) {
+      let line = '';
+      for (const ch of para) {
+        if (line && ctx.measureText(line + ch).width > maxW) { out.push(line); line = ch; }
+        else line += ch;
+      }
+      out.push(line);
+    });
+    return out;
+  }
+
+  // ==================== 日记分享长图（皮肤 / 心情 / 天气 / 位置） ====================
+  const SHARE_W = 720;
+  const SHARE_EDGE = 22;
+  const SHARE_PAD = 44;
+  const SHARE_FONT = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif';
+  const SHARE_EMOJI_FONT = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif';
+
+  const SHARE_MOOD_EMOJI = {
+    happy: '😊', calm: '😌', tired: '😪', sad: '😢', annoyed: '😤', hopeful: '🌱',
+    excited: '🤩', grateful: '🙏', angry: '😠', anxious: '😰', lonely: '🥺',
+    surprised: '😮', shy: '😳', moved: '🥹', speechless: '😑', relieved: '😮‍💨',
+    bored: '😐', longing: '💭', heart: '❤️', star: '⭐', sun: '☀️', moon: '🌙',
+    leaf: '🍃', flame: '🔥', drop: '💧', bolt: '⚡'
+  };
+  const SHARE_WX_EMOJI = {
+    sun: '☀️', partly: '⛅', cloudy: '☁️', fog: '🌫️',
+    drizzle: '🌦️', rain: '🌧️', snow: '🌨️', storm: '⛈️'
+  };
+  // 皮肤 → 纹理画法：与 styles.css 里 --cs-tex 同源的轻量近似（不解析 CSS 渐变）
+  const SHARE_TEX = {
+    washi: 'paper', note: 'ruled', vine: 'paper', felt: 'fibre', linen: 'weave',
+    leather: 'grain', cream: 'blob', jelly: 'gloss', frost: 'streaks', rain: 'rain',
+    metal: 'brush', coast: 'waves', candy: 'dots', bamboo: 'bamboo', bound: 'rules',
+    starry: 'stars', blackhole: 'stars', moon: 'stars', outline: 'none'
+  };
+
+  function shareMoodEmoji(id) {
+    if (SHARE_MOOD_EMOJI[id]) return SHARE_MOOD_EMOJI[id];
+    const list = customMoods();
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === id) return SHARE_MOOD_EMOJI[list[i].glyph] || '🙂';
+    }
+    return '🙂';
+  }
+
+  // 天气只在有快照、且快照地点与当前位置一致时出现；否则整块省略
+  function shareWeather(entry) {
+    const w = entry && entry.weather;
+    if (!w) return null;
+    const q = diaryWeatherQuery(normalizeDiaryLocation(entry.location));
+    if (!q) return null;
+    if (w.place && w.place !== q) return null;
+    const W = window.Weather;
+    if (!W || typeof W.infoFor !== 'function') return null;
+    const info = W.infoFor(w.code);
+    if (!info) return null;
+    const max = isFinite(Number(w.max)) ? Math.round(Number(w.max)) + '°' : '';
+    const min = isFinite(Number(w.min)) ? Math.round(Number(w.min)) + '°' : '';
+    const temp = max ? (min ? max + ' / ' + min : max) : min;
+    return { emoji: SHARE_WX_EMOJI[info.key] || '☁️', desc: isEn() ? info.en : info.zh, temp: temp };
+  }
+
+  // 从真实渲染的皮肤变量取色，保证深浅主题与二十套皮肤都能正确套用
+  function shareTheme() {
+    const cs = getComputedStyle(document.body);
+    const pick = function (name, fallback) {
+      const v = (cs.getPropertyValue(name) || '').trim();
+      return v || fallback;
+    };
+    const dark = document.documentElement.classList.contains('dark');
+    const skin = effectiveCardStyleId();
+    const skinned = skin !== CARD_STYLE_DEFAULT;
+    const fbBg = dark ? '#1e2228' : '#ffffff';
+    return {
+      skin: skin,
+      dark: dark,
+      bg: skinned ? pick('--cs-bg', fbBg) : pick('--card', fbBg),
+      soft: skinned ? pick('--cs-bg-soft', fbBg) : pick('--card-soft', fbBg),
+      fg: skinned ? pick('--cs-fg', '#1b2433') : pick('--text', '#1b2433'),
+      fg2: skinned ? pick('--cs-fg-2', '#5a636f') : pick('--text-2', '#5a636f'),
+      line: skinned ? pick('--cs-line', 'rgba(0,0,0,.12)') : pick('--line', 'rgba(0,0,0,.12)'),
+      accent: skinned ? pick('--cs-accent', '#7C8CF8') : pick('--primary', '#7C8CF8'),
+      accentSoft: skinned ? pick('--cs-accent-soft', 'rgba(124,140,248,.12)') : pick('--primary-soft', 'rgba(124,140,248,.12)'),
+      radius: Math.max(10, Math.min(40, parseFloat(skinned ? pick('--cs-radius', '20px') : '20px') || 20)),
+      deco: skinned ? pick('--cs-deco', 'none') : 'none'
+    };
+  }
+
+  function shareColor(str) {
+    const s = String(str || '').trim();
+    let m = /^#([0-9a-f]{3})$/.exec(s);
+    if (m) {
+      return [parseInt(m[1][0] + m[1][0], 16), parseInt(m[1][1] + m[1][1], 16), parseInt(m[1][2] + m[1][2], 16), 1];
+    }
+    m = /^#([0-9a-f]{6})$/.exec(s);
+    if (m) {
+      return [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16), parseInt(m[1].slice(4, 6), 16), 1];
+    }
+    m = /^rgba?\(([^)]+)\)$/.exec(s);
+    if (m) {
+      const parts = m[1].split(',').map(function (p) { return parseFloat(p); });
+      return [parts[0] || 0, parts[1] || 0, parts[2] || 0, parts.length > 3 ? parts[3] : 1];
+    }
+    return [0, 0, 0, 1];
+  }
+
+  function shareTint(color, alpha) {
+    const c = shareColor(color);
+    return 'rgba(' + c[0] + ', ' + c[1] + ', ' + c[2] + ', ' + alpha + ')';
+  }
+
+  function shareRandom(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  }
+
+  function shareRoundRect(ctx, x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function shareTexture(ctx, theme, card) {
+    const kind = SHARE_TEX[theme.skin] || 'none';
+    if (kind === 'none') return;
+    const ink = theme.dark ? '255,255,255' : '0,0,0';
+    const rnd = shareRandom(11);
+    ctx.save();
+    shareRoundRect(ctx, card.x, card.y, card.w, card.h, theme.radius);
+    ctx.clip();
+    ctx.lineWidth = 1;
+    if (kind === 'paper' || kind === 'ruled') {
+      ctx.strokeStyle = 'rgba(' + ink + ',0.035)';
+      for (let ly = card.y; ly < card.y + card.h; ly += kind === 'ruled' ? 34 : 6) {
+        ctx.beginPath();
+        ctx.moveTo(card.x, ly);
+        ctx.lineTo(card.x + card.w, ly);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(' + ink + ',0.05)';
+      for (let i = 0; i < 240; i++) ctx.fillRect(card.x + rnd() * card.w, card.y + rnd() * card.h, 1.3, 1.3);
+    } else if (kind === 'fibre') {
+      ctx.strokeStyle = 'rgba(' + ink + ',0.04)';
+      for (let lx = card.x - card.h; lx < card.x + card.w; lx += 9) {
+        ctx.beginPath();
+        ctx.moveTo(lx, card.y);
+        ctx.lineTo(lx + card.h * .6, card.y + card.h);
+        ctx.stroke();
+      }
+    } else if (kind === 'weave') {
+      ctx.strokeStyle = 'rgba(' + ink + ',0.028)';
+      for (let ly = card.y; ly < card.y + card.h; ly += 7) {
+        ctx.beginPath();
+        ctx.moveTo(card.x, ly);
+        ctx.lineTo(card.x + card.w, ly);
+        ctx.stroke();
+      }
+      for (let lx = card.x; lx < card.x + card.w; lx += 7) {
+        ctx.beginPath();
+        ctx.moveTo(lx, card.y);
+        ctx.lineTo(lx, card.y + card.h);
+        ctx.stroke();
+      }
+    } else if (kind === 'grain') {
+      for (let i = 0; i < 130; i++) {
+        const bx = card.x + rnd() * card.w;
+        const by = card.y + rnd() * card.h;
+        const rad = 5 + rnd() * 18;
+        const g = ctx.createRadialGradient(bx, by, 0, bx, by, rad);
+        g.addColorStop(0, 'rgba(' + ink + ',0.045)');
+        g.addColorStop(1, 'rgba(' + ink + ',0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(bx - rad, by - rad, rad * 2, rad * 2);
+      }
+    } else if (kind === 'blob' || kind === 'gloss') {
+      for (let i = 0; i < 7; i++) {
+        const bx = card.x + rnd() * card.w;
+        const by = card.y + rnd() * card.h;
+        const rad = 60 + rnd() * 120;
+        const g = ctx.createRadialGradient(bx, by, 0, bx, by, rad);
+        g.addColorStop(0, 'rgba(' + ink + ',' + (kind === 'gloss' ? '0.05' : '0.035') + ')');
+        g.addColorStop(1, 'rgba(' + ink + ',0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(bx - rad, by - rad, rad * 2, rad * 2);
+      }
+    } else if (kind === 'streaks' || kind === 'rain') {
+      ctx.strokeStyle = 'rgba(' + ink + ',0.05)';
+      const step = kind === 'rain' ? 16 : 26;
+      for (let sx = card.x - card.h; sx < card.x + card.w; sx += step) {
+        ctx.beginPath();
+        ctx.moveTo(sx, card.y);
+        ctx.lineTo(sx + card.h * .35, card.y + card.h);
+        ctx.stroke();
+      }
+      if (kind === 'rain') {
+        ctx.fillStyle = 'rgba(' + ink + ',0.07)';
+        for (let i = 0; i < 60; i++) ctx.fillRect(card.x + rnd() * card.w, card.y + rnd() * card.h, 1.6, 6 + rnd() * 8);
+      }
+    } else if (kind === 'brush') {
+      for (let ly = card.y; ly < card.y + card.h; ly += 4) {
+        ctx.strokeStyle = 'rgba(' + ink + ',' + (0.015 + rnd() * 0.03) + ')';
+        ctx.beginPath();
+        ctx.moveTo(card.x, ly);
+        ctx.lineTo(card.x + card.w, ly + 1);
+        ctx.stroke();
+      }
+    } else if (kind === 'waves') {
+      ctx.strokeStyle = 'rgba(' + ink + ',0.05)';
+      for (let wy = card.y + 40; wy < card.y + card.h; wy += 44) {
+        ctx.beginPath();
+        for (let wx = card.x; wx <= card.x + card.w; wx += 6) {
+          const yy = wy + Math.sin((wx - card.x) / 34) * 5;
+          if (wx === card.x) ctx.moveTo(wx, yy);
+          else ctx.lineTo(wx, yy);
+        }
+        ctx.stroke();
+      }
+    } else if (kind === 'dots') {
+      ctx.fillStyle = 'rgba(' + ink + ',0.05)';
+      for (let dy = card.y + 12; dy < card.y + card.h; dy += 18) {
+        for (let dx = card.x + 12; dx < card.x + card.w; dx += 18) ctx.fillRect(dx, dy, 2, 2);
+      }
+    } else if (kind === 'bamboo') {
+      ctx.strokeStyle = 'rgba(' + ink + ',0.05)';
+      for (let bx = card.x + 18; bx < card.x + card.w; bx += 42) {
+        ctx.beginPath();
+        ctx.moveTo(bx, card.y);
+        ctx.lineTo(bx, card.y + card.h);
+        ctx.stroke();
+      }
+      for (let ny = card.y + 70; ny < card.y + card.h; ny += 140) {
+        ctx.beginPath();
+        ctx.moveTo(card.x, ny);
+        ctx.lineTo(card.x + card.w, ny);
+        ctx.stroke();
+      }
+    } else if (kind === 'rules') {
+      ctx.strokeStyle = 'rgba(' + ink + ',0.05)';
+      for (let lx = card.x + 14; lx < card.x + 44; lx += 7) {
+        ctx.beginPath();
+        ctx.moveTo(lx, card.y);
+        ctx.lineTo(lx, card.y + card.h);
+        ctx.stroke();
+      }
+    } else if (kind === 'stars') {
+      ctx.fillStyle = 'rgba(' + ink + ',0.10)';
+      for (let i = 0; i < 120; i++) {
+        const sx = card.x + rnd() * card.w;
+        const sy = card.y + rnd() * card.h;
+        const sz = rnd() > 0.85 ? 2 : 1;
+        ctx.fillRect(sx, sy, sz, sz);
+      }
+      if (theme.skin === 'blackhole') {
+        ctx.strokeStyle = 'rgba(' + ink + ',0.10)';
+        ctx.beginPath();
+        ctx.ellipse(card.x + card.w * .82, card.y + 78, 58, 20, -0.35, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      if (theme.skin === 'moon') {
+        ctx.fillStyle = 'rgba(' + ink + ',0.055)';
+        ctx.beginPath();
+        ctx.arc(card.x + card.w - 70, card.y + 66, 22, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(card.x + card.w - 96, card.y + 94, 11, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // 皮肤装饰图（--cs-deco 的 data:image/svg+xml）直接栅格化，位置与尺寸从简写里读取
+  function shareDecoInfo(theme) {
+    const v = theme.deco;
+    if (!v || v === 'none') return null;
+    const u = /url\((['"]?)([^'")]+)\1\)/.exec(v);
+    if (!u) return null;
+    const size = /\/\s*([\d.]+)px\s+([\d.]+)px/.exec(v);
+    return {
+      src: u[2],
+      w: size ? Math.max(36, parseFloat(size[1]) * 2.2) : 44,
+      h: size ? Math.max(36, parseFloat(size[2]) * 2.2) : 44,
+      top: /top\s+[-\d.]+px/.test(v),
+      left: /left\s+[-\d.]+px/.test(v)
+    };
+  }
+
+  function loadShareImage(src) {
+    return new Promise(function (resolve) {
+      if (!src) { resolve(null); return; }
+      const img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { resolve(null); };
+      img.src = src;
+    });
+  }
+
+  function shareDrawDeco(ctx, theme, card, deco, img) {
+    if (!deco || !img) return;
+    const x = deco.left ? card.x + 10 : card.x + card.w - deco.w - 12;
+    const y = deco.top ? card.y + 8 : card.y + card.h - deco.h - 6;
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    ctx.drawImage(img, x, y, deco.w, deco.h);
+    ctx.restore();
+  }
+
+  function shareChipWidth(ctx, chip) {
+    ctx.font = '400 24px ' + SHARE_EMOJI_FONT;
+    const ew = ctx.measureText(chip.emoji).width;
+    ctx.font = '400 22px ' + SHARE_FONT;
+    const tw = ctx.measureText(chip.text).width;
+    return { w: Math.ceil(12 + ew + 8 + tw + 16), ew: ew };
+  }
+
+  function shareChipRows(ctx, chips, maxW) {
+    const rows = [];
+    let row = [];
+    let rowW = 0;
+    chips.forEach(function (chip) {
+      const size = shareChipWidth(ctx, chip);
+      chip.w = size.w;
+      chip.ew = size.ew;
+      const need = chip.w + (row.length ? 10 : 0);
+      if (row.length && rowW + need > maxW) {
+        rows.push(row);
+        row = [chip];
+        rowW = chip.w;
+      } else {
+        row.push(chip);
+        rowW += need;
+      }
+    });
+    if (row.length) rows.push(row);
+    return rows;
+  }
+
+  function shareDrawChip(ctx, x, y, chip, theme) {
+    const h = 42;
+    const bg = chip.kind === 'mood' && chip.color
+      ? shareTint(chip.color, theme.dark ? 0.22 : 0.14)
+      : (chip.kind === 'wx' ? theme.accentSoft : theme.soft);
+    ctx.save();
+    shareRoundRect(ctx, x, y, chip.w, h, h / 2);
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = theme.line;
+    ctx.stroke();
+    ctx.textBaseline = 'middle';
+    ctx.font = '400 24px ' + SHARE_EMOJI_FONT;
+    ctx.fillText(chip.emoji, x + 12, y + h / 2 + 1);
+    ctx.font = '400 22px ' + SHARE_FONT;
+    ctx.fillStyle = theme.fg;
+    ctx.fillText(chip.text, x + 12 + chip.ew + 8, y + h / 2 + 1);
+    ctx.restore();
+  }
+
+  // 先量后画：先在测量用的 ctx 上排好版，拿到画布高度再真正建 canvas
+  function shareLayout(ctx, chips, lines, imgH) {
+    const W = SHARE_W;
+    const EDGE = SHARE_EDGE;
+    const PAD = SHARE_PAD;
+    const innerX = EDGE + PAD;
+    const innerW = W - innerX * 2;
+    let y = EDGE + PAD;
+    const titleBase = y + 34;
+    y = titleBase + 14;
+    const dateBase = y + 18;
+    y = dateBase + 16;
+    let meta = null;
+    if (chips.length) {
+      const rows = shareChipRows(ctx, chips, innerW);
+      meta = { rows: rows, top: y, height: rows.length * 42 + (rows.length - 1) * 10 };
+      y += meta.height;
+    }
+    y += meta ? 30 : 18;
+    const bodyBase = y + 26;
+    y = bodyBase + (lines.length - 1) * 42;
+    let imgY = 0;
+    if (imgH) {
+      y += 24;
+      imgY = y;
+      y += imgH;
+    }
+    const footY = y + 44;
+    return {
+      W: W,
+      H: Math.round(footY + 40 + EDGE),
+      edge: EDGE,
+      pad: PAD,
+      innerX: innerX,
+      innerW: innerW,
+      titleBase: titleBase,
+      dateBase: dateBase,
+      meta: meta,
+      bodyBase: bodyBase,
+      imgY: imgY,
+      footY: footY
+    };
+  }
+
+  async function shareDiaryLongImage() {
+    const entry = diaryByDate(diaryDetailDate);
+    if (!entry) return;
+    const probe = document.createElement('canvas').getContext('2d');
+    const innerW = SHARE_W - (SHARE_EDGE + SHARE_PAD) * 2;
+
+    const text = entry.text.trim() || diaryCardTitle(entry, '').html.replace(/<[^>]+>/g, '') || T('这篇只有心情和附件');
+    probe.font = '400 26px ' + SHARE_FONT;
+    let lines = wrapCanvasLines(probe, text, innerW);
+    // 画布高度有上限：超长正文截到 180 行，末尾补省略号
+    if (lines.length > 180) {
+      lines = lines.slice(0, 180);
+      lines[179] = lines[179].replace(/[\s\S]$/, '') + '…';
+    }
+
+    let firstImg = null;
+    let firstImgUrl = '';
+    const imgMeta = (entry.attachments || []).find(function (a) { return a.kind === 'image'; });
+    if (imgMeta) {
+      try {
+        const rec = await diaryFileGet(imgMeta.id);
+        if (rec && rec.data) {
+          firstImgUrl = URL.createObjectURL(rec.data);
+          firstImg = await loadShareImage(firstImgUrl);
+        }
+      } catch (err) {
+        firstImg = null;
+      }
+    }
+    const imgW = innerW;
+    const imgH = firstImg ? Math.min(520, Math.round(imgW * firstImg.height / firstImg.width)) : 0;
+
+    // 心情（含自定义）→ 天气（仅快照且地点一致）→ 地区；缺失的整块不参与排版
+    const chips = [];
+    if (entry.mood) {
+      const mm = moodMeta(entry.mood);
+      chips.push({
+        kind: 'mood',
+        emoji: shareMoodEmoji(entry.mood),
+        text: moodLabel(entry.mood),
+        color: mm && mm.color ? mm.color : null
+      });
+    }
+    const wx = shareWeather(entry);
+    if (wx) {
+      chips.push({ kind: 'wx', emoji: wx.emoji, text: wx.desc + (wx.temp ? '  ' + wx.temp : '') });
+    }
+    const loc = diaryLocationBrief(entry);
+    if (loc) chips.push({ kind: 'loc', emoji: '📍', text: loc });
+
+    const theme = shareTheme();
+    const layout = shareLayout(probe, chips, lines, imgH);
+    const W = layout.W;
+    const H = layout.H;
+    const card = { x: SHARE_EDGE, y: SHARE_EDGE, w: W - SHARE_EDGE * 2, h: H - SHARE_EDGE * 2 };
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+
+    // 底色：整张图先铺皮肤底色，再压一层薄雾，让卡片从画布里浮起来
+    ctx.fillStyle = theme.bg;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = theme.dark ? 'rgba(255,255,255,.035)' : 'rgba(24,26,32,.045)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.shadowColor = theme.dark ? 'rgba(0,0,0,.45)' : 'rgba(30,34,44,.16)';
+    ctx.shadowBlur = 24;
+    ctx.shadowOffsetY = 8;
+    shareRoundRect(ctx, card.x, card.y, card.w, card.h, theme.radius);
+    ctx.fillStyle = theme.bg;
+    ctx.fill();
+    ctx.restore();
+
+    shareTexture(ctx, theme, card);
+
+    ctx.save();
+    shareRoundRect(ctx, card.x, card.y, card.w, card.h, theme.radius);
+    ctx.strokeStyle = theme.line;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+
+    // 装饰允许探出卡片，但会被画布裁住，不会溢出图片
+    const deco = shareDecoInfo(theme);
+    if (deco) {
+      const decoImg = await loadShareImage(deco.src);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.clip();
+      shareDrawDeco(ctx, theme, card, deco, decoImg);
+      ctx.restore();
+    }
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = theme.fg;
+    ctx.font = '600 34px ' + SHARE_FONT;
+    ctx.fillText(diaryDateTitle(entry.date), layout.innerX, layout.titleBase);
+
+    ctx.fillStyle = theme.fg2;
+    ctx.font = '400 19px ' + SHARE_FONT;
+    ctx.fillText(diaryCardDate(entry.date), layout.innerX, layout.dateBase);
+
+    if (layout.meta) {
+      layout.meta.rows.forEach(function (row, i) {
+        let x = layout.innerX;
+        const y = layout.meta.top + i * 52;
+        row.forEach(function (chip) {
+          shareDrawChip(ctx, x, y, chip, theme);
+          x += chip.w + 10;
+        });
+      });
+    }
+
+    ctx.fillStyle = theme.fg;
+    ctx.font = '400 26px ' + SHARE_FONT;
+    lines.forEach(function (line, i) {
+      ctx.fillText(line, layout.innerX, layout.bodyBase + i * 42);
+    });
+
+    if (firstImg) {
+      ctx.save();
+      shareRoundRect(ctx, layout.innerX, layout.imgY, imgW, imgH, Math.min(18, theme.radius));
+      ctx.clip();
+      ctx.drawImage(firstImg, layout.innerX, layout.imgY, imgW, imgH);
+      ctx.restore();
+    }
+
+    ctx.strokeStyle = theme.line;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(layout.innerX, layout.footY - 24);
+    ctx.lineTo(layout.innerX + layout.innerW, layout.footY - 24);
+    ctx.stroke();
+
+    ctx.fillStyle = theme.fg2;
+    ctx.font = '400 17px ' + SHARE_FONT;
+    ctx.fillText('AeroPlan · ' + diaryDateTitle(entry.date), layout.innerX, layout.footY);
+
+    canvas.toBlob(function (blob) {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const viewer = $('#diaryViewer');
+      const vid = $('#diaryViewerVideo');
+      const img = $('#diaryViewerImg');
+      if (vid) { vid.hidden = true; try { vid.pause(); } catch (err) { /* 忽略 */ } vid.removeAttribute('src'); }
+      if (img.dataset.url) { try { URL.revokeObjectURL(img.dataset.url); } catch (err) { /* 忽略 */ } }
+      img.dataset.url = url;
+      img.src = url;
+      img.hidden = false;
+      $('#diaryViewerName').textContent = T('长按图片保存到相册');
+      viewer.hidden = false;
+      requestAnimationFrame(function () { viewer.classList.add('open'); });
+    }, 'image/png');
+    if (firstImgUrl) {
+      window.setTimeout(function () { try { URL.revokeObjectURL(firstImgUrl); } catch (err) { /* 忽略 */ } }, 4000);
+    }
   }
 
   function diaryDurationText(sec) {
@@ -10811,6 +12132,8 @@
     renderDiaryChips();
     syncDiaryWriteButton();
     syncDiaryManageBar();
+    // 倒数日横滑条：位于日记页搜索栏下方、日记列表之上
+    renderCountdownStrip();
 
     const list = diaryFiltered();
     const body = $('#diaryBody');
@@ -10869,6 +12192,15 @@
     renderDiary();
   }
 
+  function selectAllDiary() {
+    $$('#diaryBody [data-diary-open]').forEach(function (card) {
+      state.diarySel.add(card.dataset.diaryOpen);
+      card.classList.add('selected');
+    });
+    haptic(8);
+    syncDiaryManageBar();
+  }
+
   function toggleDiarySel(date, el) {
     if (state.diarySel.has(date)) state.diarySel.delete(date);
     else state.diarySel.add(date);
@@ -10899,10 +12231,11 @@
           mood: entry.mood,
           tags: entry.tags.slice(),
           location: entry.location ? Object.assign({}, entry.location) : null,
+          weather: entry.weather ? Object.assign({}, entry.weather) : null,
           attachments: entry.attachments.map(function (a) { return Object.assign({}, a); }),
           createdAt: entry.createdAt
         }
-      : { date: key, title: '', text: '', mood: '', tags: [], location: null, attachments: [], createdAt: Date.now() };
+      : { date: key, title: '', text: '', mood: '', tags: [], location: null, weather: null, attachments: [], createdAt: Date.now() };
     state.diaryEditorOpen = true;
     state.diaryEditingDate = key;
     state.diaryDirty = false;
@@ -10912,6 +12245,7 @@
     const el = $('#diaryEditor');
     el.hidden = false;
     renderDiaryEditor();
+    refreshDiaryWeather(false);
     requestAnimationFrame(function () { el.classList.add('open'); });
     const scroll = $('.de-scroll', el);
     if (scroll) scroll.scrollTop = 0;
@@ -10971,9 +12305,10 @@
       summary.hidden = !brief;
     }
     const pick = $('#deLocPick');
-    if (pick) pick.textContent = brief ? T('修改省市') : T('选择省市');
+    if (pick) pick.textContent = brief ? T('修改位置') : T('选择位置');
     const clear = $('#deLocClear');
     if (clear) clear.hidden = !loc;
+    renderDiaryWeather();
   }
 
   function diarySetLocation(next) {
@@ -10981,19 +12316,206 @@
     if (!draft) return;
     draft.location = normalizeDiaryLocation(next);
     renderDiaryLocation();
+    // 位置一变就重新对天气；没选滚轮位置时清空天气，绝不按设备定位补
+    refreshDiaryWeather(false);
     state.diaryDirty = true;
     scheduleDiarySave();
   }
 
-  // ---------- 省市滚轮（regions.js 内置表，完全离线）----------
-  const regionPicker = { open: false, province: 0, city: 0 };
+  // ---------- 日记天气：只用滚轮选的位置，结果随日记持久化 ----------
+  const NO_DISTRICT = '不限';
+  let diaryWeatherTimer = null;
+  let diaryWeatherSeq = 0;
+
+  function diaryWeatherQuery(loc) {
+    if (!loc || (!loc.province && !loc.city)) return '';
+    const parts = [];
+    [loc.province, loc.city, loc.district].forEach(function (p) {
+      if (p && p !== NO_DISTRICT && parts.indexOf(p) === -1) parts.push(p);
+    });
+    return parts.join(' ');
+  }
+
+  // 位置变了但天气还是旧地点的一律不显示，避免张冠李戴
+  function diaryWeatherHTML(record) {
+    const w = record && record.weather;
+    if (!w) return '';
+    const loc = normalizeDiaryLocation(record.location);
+    const q = diaryWeatherQuery(loc);
+    if (!q) return '';
+    if (w.place && w.place !== q) return '';
+    const W = window.Weather;
+    if (!W || typeof W.infoFor !== 'function') return '';
+    const info = W.infoFor(w.code);
+    if (!info) return '';
+    const max = isFinite(Number(w.max)) ? Math.round(Number(w.max)) + '°' : '—';
+    const min = isFinite(Number(w.min)) ? Math.round(Number(w.min)) + '°' : '';
+    const tone = info.tone ? ' ' + info.tone : '';
+    const icon = String(info.icon || '').replace('<svg ', '<svg class="dw-svg" ');
+    return '<span class="dw-wx">' +
+      '<span class="dw-ico' + tone + '">' + icon + '</span>' +
+      '<span class="dw-desc">' + esc(isEn() ? info.en : info.zh) + '</span>' +
+      '<span class="dw-temp">' + max + (min ? '<i>/' + min + '</i>' : '') + '</span>' +
+    '</span>';
+  }
+
+  // 卡片上只放图标 + 最高温，避免在窄卡片里堆文字
+  function diaryWeatherBrief(entry) {
+    const w = entry && entry.weather;
+    if (!w) return '';
+    const q = diaryWeatherQuery(normalizeDiaryLocation(entry.location));
+    if (!q) return '';
+    if (w.place && w.place !== q) return '';
+    const W = window.Weather;
+    if (!W || typeof W.infoFor !== 'function') return '';
+    const info = W.infoFor(w.code);
+    if (!info) return '';
+    const max = isFinite(Number(w.max)) ? Math.round(Number(w.max)) + '°' : '—';
+    return '<span class="dc-wx"><span class="dw-ico' + (info.tone ? ' ' + info.tone : '') + '">' +
+      String(info.icon || '').replace('<svg ', '<svg class="dw-svg" ') + '</span>' +
+      '<span>' + max + '</span></span>';
+  }
+
+  function renderDiaryWeather() {
+    const box = $('#deWeather');
+    if (!box) return;
+    const draft = state.diaryDraft;
+    const html = diaryWeatherHTML(draft);
+    box.innerHTML = html;
+    box.hidden = !html;
+  }
+
+  // 只在「今天」这一篇上主动联网；历史日记只展示已保存的快照
+  function refreshDiaryWeather(force) {
+    clearTimeout(diaryWeatherTimer);
+    diaryWeatherTimer = setTimeout(function () {
+      const draft = state.diaryDraft;
+      if (!draft || !state.diaryEditorOpen) return;
+      const loc = normalizeDiaryLocation(draft.location);
+      const q = diaryWeatherQuery(loc);
+      if (!q) {
+        // 没选位置就不显示天气：清掉旧快照，避免残留
+        if (draft.weather) {
+          draft.weather = null;
+          renderDiaryWeather();
+          scheduleDiarySave();
+        }
+        return;
+      }
+      if (draft.date !== todayKey()) {
+        renderDiaryWeather();
+        return;
+      }
+      const W = window.Weather;
+      if (!W || typeof W.dailyForPlace !== 'function') {
+        renderDiaryWeather();
+        return;
+      }
+      const cached = draft.weather;
+      if (!force && cached && cached.date === todayKey() && cached.place === q) {
+        renderDiaryWeather();
+        return;
+      }
+      const seq = ++diaryWeatherSeq;
+      W.dailyForPlace(q).then(function (snap) {
+        if (seq !== diaryWeatherSeq) return;
+        const live = state.diaryDraft;
+        if (!live || !state.diaryEditorOpen || live.date !== todayKey()) return;
+        if (diaryWeatherQuery(normalizeDiaryLocation(live.location)) !== q) return;
+        live.weather = normalizeDiaryWeather({
+          date: todayKey(), code: snap.code, max: snap.max, min: snap.min, place: q, at: snap.at
+        });
+        renderDiaryWeather();
+        scheduleDiarySave();
+      }).catch(function () {
+        // 离线、超时或没有该地点：保留已保存的快照，不清空
+        renderDiaryWeather();
+      });
+    }, 240);
+  }
+
+  // ---------- 省市区县滚轮（regions.js / districts.js 内置表，完全离线）----------
+  const regionPicker = { open: false, province: 0, city: 0, district: 0 };
 
   function regionData() {
     return Array.isArray(window.CN_REGIONS) ? window.CN_REGIONS : [];
   }
 
+  // 第三级区县：表里没有的城市只保留「不限」一项，绝不联网补数据
+  function districtsFor(city) {
+    const map = window.CN_DISTRICTS;
+    if (!map || !city || !Array.isArray(map[city])) return [];
+    return map[city];
+  }
+
+  function districtOptionsFor(picker) {
+    const data = regionData();
+    const p = data[picker.province] || data[0];
+    const city = p ? p.cities[picker.city] : '';
+    return [NO_DISTRICT].concat(districtsFor(city));
+  }
+
+  function districtOptions() {
+    return districtOptionsFor(regionPicker);
+  }
+
+  // 两个面板共用同一套滚轮逻辑，各自持有一份 picker 状态和元素 id
+  const REGION_WHEEL_IDS = { province: '#regionProvince', city: '#regionCity', district: '#regionDistrict' };
+  const CITY_WHEEL_IDS = { province: '#cityProvince', city: '#cityCity', district: '#cityDistrict' };
+
+  function wheelEls(ids) {
+    return { province: $(ids.province), city: $(ids.city), district: $(ids.district) };
+  }
+
+  function renderPickerWheels(picker, ids) {
+    const data = regionData();
+    if (!data.length) return;
+    const els = wheelEls(ids);
+    const pi = Math.max(0, Math.min(data.length - 1, picker.province));
+    picker.province = pi;
+    buildRegionWheel(els.province, data.map(function (p) { return p.province; }), pi, function (idx) {
+      if (idx === picker.province) return;
+      picker.province = idx;
+      picker.city = 0;
+      picker.district = 0;
+      // 只重建二、三级；省列已经在用户松手的位置，不必回贴
+      paintCityWheel(picker, els);
+    });
+    paintCityWheel(picker, els);
+  }
+
+  function paintCityWheel(picker, els) {
+    const data = regionData();
+    const p = data[picker.province] || data[0];
+    const cities = p.cities;
+    const ci = Math.max(0, Math.min(cities.length - 1, picker.city));
+    picker.city = ci;
+    buildRegionWheel(els.city, cities, ci, function (i) {
+      picker.city = i;
+      picker.district = 0;
+      paintDistrictWheel(picker, els);
+    });
+    paintDistrictWheel(picker, els);
+  }
+
+  function paintDistrictWheel(picker, els) {
+    const values = districtOptionsFor(picker);
+    const di = Math.max(0, Math.min(values.length - 1, picker.district));
+    picker.district = di;
+    buildRegionWheel(els.district, values, di, function (i) {
+      picker.district = i;
+    });
+  }
+
+  function renderRegionWheels() {
+    renderPickerWheels(regionPicker, REGION_WHEEL_IDS);
+  }
+
   function buildRegionWheel(el, values, index, onPick) {
     if (!el) return;
+    // 吸附步长取自每列 data-item-h（缺省 40px，与 CSS .wheel-item 行高一致）；
+    // 行高改小时必须同步改这个属性，否则松手会错位
+    const itemH = function () { return Number(el.dataset.itemH) || 40; };
     const at = Math.max(0, Math.min(values.length - 1, index || 0));
     el.innerHTML = values.map(function (v) {
       return '<div class="wheel-item">' + esc(v) + '</div>';
@@ -11001,40 +12523,84 @@
     if (!el.dataset.bound) {
       el.dataset.bound = '1';
       let timer = null;
-      el.addEventListener('scroll', function () {
+      let drag = null;
+      let raf = 0;
+
+      // 松手后按最近一项吸附
+      function snapNow(smooth) {
+        if (!el.children.length) return;
+        const idx = Math.max(0, Math.min(el.children.length - 1, Math.round(el.scrollTop / itemH())));
+        const top = idx * itemH();
+        cancelAnimationFrame(raf);
+        if (smooth) {
+          el.scrollTo({ top: top, behavior: 'smooth' });
+        } else {
+          el.scrollTop = top;
+        }
+        Array.prototype.forEach.call(el.children, function (c, i) {
+          c.classList.toggle('active', i === idx);
+        });
+        if (el._onPick) el._onPick(idx);
+      }
+
+      function moveTo(y) {
+        if (!drag) return;
+        el.scrollTop = drag.top - (y - drag.y);
+      }
+
+      // 触摸主通道：passive:false + preventDefault，避免被祖先滚动抢走
+      el.addEventListener('touchstart', function (e) {
+        if (e.touches.length !== 1) return;
         clearTimeout(timer);
-        timer = setTimeout(function () {
-          if (!el.children.length) return;
-          const idx = Math.max(0, Math.min(el.children.length - 1, Math.round(el.scrollTop / 40)));
-          el.scrollTo({ top: idx * 40, behavior: 'smooth' });
-          Array.prototype.forEach.call(el.children, function (c, i) {
-            c.classList.toggle('active', i === idx);
-          });
-          if (el._onPick) el._onPick(idx);
-        }, 140);
+        cancelAnimationFrame(raf);
+        drag = { y: e.touches[0].clientY, top: el.scrollTop };
+        e.stopPropagation();
+      }, { passive: true });
+
+      el.addEventListener('touchmove', function (e) {
+        if (!drag || e.touches.length !== 1) return;
+        moveTo(e.touches[0].clientY);
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+      }, { passive: false });
+
+      ['touchend', 'touchcancel'].forEach(function (type) {
+        el.addEventListener(type, function (e) {
+          if (!drag) return;
+          drag = null;
+          e.stopPropagation();
+          if (navigator.vibrate) navigator.vibrate(6);
+          snapNow(true);
+        }, { passive: true });
+      });
+
+      // 鼠标也支持拖动
+      el.addEventListener('pointerdown', function (e) {
+        if (e.pointerType === 'touch') return;
+        drag = { y: e.clientY, top: el.scrollTop };
+        el.setPointerCapture(e.pointerId);
+      });
+      el.addEventListener('pointermove', function (e) {
+        if (!drag || e.pointerType === 'touch') return;
+        moveTo(e.clientY);
+      });
+      el.addEventListener('pointerup', function () {
+        if (!drag) return;
+        drag = null;
+        snapNow(true);
+      });
+
+      el.addEventListener('scroll', function () {
+        if (drag) return;
+        clearTimeout(timer);
+        timer = setTimeout(function () { snapNow(true); }, 140);
       }, { passive: true });
     }
     el._onPick = onPick;
     Array.prototype.forEach.call(el.children, function (c, i) {
       c.classList.toggle('active', i === at);
     });
-    el.scrollTop = at * 40;
-  }
-
-  function renderRegionWheels() {
-    const data = regionData();
-    if (!data.length) return;
-    const pi = Math.max(0, Math.min(data.length - 1, regionPicker.province));
-    const provinceEl = $('#regionProvince');
-    buildRegionWheel(provinceEl, data.map(function (p) { return p.province; }), pi, function (idx) {
-      if (idx === regionPicker.province) return;
-      regionPicker.province = idx;
-      regionPicker.city = 0;
-      const cities = (data[idx] || data[0]).cities;
-      buildRegionWheel($('#regionCity'), cities, 0, function (i) { regionPicker.city = i; });
-    });
-    const cities = (data[pi] || data[0]).cities;
-    buildRegionWheel($('#regionCity'), cities, regionPicker.city, function (i) { regionPicker.city = i; });
+    el.scrollTop = at * itemH();
   }
 
   function openRegionSheet() {
@@ -11059,6 +12625,12 @@
     }
     regionPicker.province = pi;
     regionPicker.city = ci;
+    // 恢复第三级：命中内置区县就停在那一项，否则回到「不限」
+    regionPicker.district = 0;
+    if (loc && loc.district) {
+      const found = districtOptions().indexOf(loc.district);
+      if (found !== -1) regionPicker.district = found;
+    }
     regionPicker.open = true;
     renderRegionWheels();
     $('#regionBackdrop').hidden = false;
@@ -11089,9 +12661,11 @@
     if (!data.length) return;
     const p = data[Math.max(0, Math.min(data.length - 1, regionPicker.province))] || data[0];
     const city = p.cities[Math.max(0, Math.min(p.cities.length - 1, regionPicker.city))] || '';
+    const options = districtOptions();
+    const district = regionPicker.district > 0 ? (options[regionPicker.district] || '') : '';
     const draft = state.diaryDraft;
     const text = draft && draft.location ? draft.location.text : '';
-    diarySetLocation({ province: p.province, city: city, text: text });
+    diarySetLocation({ province: p.province, city: city, district: district, text: text });
     closeRegionSheet();
     haptic(8);
   }
@@ -11099,14 +12673,21 @@
   function renderDiaryMoods() {
     const draft = state.diaryDraft;
     if (!draft) return;
-    $('#deMoods').innerHTML = DIARY_MOODS.map(function (m) {
+    const list = moodAll();
+    const html = list.map(function (m) {
       const active = draft.mood === m.id;
-      return '<button class="de-mood' + (active ? ' active' : '') + '" type="button" data-mood="' + m.id + '"' +
-        ' aria-pressed="' + active + '">' +
+      return '<button class="de-mood' + (active ? ' active' : '') + (m.custom ? ' custom' : '') + '"' +
+        ' type="button" data-mood="' + m.id + '" aria-pressed="' + active + '"' +
+        (m.color ? ' style="--mood-color:' + esc(m.color) + '"' : '') + '>' +
         moodIconHTML(m.id, 'de-mood-face') +
-        '<span>' + esc(isEn() ? m.en : m.zh) + '</span>' +
+        '<span>' + esc(m.label) + '</span>' +
       '</button>';
     }).join('');
+    $('#deMoods').innerHTML = html +
+      '<button class="de-mood de-mood-add" type="button" data-mood-manage>' +
+        '<svg class="de-mood-face" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.2v11.6M6.2 12h11.6"/></svg>' +
+        '<span>' + esc(T('自定义')) + '</span>' +
+      '</button>';
   }
 
   function renderDiaryTags() {
@@ -11460,10 +13041,11 @@
     haptic(8);
   }
 
-  async function openDiaryAttachment(id) {
-    const draft = state.diaryDraft;
-    if (!draft) return;
-    const meta = draft.attachments.find(function (a) { return a.id === id; });
+  async function openDiaryAttachment(id, attachments) {
+    // 详情页与写作页共用：详情页直接传自己的附件列表，不改动 state.diaryDraft，
+    // 避免异步取文件期间自动保存读到一份缺字段的草稿
+    const list = attachments || (state.diaryDraft && state.diaryDraft.attachments) || [];
+    const meta = list.find(function (a) { return a.id === id; });
     if (!meta) return;
     let rec = null;
     try { rec = await diaryFileGet(id); } catch (err) { rec = null; }
@@ -11626,6 +13208,7 @@
       mood: draft.mood,
       tags: draft.tags.slice(),
       location: location ? Object.assign({}, location) : null,
+      weather: draft.weather ? Object.assign({}, draft.weather) : null,
       attachments: draft.attachments.map(function (a) { return Object.assign({}, a); }),
       createdAt: existing ? existing.createdAt : (draft.createdAt || Date.now()),
       updatedAt: Date.now()
@@ -11814,6 +13397,7 @@
       else enterDiaryManage();
     });
     $('#diaryManageCancel').addEventListener('click', exitDiaryManage);
+    $('#diaryManageAll').addEventListener('click', selectAllDiary);
     $('#diaryManageDelete').addEventListener('click', deleteSelectedDiary);
 
     $('#diaryBody').addEventListener('click', function (e) {
@@ -11825,7 +13409,8 @@
       }
       const date = card.dataset.diaryOpen;
       if (state.diaryManage) { toggleDiarySel(date, card); return; }
-      openDiaryEditor(date);
+      // 非管理态交给 #diaryBody 自己的 click 处理器（统一走详情页 + 滑动/长按判定）
+      return;
     });
 
     $('#diaryBody').addEventListener('keydown', function (e) {
@@ -11835,7 +13420,7 @@
       e.preventDefault();
       const date = card.dataset.diaryOpen;
       if (state.diaryManage) toggleDiarySel(date, card);
-      else openDiaryEditor(date);
+      else openDiaryDetail(date);
     });
 
     $('#diaryDone').addEventListener('click', function () { closeDiaryEditor(true); });
@@ -11877,6 +13462,11 @@
     $('#regionBackdrop').addEventListener('click', closeRegionSheet);
 
     $('#deMoods').addEventListener('click', function (e) {
+      if (e.target.closest('[data-mood-manage]')) {
+        haptic(8);
+        openMoodPage(true);
+        return;
+      }
       const btn = e.target.closest('[data-mood]');
       if (!btn || !state.diaryDraft) return;
       // 再点一次取消心情
@@ -11966,6 +13556,150 @@
       if (e.target === $('#diaryViewer')) closeDiaryViewer();
     });
 
+    // ---------- 日记详情页 ----------
+    $('#ddBack').addEventListener('click', closeDiaryDetail);
+    $('#ddEdit').addEventListener('click', function () {
+      const date = diaryDetailDate;
+      closeDiaryDetail();
+      openDiaryEditor(date);
+    });
+    $('#ddBody').addEventListener('click', function (e) {
+      const shared = e.target.closest('[data-dd-share]');
+      if (shared) { shareDiaryLongImage(); return; }
+      const media = e.target.closest('[data-dd-media]');
+      if (media) { openDiaryDetailMedia(media.dataset.ddMedia); return; }
+    });
+
+    // ---------- 日记卡片：时间线左滑 / 网格长按 ----------
+    let diaryLockUntil = 0;
+    let dcSwipe = null;
+
+    function dcSwipeClose(wrap, card) {
+      if (!wrap) return;
+      wrap.classList.remove('swiped');
+      if (card) card.style.transform = '';
+    }
+
+    function openDiaryPop(date, x, y) {
+      const pop = $('#diaryPop');
+      pop.dataset.date = date;
+      pop.hidden = false;
+      const w = 128;
+      const h = 96;
+      pop.style.left = Math.max(10, Math.min(window.innerWidth - w - 10, x - w / 2)) + 'px';
+      pop.style.top = Math.max(10, Math.min(window.innerHeight - h - 10, y - h / 2)) + 'px';
+    }
+
+    function closeDiaryPop() {
+      const pop = $('#diaryPop');
+      if (pop) pop.hidden = true;
+    }
+
+    $('#diaryBody').addEventListener('pointerdown', function (e) {
+      if (state.diaryManage) return;
+      const wrap = e.target.closest('.dc-swipe');
+      const card = wrap ? wrap.querySelector('.diary-card') : null;
+      if (card && !e.target.closest('.dc-swipe-actions')) {
+        dcSwipe = {
+          wrap: wrap,
+          card: card,
+          x: e.clientX,
+          y: e.clientY,
+          base: wrap.classList.contains('swiped') ? -136 : 0,
+          dx: 0,
+          moved: false,
+          timer: 0
+        };
+      }
+      const tile = e.target.closest('.dcard');
+      if (tile && tile.dataset.diaryCard) {
+        const date = tile.dataset.diaryCard;
+        const px = e.clientX;
+        const py = e.clientY;
+        dcSwipe = dcSwipe || { wrap: null, card: null, x: px, y: py, dx: 0, moved: false, timer: 0 };
+        dcSwipe.timer = window.setTimeout(function () {
+          dcSwipe.timer = 0;
+          diaryLockUntil = Date.now() + 520;
+          haptic(12);
+          openDiaryPop(date, px, py);
+        }, 420);
+      }
+    });
+
+    $('#diaryBody').addEventListener('pointermove', function (e) {
+      if (!dcSwipe) return;
+      const dx = e.clientX - dcSwipe.x;
+      const dy = e.clientY - dcSwipe.y;
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        if (Math.abs(dy) > Math.abs(dx)) { clearTimeout(dcSwipe.timer); dcSwipe.moved = true; return; }
+        if (Math.abs(dx) > 8) {
+          clearTimeout(dcSwipe.timer);
+          dcSwipe.timer = 0;
+          dcSwipe.moved = true;
+        }
+        if (dcSwipe.card) {
+          const offset = Math.max(-136, Math.min(0, dcSwipe.base + dx));
+          dcSwipe.card.style.transform = 'translateX(' + offset + 'px)';
+          dcSwipe.dx = offset;
+        }
+      }
+    });
+
+    function endDiarySwipe() {
+      if (!dcSwipe) return;
+      clearTimeout(dcSwipe.timer);
+      if (dcSwipe.moved && dcSwipe.card) {
+        const open = dcSwipe.dx <= -68;
+        $$('.dc-swipe.swiped').forEach(function (w) {
+          if (w !== dcSwipe.wrap) dcSwipeClose(w, w.querySelector('.diary-card'));
+        });
+        dcSwipe.wrap.classList.toggle('swiped', open);
+        dcSwipe.card.style.transform = open ? 'translateX(-136px)' : '';
+        diaryLockUntil = Date.now() + 260;
+      }
+      dcSwipe = null;
+    }
+
+    $('#diaryBody').addEventListener('pointerup', endDiarySwipe);
+    $('#diaryBody').addEventListener('pointercancel', endDiarySwipe);
+
+    $('#diaryBody').addEventListener('click', function (e) {
+      const act = e.target.closest('[data-diary-act]');
+      if (act) {
+        e.preventDefault();
+        e.stopPropagation();
+        const date = act.dataset.date;
+        if (act.dataset.diaryAct === 'edit') {
+          closeDiaryPop();
+          openDiaryEditor(date);
+        } else {
+          closeDiaryPop();
+          confirmDeleteDiary(date);
+        }
+        return;
+      }
+      if (Date.now() < diaryLockUntil) return;
+      const card = e.target.closest('[data-diary-open]');
+      if (card) {
+        const wrap = card.closest('.dc-swipe');
+        if (wrap && wrap.classList.contains('swiped')) { dcSwipeClose(wrap, card); return; }
+        if (state.diaryManage) return;
+        openDiaryDetail(card.dataset.diaryOpen);
+      }
+    });
+
+    $('#diaryPop').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-diary-pop]');
+      if (!btn) return;
+      const date = $('#diaryPop').dataset.date;
+      closeDiaryPop();
+      if (btn.dataset.diaryPop === 'edit') openDiaryEditor(date);
+      else confirmDeleteDiary(date);
+    });
+    document.addEventListener('pointerdown', function (e) {
+      if (!e.target.closest('#diaryPop') && !e.target.closest('.dcard')) closeDiaryPop();
+    });
+
     $('#exportBtn').addEventListener('click', openExportSheet);
     $('#exportNoFiles').addEventListener('click', function () {
       closeExportSheet();
@@ -12007,7 +13741,6 @@
     if (t !== state.lastDayKey) {
       state.lastDayKey = t;
       renderAll();
-      scheduleReminders();
     } else {
       renderSummary();
     }
@@ -12034,6 +13767,11 @@
     // 旧代号（light-schedule）的数据先迁移到新库/新键，再读取，避免「打开就空了」
     await migrateLegacyStore();
     await loadAll();
+    // 旧纪念日缺 direction/repeat/calendar：读入时已按日期推断，这里把推断结果写回存储一次
+    if (cdNeedsMigration) {
+      cdNeedsMigration = false;
+      try { await persistCountdowns(true); } catch (err) { /* 写不进去也不影响当次显示 */ }
+    }
     if (state.migrationLog.length) {
       state.meta.migrationLog = state.migrationLog.slice();
       try { await persistMeta(); } catch (err) { /* 迁移日志写不进去不影响数据 */ }
@@ -12043,6 +13781,11 @@
     if (state.meta.lang && window.I18N && state.meta.lang !== window.I18N.lang) {
       window.I18N.setLang(state.meta.lang);
       try { localStorage.setItem(LANG_MIRROR_KEY, state.meta.lang); } catch (err) { /* 忽略 */ }
+    }
+
+    // 英文且存的是「黄历」：启动时迁到「星座」，否则控件里没有对应项
+    if (migrateCalendarCardForLang()) {
+      try { await persistMeta(); } catch (err) { /* 写不进去也不影响当次显示 */ }
     }
 
     // 设备标识：随机 UUID，只用于把同意记录绑定到本机；不使用设备型号等硬件信息
@@ -12062,52 +13805,8 @@
     registerSW();
     scheduleNextMidnight();
     setInterval(onTick, 30000);
-    // 回到前台时重排一次：把后台期间新增/修改的提醒补进系统，
-    // 也顺手把已经过去的实例从排程里剔除
-    document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible') scheduleReminders();
-    });
 
-    // 渠道必须在第一次排程之前建好：Android 8+ 的通知按渠道投递，缺渠道会被静默丢弃。
-    // 先删掉旧 id 的渠道（参数不可改，重建同 id 无效），再幂等创建当前渠道。
-    const bootNotify = localNotifyPlugin();
-    if (bootNotify) {
-      await dropLegacyReminderChannel(bootNotify);
-      await ensureReminderChannel(bootNotify);
-      await refreshExactAlarmStatus(bootNotify);
-    }
-    await refreshNotifyState();
-
-    // 开了「同时写入系统日历」：启动时补一次同步，把离线期间的增删改补齐
-    if (calendarSyncEnabled()) {
-      setTimeout(function () { syncCalendarEvents(); }, 1200);
-    }
-    syncCalendarUI();
-
-    // 回到前台：对比「上次排程」与系统队列，写进排程日志，判断是“消费了没显示”还是“从未消费”
-    const appPlugin = (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.App : null;
-    if (appPlugin && typeof appPlugin.addListener === 'function') {
-      try {
-        appPlugin.addListener('appStateChange', function (st) {
-          if (st && st.isActive) {
-            logPendingDiff();
-            refreshNotifyState({ skipSchedule: true }).catch(function () {});
-          }
-        });
-      } catch (err) { /* 旧版本没有 App 插件时忽略 */ }
-    }
-
-    // 首启自动申请一次系统通知权限：Activity 就绪后再调用，避免「从未弹过授权」。
-    // 只尝试一次，失败或用户拒绝后不再打扰；「权限管理 → 申请通知权限」是可靠的手动兜底。
-    if (isNativeApp() && notifyState.status !== 'granted' && notifyState.status !== 'denied' &&
-      state.meta.notifyAutoAsked !== true) {
-      state.meta.notifyAutoAsked = true;
-      try { await persistMeta(); } catch (err) { /* 标记写不进去也不影响本次申请 */ }
-      setTimeout(function () {
-        if (notifyState.status !== 'granted') askNotifyPermission();
-      }, 900);
-    }
-    // 开屏结束后的顺序：协议确认 → 通知授权引导 → 主界面
+    // 开屏结束后的顺序：协议确认 → 主界面
     onSplashDone(function () { maybeShowAgreement(); });
   }
 

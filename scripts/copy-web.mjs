@@ -17,7 +17,7 @@ const www = path.join(root, 'www');
 fs.rmSync(www, { recursive: true, force: true });
 fs.mkdirSync(www, { recursive: true });
 
-const required = ['index.html', 'styles.css', 'i18n.js', 'regions.js', 'weather.js', 'app.js', 'sw.js', 'manifest.webmanifest'];
+const required = ['index.html', 'styles.css', 'i18n.js', 'regions.js', 'districts.js', 'weather.js', 'app.js', 'sw.js', 'manifest.webmanifest'];
 for (const name of required) {
   if (!fs.existsSync(path.join(root, name))) {
     console.error('缺少网页文件：' + name);
@@ -54,7 +54,7 @@ fs.writeFileSync(path.join(www, 'styles.css'), cssResult.styles);
 // ---------- JS ----------
 // toplevel 不混淆：保留 window.I18N / window.Weather 这类对外入口；
 // 不设置 sourceMap，构建产物里不会出现 .map 文件。
-for (const name of ['i18n.js', 'regions.js', 'weather.js', 'app.js', 'sw.js']) {
+for (const name of ['i18n.js', 'regions.js', 'districts.js', 'weather.js', 'app.js', 'sw.js']) {
   const result = await minifyJs(read(name), {
     compress: { passes: 2, drop_debugger: true },
     mangle: true,

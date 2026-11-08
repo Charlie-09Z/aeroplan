@@ -405,6 +405,34 @@
     paint(el, store.key);
   }
 
+  // 供其他模块（如日记天气）复用同一套图标与文案，保证风格一致
+  function infoFor(code) {
+    var e = CODES[code];
+    if (!e) return null;
+    return { key: e[0], icon: ICONS[e[0]], tone: ICON_TONE[e[0]] || '', zh: e[1], en: e[2] };
+  }
+
+  // 按「用户自己选的地名」查当天天气：只用于日记快照，不读设备定位
+  function dailyForPlace(query) {
+    var q = String(query || '').trim();
+    if (!q) return Promise.reject(new Error('no-place'));
+    return search(q).then(function (list) {
+      if (!list || !list.length) throw new Error('no-place');
+      return fetchForecast(list[0]);
+    }).then(function (data) {
+      var key = todayKey();
+      var idx = data.time.indexOf(key);
+      if (idx === -1) throw new Error('no-today');
+      return {
+        code: data.code[idx],
+        max: data.max[idx],
+        min: data.min[idx],
+        date: key,
+        at: Date.now()
+      };
+    });
+  }
+
   function paint(el, key) {
     // 关闭天气：整块移除，不留占位、不撑高度
     if (!store.enabled) {
@@ -443,29 +471,27 @@
     var tip = desc + ' ' + maxText + (minText ? ' / ' + minText : '');
     // 地名只用用户选择时记录的城市 · 区县，不再反查坐标
     var placeText = (store.city && (store.city.label || store.city.name)) || '';
-    var place = placeText
-      ? '<span class="wx-place" title="' + esc(placeText) + '">' + esc(placeText) + '</span>'
-      : '';
 
     // 数据新鲜度：缓存优先时也能看出是哪次拉取的；超过 6 小时提示可能过期
-    var fresh = '';
+    var freshText = '';
+    var stale = false;
     if (store.at) {
       var pulled = new Date(store.at);
       var hhmm = pad2(pulled.getHours()) + ':' + pad2(pulled.getMinutes());
-      var stale = Date.now() - store.at > STALE_MS;
-      fresh = '<span class="wx-fresh' + (stale ? ' stale' : '') + '">' +
-        esc(T(stale ? '更新于 {time} · 可能已过期' : '更新于 {time}', { time: hhmm })) +
-      '</span>';
+      stale = Date.now() - store.at > STALE_MS;
+      freshText = T(stale ? '更新于 {time} · 可能已过期' : '更新于 {time}', { time: hhmm });
     }
 
+    // 固定四行，每行一个块级元素：图标+温度 / 状况 / 城市 · 区县 / 更新时间
     el.innerHTML = '<div class="wx-now" title="' + esc(tip + (placeText ? ' · ' + placeText : '')) +
       '" aria-label="' + esc(tip) + '">' +
-      '<span class="wx-now-main">' +
+      '<div class="wx-row wx-now-main">' +
         '<span class="wx-big ' + ICON_TONE[entry[0]] + '">' + ICONS[entry[0]] + '</span>' +
         '<span class="wx-temp">' + maxText + (minText ? '<i>/' + minText + '</i>' : '') + '</span>' +
-      '</span>' +
-      '<span class="wx-text">' + esc(desc) + '</span>' +
-      place + fresh +
+      '</div>' +
+      '<div class="wx-row wx-text">' + esc(desc) + '</div>' +
+      (placeText ? '<div class="wx-row wx-place" title="' + esc(placeText) + '">' + esc(placeText) + '</div>' : '') +
+      (freshText ? '<div class="wx-row wx-fresh' + (stale ? ' stale' : '') + '">' + esc(freshText) + '</div>' : '') +
     '</div>';
   }
 
@@ -473,9 +499,10 @@
     if (store.city) {
       return '<span class="wx-placeholder">—</span>';
     }
-    // 还没有选择地点：给一个不打扰的手动入口
+    // 还没有选择地点：给一个不打扰的手动入口（定位小图标 + 细字，热区靠 CSS 外扩）
     return '<button class="wx-city-btn" type="button" data-weather-city="1">' +
-      esc(T('选择城市')) + '</button>';
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.2s6.3-5.6 6.3-10.4a6.3 6.3 0 0 0-12.6 0C5.7 15.6 12 21.2 12 21.2z"/><circle cx="12" cy="10.7" r="2.2"/></svg>' +
+      '<span class="wx-city-btn-text">' + esc(T('选择城市')) + '</span></button>';
   }
 
   // ---------- 地点搜索：按顺序尝试的来源链 ----------
@@ -841,6 +868,8 @@
     refresh: refresh,
     search: search,
     searchAddress: searchAddress,
+    dailyForPlace: dailyForPlace,
+    infoFor: infoFor,
     clearCache: clearCache,
     cacheStats: cacheStats,
     render: function (el, key) {

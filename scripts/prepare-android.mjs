@@ -1,13 +1,12 @@
 // 在 CI 生成 Android 工程之后、编译之前，写入这些内容：
 //   1. 发布签名（keystore 由工作流从 GitHub Secrets 还原；口令只从环境变量读取，不进仓库）
 //   2. 版本号（读 package.json，自动换算 versionCode）
-//   3. 应用显示名与联网/通知/存储权限（本版本不申请定位权限）
+//   3. 应用显示名与联网/振动权限（本版本不申请定位与存储权限）
 //   4. R8 压缩/混淆 与 WebView 调试关闭
 //   5. 应用图标与浅色启动图（用 sharp 从 icons 生成）
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readNotifyConfig, validateNotifyConfig, printNotifyConfig } from './notify-config.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const androidDir = path.join(root, 'android');
@@ -34,7 +33,7 @@ console.log('应用包名（applicationId / namespace）：' + APP_ID);
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const VERSION_NAME = String(pkg.version || '0.0.1');
 const parts = VERSION_NAME.split('.').map(function (n) { return Number(n) || 0; });
-const VERSION_CODE = parts[0] * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
+const VERSION_CODE = parts[0] * 1000 + (parts[1] || 0) * 100 + (parts[2] || 0);
 
 // keystore 由工作流从 Secrets 还原到 keystore/release.keystore；
 // 口令与别名通过环境变量传入，仓库里不保存任何明文。
@@ -44,14 +43,9 @@ const KEY_ALIAS = process.env.KEY_ALIAS || 'qingjihua';
 const KEY_PASSWORD = process.env.KEY_PASSWORD || KEYSTORE_PASSWORD;
 const HAS_SIGNING = !!KEYSTORE_PASSWORD;
 
-// ---------- 1.1 通知渠道参数校验 ----------
-// 渠道参数写在 app.js 里，构建日志回显一份并校验关键值：
-// 重要性必须是 5（否则不弹横幅）、图标与提示音必须和 res 里的资源同名。
-const notifyConfig = readNotifyConfig(root);
-printNotifyConfig(notifyConfig);
-const notifyProblems = validateNotifyConfig(notifyConfig);
-if (notifyProblems.length) {
-  console.error('通知渠道参数校验失败：' + notifyProblems.join('；'));
+// ---------- 1.1 版本号校验 ----------
+if (!/^\d+\.\d+\.\d+$/.test(VERSION_NAME)) {
+  console.error('package.json 里的 version 必须是 x.y.z：' + VERSION_NAME);
   process.exit(1);
 }
 
@@ -146,15 +140,13 @@ fs.writeFileSync(proguardPath, [
 ].join('\n'));
 console.log('已开启 R8 压缩与混淆，并写入 Capacitor 的 keep 规则');
 
-// shrinkResources 会误删「只在字符串里按名字引用」的资源（通知小图标、提示音、启动图、启动器图标）
+// shrinkResources 会误删「只在字符串里按名字引用」的资源（启动图、启动器图标）
 const rawResDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'raw');
 fs.mkdirSync(rawResDir, { recursive: true });
 const KEEP_RESOURCES = [
-  '@drawable/ic_stat_icon',
   '@drawable/splash',
   '@mipmap/ic_launcher',
-  '@mipmap/ic_launcher_round',
-  '@raw/aeroplan_notify'
+  '@mipmap/ic_launcher_round'
 ];
 fs.writeFileSync(path.join(rawResDir, 'keep.xml'), [
   '<?xml version="1.0" encoding="utf-8"?>',
@@ -164,47 +156,12 @@ fs.writeFileSync(path.join(rawResDir, 'keep.xml'), [
 ].join('\n'));
 console.log('已写入 keep.xml，防止压缩误删：' + KEEP_RESOURCES.join('、'));
 
-// Android 8+ 的通知声音由「渠道」决定，且渠道只能引用 res/raw 里的音频。
-// 这里用固定算法生成 0.6 秒的双音提示，避免引入外部音频与网络资源。
-const noticeSoundPath = path.join(rawResDir, 'aeroplan_notify.wav');
-const SAMPLE_RATE = 44100;
-const SECONDS = 0.6;
-const totalSamples = Math.floor(SAMPLE_RATE * SECONDS);
-const pcm = Buffer.alloc(totalSamples * 2);
-for (let i = 0; i < totalSamples; i += 1) {
-  const t = i / SAMPLE_RATE;
-  let v = 0;
-  if (t < 0.30) v += 0.62 * Math.sin(2 * Math.PI * 880 * t) * Math.exp(-9.5 * t);
-  if (t > 0.16) {
-    const u = t - 0.16;
-    v += 0.50 * Math.sin(2 * Math.PI * 1318.5 * u) * Math.exp(-6.2 * u);
-  }
-  const clamped = Math.max(-1, Math.min(1, v));
-  pcm.writeInt16LE(Math.round(clamped * 32767), i * 2);
-}
-const wavHeader = Buffer.alloc(44);
-wavHeader.write('RIFF', 0, 4, 'ascii');
-wavHeader.writeUInt32LE(36 + pcm.length, 4);
-wavHeader.write('WAVE', 8, 4, 'ascii');
-wavHeader.write('fmt ', 12, 4, 'ascii');
-wavHeader.writeUInt32LE(16, 16);
-wavHeader.writeUInt16LE(1, 20);
-wavHeader.writeUInt16LE(1, 22);
-wavHeader.writeUInt32LE(SAMPLE_RATE, 24);
-wavHeader.writeUInt32LE(SAMPLE_RATE * 2, 28);
-wavHeader.writeUInt16LE(2, 32);
-wavHeader.writeUInt16LE(16, 34);
-wavHeader.write('data', 36, 4, 'ascii');
-wavHeader.writeUInt32LE(pcm.length, 40);
-fs.writeFileSync(noticeSoundPath, Buffer.concat([wavHeader, pcm]));
-console.log('已生成通知提示音：res/raw/aeroplan_notify.wav');
-
 fs.writeFileSync(gradlePath, gradle);
 console.log('已写入' + (HAS_SIGNING ? '签名配置' : '（无签名）') + '与版本号：versionName ' + VERSION_NAME +
   '（原来是 ' + (beforeVersion ? beforeVersion[0] : '未知') + '），versionCode ' + VERSION_CODE);
 
-// ---------- 3. 应用显示名与通知权限 ----------
-const APP_NAME = '氢计划';
+// ---------- 3. 应用显示名与权限 ----------
+const APP_NAME = 'AeroPlan';
 
 const stringsPath = path.join(androidDir, 'app', 'src', 'main', 'res', 'values', 'strings.xml');
 if (fs.existsSync(stringsPath)) {
@@ -237,51 +194,19 @@ if (fs.existsSync(manifestPath)) {
       note: '联网权限：安装时自动授予，用来加载内置页面'
     },
     {
-      name: 'android.permission.POST_NOTIFICATIONS',
-      attrs: '',
-      note: '通知权限：Android 13 起需要运行时申请，用于到点提醒'
-    },
-    {
-      name: 'android.permission.SCHEDULE_EXACT_ALARM',
-      attrs: ' android:maxSdkVersion="32"',
-      note: '精确闹钟：Android 12 / 12L 用它，装机默认允许，用户可在「闹钟和提醒」里撤销'
-    },
-    {
-      name: 'android.permission.USE_EXACT_ALARM',
-      attrs: '',
-      note: '精确闹钟（Android 13+）：系统自动授予，不出现用户开关，避免到点提醒被拦'
-    },
-    {
-      name: 'android.permission.RECEIVE_BOOT_COMPLETED',
-      attrs: '',
-      note: '开机广播：重启后由本地通知插件恢复已排程的提醒'
-    },
-    {
       name: 'android.permission.VIBRATE',
       attrs: '',
-      note: '振动：通知振动与滚轮吸附的触觉反馈'
-    },
-    {
-      name: 'android.permission.USE_FULL_SCREEN_INTENT',
-      attrs: '',
-      note: '全屏提醒（可选）：原生通道在锁屏时用全屏意图显示到点提醒'
-    },
-    {
-      name: 'android.permission.READ_CALENDAR',
-      attrs: '',
-      note: '日历读取（可选）：开启「同时写入系统日历」时读取本应用建的专用日历'
-    },
-    {
-      name: 'android.permission.WRITE_CALENDAR',
-      attrs: '',
-      note: '日历写入（可选）：开启「同时写入系统日历」时写入专用日历'
+      note: '振动：滚轮吸附与轻触反馈的触觉反馈'
     }
   ];
-  // 本版本没有定位与存储能力：模板、插件或旧配置带进这些权限时一律删掉。
+  // 本版本没有定位、存储与提醒能力：模板、插件或旧配置带进这些权限时一律删掉。
   manifest = manifest.replace(/\s*<!--[^>]*定位[^>]*-->/g, '');
   manifest = manifest.replace(/\s*<!--[^>]*存储[^>]*-->/g, '');
+  manifest = manifest.replace(/\s*<!--[^>]*通知[^>]*-->/g, '');
+  manifest = manifest.replace(/\s*<!--[^>]*提醒[^>]*-->/g, '');
+  manifest = manifest.replace(/\s*<!--[^>]*日历[^>]*-->/g, '');
   manifest = manifest.replace(
-    /\s*<uses-permission[^>]*android:name="android\.permission\.(ACCESS_(FINE|COARSE)_LOCATION|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|SCHEDULE_EXACT_ALARM|USE_EXACT_ALARM)"[^>]*\/>/g,
+    /\s*<uses-permission[^>]*android:name="android\.permission\.(ACCESS_(FINE|COARSE)_LOCATION|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|POST_NOTIFICATIONS|SCHEDULE_EXACT_ALARM|USE_EXACT_ALARM|RECEIVE_BOOT_COMPLETED|USE_FULL_SCREEN_INTENT|READ_CALENDAR|WRITE_CALENDAR)"[^>]*\/>/g,
     ''
   );
   for (const perm of needs) {
@@ -290,23 +215,6 @@ if (fs.existsSync(manifestPath)) {
       '    <!-- ' + perm.note + ' -->\n' +
       '    <uses-permission android:name="' + perm.name + '"' + perm.attrs + ' />\n\n    <application');
   }
-  // 原生提醒通道：广播接收器 + 开机重排接收器（不经过 Capacitor 插件）
-  if (!manifest.includes('AeroReminderReceiver')) {
-    manifest = manifest.replace('</application>',
-      '    <receiver android:name=".AeroReminderReceiver" android:exported="false" />\n' +
-      '    <receiver android:name=".AeroReminderBootReceiver" android:exported="true">\n' +
-      '        <intent-filter>\n' +
-      '            <action android:name="android.intent.action.BOOT_COMPLETED" />\n' +
-      '            <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />\n' +
-      '            <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />\n' +
-      '        </intent-filter>\n' +
-      '    </receiver>\n' +
-      '</application>');
-  }
-  if (!manifest.includes('AeroReminderReceiver')) {
-    console.error('清单接收器注入失败：没有找到 </application>');
-    process.exit(1);
-  }
   fs.writeFileSync(manifestPath, manifest);
 
   // 写回后再读一遍做校验：合并清单由这里注入的权限派生，源头缺一项就提前失败
@@ -314,21 +222,30 @@ if (fs.existsSync(manifestPath)) {
   const missing = needs.filter(function (perm) {
     return !written.includes('android:name="' + perm.name + '"');
   });
+  const forbidden = [
+    'POST_NOTIFICATIONS', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM',
+    'RECEIVE_BOOT_COMPLETED', 'READ_CALENDAR', 'WRITE_CALENDAR'
+  ].filter(function (name) {
+    return written.includes('android:name="android.permission.' + name + '"');
+  });
   if (missing.length) {
     console.error('清单权限校验失败，缺少：' + missing.map(function (p) { return p.name; }).join('、'));
+    process.exit(1);
+  }
+  if (forbidden.length) {
+    console.error('清单权限校验失败，仍有已移除的权限：' + forbidden.join('、'));
     process.exit(1);
   }
   console.log('清单权限校验通过：');
   needs.forEach(function (perm) {
     console.log('  ' + perm.name + (perm.attrs ? '（' + perm.attrs.trim() + '）' : ''));
   });
-  console.log('已写入联网、通知、精确闹钟（USE_EXACT_ALARM + SCHEDULE_EXACT_ALARM）、开机广播与振动权限；未申请定位与存储权限');
+  console.log('已写入联网与振动权限；未申请定位、存储、通知、闹钟与日历权限');
 } else {
   console.log('没有找到 AndroidManifest.xml，跳过权限写入');
 }
 
-// ---------- 3.3 构建期硬断言：权限 / SDK / 插件注册 ----------
-// 这些是「通知不响」的常见断点，宁可构建失败，也不要产出「看起来能装但永远不弹」的包。
+// ---------- 3.3 构建期信息 ----------
 const variablesPath = path.join(androidDir, 'variables.gradle');
 let targetSdk = 0;
 if (fs.existsSync(variablesPath)) {
@@ -337,40 +254,6 @@ if (fs.existsSync(variablesPath)) {
   if (m) targetSdk = Number(m[1]);
 }
 console.log('targetSdkVersion = ' + (targetSdk || '未知'));
-if (!targetSdk || targetSdk < 33) {
-  console.error('构建断言失败：targetSdkVersion 必须 >= 33（当前 ' + (targetSdk || '未知') + '）。' +
-    '低于 33 时 Android 13+ 的 POST_NOTIFICATIONS 行为不一致，运行时授权链路无法保证。');
-  process.exit(1);
-}
-
-const appManifestFinal = fs.readFileSync(manifestPath, 'utf8');
-if (!/android\.permission\.POST_NOTIFICATIONS/.test(appManifestFinal)) {
-  console.error('构建断言失败：AndroidManifest.xml 缺少 POST_NOTIFICATIONS');
-  process.exit(1);
-}
-
-const pluginsJsonPath = path.join(androidDir, 'app', 'src', 'main', 'assets', 'capacitor.plugins.json');
-if (!fs.existsSync(pluginsJsonPath)) {
-  // 这一步在 npx cap sync 之前，文件可能还没生成；硬断言放在构建末端的产物检查里
-  console.warn('警告：还没有 capacitor.plugins.json（cap sync 之后会生成并在产物检查里硬校验）');
-} else {
-  const pluginsJson = fs.readFileSync(pluginsJsonPath, 'utf8');
-  if (!/LocalNotifications/.test(pluginsJson)) {
-    console.warn('警告：capacitor.plugins.json 里暂时没有 LocalNotifications，' +
-      '若 cap sync 之后仍然缺失，产物检查会直接失败');
-  } else {
-    console.log('插件注册校验通过：capacitor.plugins.json 含 LocalNotifications');
-  }
-}
-
-// 提示音与 keep.xml 的实际文件名必须一致，否则渠道建好后也没有声音
-if (!fs.existsSync(noticeSoundPath)) {
-  console.error('构建断言失败：缺少提示音资源 ' + noticeSoundPath);
-  process.exit(1);
-}
-const legacySound = path.join(rawResDir, 'qingjihua_notify.wav');
-if (fs.existsSync(legacySound)) fs.rmSync(legacySound, { force: true });
-console.log('资源校验通过：res/raw/aeroplan_notify.wav 存在，旧命名已清理');
 
 // ---------- 3.2 状态栏：浅色主题白底深色图标，深色主题深底浅色图标 ----------
 // 运行时会通过 @capacitor/status-bar 按应用主题再设一次；这里写原生主题是为了
@@ -469,8 +352,6 @@ if (mainActivityPath) {
   // 包声明兜底：模板残留旧包名时直接改成本次构建的 appId
   java = java.replace(/^package\s+[A-Za-z0-9_.]+;/m, 'package ' + APP_ID + ';');
   // 整份重写：同一个包内不需要 import 自己的类。
-  // registerPlugin 必须在 super.onCreate 之前；addJavascriptInterface 必须在 super.onCreate 之后
-  // （此时 this.bridge 与 WebView 才存在）。
   const mainActivitySource =
     'package ' + APP_ID + ';\n\n' +
     'import android.os.Bundle;\n' +
@@ -480,63 +361,20 @@ if (mainActivityPath) {
     '    @Override\n' +
     '    public void onCreate(Bundle savedInstanceState) {\n' +
     '        WebView.setWebContentsDebuggingEnabled(false);\n' +
-    '        registerPlugin(AeroCalendarPlugin.class);\n' +
     '        super.onCreate(savedInstanceState);\n' +
-    '        if (this.bridge != null && this.bridge.getWebView() != null) {\n' +
-    '            this.bridge.getWebView().addJavascriptInterface(\n' +
-    '                new AeroNativeBridge(getApplicationContext()), "AeroNativeReminders");\n' +
-    '        }\n' +
     '    }\n' +
     '}\n';
   writeIfChanged(mainActivityPath, mainActivitySource);
   java = fs.readFileSync(mainActivityPath, 'utf8');
-  if (java.includes('AeroNativeReminders') && java.includes('registerPlugin(AeroCalendarPlugin.class)')) {
-    console.log('已写入 MainActivity：关闭 WebView 调试、注册日历插件、注入原生提醒桥');
+  if (java.includes('setWebContentsDebuggingEnabled(false)')) {
+    console.log('已写入 MainActivity：关闭 WebView 调试');
   } else {
-    console.error('构建断言失败：MainActivity 未正确写入原生提醒桥');
+    console.error('构建断言失败：MainActivity 未正确写入 WebView 调试开关');
     process.exit(1);
   }
 } else {
   console.log('没有找到 MainActivity.java，跳过 WebView 调试开关');
 }
-
-// ---------- 3.4 原生提醒通道 + 可选日历插件 ----------
-// 这条通道完全不经过 Capacitor 的 LocalNotifications 插件：
-// AlarmManager.setExactAndAllowWhileIdle + BroadcastReceiver + NotificationCompat。
-// 之所以自建，是因为插件链路在真机上「排程成功但从不投递」，无法再在其内部定位。
-// Java 源码放在仓库的独立文件里，不再用「Java 反斜杠 + JS 字符串」的多层转义。
-// 每个文件用 __APP_ID__ 占位包名，构建时替换成 capacitor.config.json 里的 appId。
-const javaPackageDir = path.dirname(mainActivityPath || expectedMainActivity);
-fs.mkdirSync(javaPackageDir, { recursive: true });
-const injectDir = path.join(root, 'android-inject');
-const injectSources = [
-  'AeroNativeBridge.java',
-  'AeroReminderReceiver.java',
-  'AeroReminderBootReceiver.java',
-  'AeroCalendarPlugin.java'
-];
-
-const generated = injectSources.map(function (name) {
-  const sourcePath = path.join(injectDir, name);
-  if (!fs.existsSync(sourcePath)) {
-    console.error('构建断言失败：缺少注入源文件 android-inject/' + name);
-    process.exit(1);
-  }
-  const source = fs.readFileSync(sourcePath, 'utf8').replace(/__APP_ID__/g, APP_ID);
-  return [name, source];
-});
-
-generated.forEach(function (pair) {
-  const file = path.join(javaPackageDir, pair[0]);
-  writeIfChanged(file, pair[1]);
-  if (!fs.existsSync(file)) {
-    console.error('构建断言失败：没有生成 ' + pair[0]);
-    process.exit(1);
-  }
-});
-console.log('已生成原生提醒通道：AeroNativeBridge / AeroReminderReceiver / AeroReminderBootReceiver');
-console.log('已生成可选日历插件：AeroCalendarPlugin（专用日历「AeroPlan 提醒」）');
-
 
 // ---------- 5. 生成图标与启动图 ----------
 async function makeIcons() {
@@ -602,67 +440,11 @@ async function makeIcons() {
     .toBuffer();
   fs.writeFileSync(path.join(drawableDir, 'splash.png'), splash);
   console.log('启动图已生成（浅色底 + 图标）');
-
-  // 通知栏小图标：必须是纯白剪影，否则部分系统会显示成灰色方块或直接不显示。
-  // 取原图标的 alpha 通道，叠在纯白画布上，得到单色剪影。
-  const smallSizes = { mdpi: 24, hdpi: 36, xhdpi: 48, xxhdpi: 72, xxxhdpi: 96 };
-  for (const [dpi, size] of Object.entries(smallSizes)) {
-    const dir = path.join(resDir, 'drawable-' + dpi);
-    fs.mkdirSync(dir, { recursive: true });
-    const alpha = await sharp(icon512).resize(size, size, { fit: 'cover' })
-      .ensureAlpha().extractChannel('alpha').toBuffer();
-    const white = await sharp({
-      create: { width: size, height: size, channels: 3, background: { r: 255, g: 255, b: 255 } }
-    }).png().toBuffer();
-    const mono = await sharp(white).joinChannel(alpha).png().toBuffer();
-    fs.writeFileSync(path.join(dir, 'ic_stat_icon.png'), mono);
-  }
-  console.log('通知栏小图标已生成：ic_stat_icon');
 }
 
 try {
   await makeIcons();
 } catch (err) {
-  // 图标失败不再只是“记录一下”：没有合法的小图标，Android 会在到点时
-  // 静默丢弃整条通知（排程成功、却永远不响）。下面会做兜底校验。
-  console.log('图标生成失败，尝试兜底：' + err.message);
+  console.log('图标生成失败，沿用默认图标：' + err.message);
 }
 
-// 校验通知小图标：必须真实存在于 res/drawable-*，且是 PNG 文件（有魔数、大小 > 0）。
-// 缺失时把启动器图标复制成 ic_stat_icon 兜底，避免整条通知在投递阶段被系统丢掉。
-{
-  const resDir = path.join(androidDir, 'app', 'src', 'main', 'res');
-  const densities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi'];
-  const isPng = function (file) {
-    try {
-      const buf = fs.readFileSync(file);
-      return buf.length > 64 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
-    } catch (err) { return false; }
-  };
-  const missing = [];
-  for (const dpi of densities) {
-    const file = path.join(resDir, 'drawable-' + dpi, 'ic_stat_icon.png');
-    if (!isPng(file)) missing.push(dpi);
-  }
-  if (missing.length) {
-    // 找一个能用的启动器图标当兜底（优先前景/高密度）
-    const candidates = ['xxxhdpi', 'xxhdpi', 'xhdpi', 'hdpi', 'mdpi'].map(function (dpi) {
-      return path.join(resDir, 'mipmap-' + dpi, 'ic_launcher.png');
-    }).concat([path.join(resDir, 'drawable', 'ic_launcher_foreground.png')]);
-    const fallback = candidates.filter(function (file) {
-      try { return fs.existsSync(file) && fs.statSync(file).size > 64; } catch (err) { return false; }
-    })[0];
-    if (!fallback) {
-      console.error('通知小图标 ic_stat_icon 缺失，且找不到可兜底的启动器图标；到点通知会被系统静默丢弃');
-      process.exit(1);
-    }
-    for (const dpi of missing) {
-      const dir = path.join(resDir, 'drawable-' + dpi);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.copyFileSync(fallback, path.join(dir, 'ic_stat_icon.png'));
-    }
-    console.warn('已用启动器图标兜底 ic_stat_icon（建议修好图标生成，否则部分系统显示为灰色方块）：' + path.basename(fallback));
-  } else {
-    console.log('通知小图标校验通过：res/drawable-*/ic_stat_icon.png');
-  }
-}

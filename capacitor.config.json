@@ -1,6 +1,6 @@
 {
   "appId": "com.aeroplan.app",
-  "appName": "氢计划",
+  "appName": "AeroPlan",
   "webDir": "www",
   "server": {
     "androidScheme": "https"
@@ -8,11 +8,5 @@
   "android": {
     "allowMixedContent": false,
     "webContentsDebuggingEnabled": false
-  },
-  "plugins": {
-    "LocalNotifications": {
-      "smallIcon": "ic_stat_icon",
-      "iconColor": "#4C6FFF"
-    }
   }
 }
