@@ -1,6 +1,6 @@
 {
   "name": "aeroplan-android",
-  "version": "1.1.12",
+  "version": "1.2.2",
   "private": true,
   "description": "氢计划（AeroPlan）PWA 的 Android 打包工程（Capacitor + GitHub Actions）",
   "scripts": {

@@ -45,7 +45,7 @@
     lang: 'light-schedule.lang'
   };
 
-  const APP_VERSION = '1.1.12';
+  const APP_VERSION = '1.2.2';
   const POLICY_VERSION = 'privacy-1.2';
   // 生成新 keystore 后，把证书 SHA-256 指纹填在这里（README 有步骤）
   const OFFICIAL_CERT_SHA256 = '';
@@ -99,11 +99,12 @@
   const MAX_CATEGORIES = 20;
   const MAX_CAT_NAME = 8;
   const STACK_LIMIT = 1;
-  // 日程页按时间轴流式渲染：默认往上看 30 天历史、往下看 90 天未来，
-  // 触到边界再按 30 天为一步加载，避免一次性铺满全部数据。
-  const AGENDA_BACK_DAYS = 30;
-  const AGENDA_FWD_DAYS = 90;
-  const AGENDA_STEP_DAYS = 30;
+  // 「全部行程」默认只显示当天；上滑跳到未来最近有行程的一天，下滑跳到过去最近有行程的一天。
+  // 不再逐日/逐段铺开，也不用页头按钮，全部交给纵向手势。
+  const AGENDA_BACK_DAYS = 0;
+  const AGENDA_FWD_DAYS = 0;
+  // 跳转后锚点日两侧各留几天，让目标日期大致落在视野中央
+  const AGENDA_JUMP_SPAN = 3;
   // 14 个经典色：彼此有明确区分度，不做连续色相渐变。
   // 两行 × 7 列的圆点布局由 CSS 控制；已存的自定义 hex 不受影响。
   const PRESET_COLORS = [
@@ -989,6 +990,12 @@
     month: '其他月计划 · {n}',
     year: '其他年度计划 · {n}'
   };
+  // 「其他」区块只列未来周期，空态文案单独一套
+  const PLAN_SCOPE_FUTURE_EMPTY = {
+    week: '暂无未来的周计划',
+    month: '暂无未来的月计划',
+    year: '暂无未来的年计划'
+  };
 
   function planPeriodStart(kind, key) {
     const d = keyToDate(key);
@@ -1209,9 +1216,10 @@
   function normalizeMeta(raw) {
     const meta = Object.assign({}, raw && typeof raw === 'object' ? raw : {});
     meta.cardStyle = normalizeCardStyleId(meta.cardStyle);
-    meta.fontMode = normalizeFontMode(meta.fontMode);
     meta.progressStyle = meta.progressStyle === 'battery' ? 'battery' : 'bar';
     meta.moods = normalizeMoods(meta.moods);
+    // 逾期提示条点过「查看」后记住当时的指纹，数字不变就不再弹
+    meta.summaryDismissed = typeof meta.summaryDismissed === 'string' ? meta.summaryDismissed : '';
     return meta;
   }
 
@@ -2149,35 +2157,41 @@
           ? MONTH_EN[state.month.getMonth()] + ' ' + state.month.getFullYear()
           : state.month.getFullYear() + '年' + (state.month.getMonth() + 1) + '月';
       }
-      prev.hidden = false;
-      next.hidden = false;
       onToday = state.yearView
         ? state.yearViewYear === td.getFullYear()
         : state.month.getFullYear() === td.getFullYear() && state.month.getMonth() === td.getMonth();
     } else if (state.view === 'schedule') {
       const start = state.scheduleAnchor || startOfWeek(t);
       title.textContent = shortDate(start) + ' – ' + shortDate(addDays(start, 6));
-      prev.hidden = false;
-      next.hidden = false;
       onToday = start === startOfWeek(t);
     } else if (state.view === 'diary') {
       title.textContent = T('日记');
-      prev.hidden = true;
-      next.hidden = true;
     } else if (state.view === 'profile') {
       title.textContent = T('更多');
-      prev.hidden = true;
-      next.hidden = true;
     } else {
       title.textContent = T('计划');
-      prev.hidden = true;
-      next.hidden = true;
     }
 
-    // 「更多」页只有设置，不需要「今天」
-    $('#todayBtn').hidden = state.view === 'profile';
-    $('#todayBtn').classList.toggle('is-current', onToday);
+    // 五个页面顶栏统一：无翻页/无「今天」的页面用占位（visibility:hidden），
+    // 保留与日历页相同的左/右空间，标题与图标的横坐标不因内容缺失而位移
+    const showArrows = state.view === 'calendar' || state.view === 'schedule';
+    prev.hidden = false;
+    next.hidden = false;
+    prev.classList.toggle('ghost', !showArrows);
+    next.classList.toggle('ghost', !showArrows);
+    prev.toggleAttribute('aria-hidden', !showArrows);
+    next.toggleAttribute('aria-hidden', !showArrows);
+
+    // 「更多」页只有设置，不需要「今天」；同样占位对齐
+    const todayBtn = $('#todayBtn');
+    todayBtn.classList.toggle('ghost', state.view === 'profile');
+    todayBtn.toggleAttribute('aria-hidden', state.view === 'profile');
+    todayBtn.hidden = false;
+    todayBtn.classList.toggle('is-current', onToday);
   }
+
+  // 提示条指纹：逾期数 + 今日未完成数。点过「查看」后若数字不变就不再出现
+  let summaryFingerprint = '';
 
   function renderSummary() {
     if (state.batchMode) {
@@ -2191,13 +2205,20 @@
     }
     const t = todayKey();
     const todayItems = expandOccurrences(state.items, t, t);
+    // 只有待办过期才算逾期；日程没有逾期概念，过日期按普通历史显示
     const overdue = state.items.filter(function (i) {
-      return !i.recurrence && !i.done && i.date < t;
+      return i.type === 'todo' && !i.recurrence && !i.done && i.date < t;
     });
     const pending = todayItems.filter(function (i) { return !i.done; });
     const doneToday = todayItems.filter(function (i) { return i.done; });
 
     if (!overdue.length && !pending.length) {
+      $('#summaryBar').hidden = true;
+      return;
+    }
+
+    summaryFingerprint = overdue.length + '|' + pending.length;
+    if (state.meta.summaryDismissed === summaryFingerprint) {
       $('#summaryBar').hidden = true;
       return;
     }
@@ -2383,11 +2404,10 @@
       const d = keyToDate(item.date);
       return d.getFullYear() === year && d.getMonth() === monthIndex;
     });
-    const monthDone = monthItems.filter(function (i) { return i.done; }).length;
     // 没有安排时整条不显示，避免右侧留下空槽把「日程 / 待办」图例挤偏
     $('#monthStat').hidden = monthItems.length === 0;
     $('#monthStat').textContent = monthItems.length
-      ? T('本月 {n} 项 · 已完成 {m} 项', { n: monthItems.length, m: monthDone })
+      ? T('本月共 {n} 项行程', { n: monthItems.length })
       : '';
 
     const isEmpty = state.items.length === 0;
@@ -3096,7 +3116,7 @@
     if (!grid) return;
 
     const MIN_MOVE = 7;           // 判定方向的位移（越小越跟手）
-    const VELOCITY = 0.18;        // px/ms，轻轻快扫也能翻页
+    const VELOCITY = 0.12;        // px/ms，轻轻快扫也能翻页
     // 翻月动画压到 70 + 80 = 150ms：动画结束立刻解锁，快速连划能顺畅接上。
     // 一次手势只翻一个月靠的是「方向锁 + 位移阈值」，而不是长时间冷却。
     const ANIM_OUT = 70;
@@ -3106,12 +3126,33 @@
     let active = false;
     let mode = '';                // '' | 'h'（已锁定横向）
     let animating = false;
+    let animTimers = [];
+    let animSeq = 0;
     let sx = 0;
     let sy = 0;
     let dx = 0;
     let lastX = 0;
     let lastT = 0;
     let vx = 0;
+
+    // 动画期间的手势一律可中断：定时器带序号，取消后旧回调直接作废，
+    // 新滑动不必等惯性/翻页动画结束。
+    function later(fn, ms) {
+      const seq = animSeq;
+      animTimers.push(setTimeout(function () {
+        if (seq !== animSeq) return;
+        fn();
+      }, ms));
+    }
+
+    function cancelAnim() {
+      animSeq++;
+      animTimers.forEach(function (t) { clearTimeout(t); });
+      animTimers = [];
+      animating = false;
+      grid.style.transition = '';
+      grid.style.transform = '';
+    }
 
     function width() { return grid.clientWidth || 360; }
 
@@ -3126,7 +3167,7 @@
       animating = true;
       grid.style.transition = 'transform .16s cubic-bezier(.22,.61,.36,1)';
       grid.style.transform = 'translate3d(0,0,0)';
-      setTimeout(function () {
+      later(function () {
         grid.style.transition = '';
         grid.style.transform = '';
         animating = false;
@@ -3148,7 +3189,7 @@
 
       const dir = dx < 0 ? 1 : -1;           // 左滑 → 下个月
       const w = width();
-      const threshold = Math.min(56, w * 0.14);
+      const threshold = Math.min(30, w * 0.09);
       const flick = Math.abs(vx) > VELOCITY && Math.abs(dx) > 4 &&
         (vx < 0) === (dx < 0);
 
@@ -3163,7 +3204,7 @@
       grid.style.transition = 'transform ' + ANIM_OUT + 'ms cubic-bezier(.2,.7,.3,1)';
       grid.style.transform = 'translate3d(' + (-dir * w) + 'px,0,0)';
 
-      setTimeout(function () {
+      later(function () {
         if (!shiftMonthBy(dir)) {
           springBack();
           return;
@@ -3173,11 +3214,13 @@
 
         grid.style.transition = 'none';
         grid.style.transform = 'translate3d(' + (dir * w) + 'px,0,0)';
+        const seq = animSeq;
         requestAnimationFrame(function () {
           requestAnimationFrame(function () {
+            if (seq !== animSeq) return;
             grid.style.transition = 'transform ' + ANIM_IN + 'ms cubic-bezier(.2,.7,.3,1)';
             grid.style.transform = 'translate3d(0,0,0)';
-            setTimeout(function () {
+            later(function () {
               grid.style.transition = '';
               grid.style.transform = '';
               animating = false;
@@ -3188,7 +3231,8 @@
     }
 
     grid.addEventListener('pointerdown', function (e) {
-      if (animating) return;
+      // 上一次翻页还在收尾时，新手势直接接管：清掉旧动画与定时器，立即可反向滑
+      if (animating) cancelAnim();
       // 双指捏合进年历时，单指横滑必须让位，否则会同时翻月
       if (state.pinchActive || state.yearView) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -3791,7 +3835,8 @@
   function itemRowHTML(item, opts, extra) {
     const options = opts || {};
     const t = todayKey();
-    const overdue = options.overdue === true || (!item.recurrence && !item.done && item.date < t);
+    const overdue = options.overdue === true ||
+      (item.type === 'todo' && !item.recurrence && !item.done && item.date < t);
     const meta = TYPE_META[item.type];
     const cat = getCategory(item.categoryId);
     // 圆点只表达「类型」：日程蓝、待办绿，和左下角图注一致；
@@ -3857,7 +3902,9 @@
     const sub = esc(weekdayOf(key)) + (relative ? ' · ' + esc(monthDay(key)) : '');
 
     const all = dayItems.slice();
-    const undone = all.filter(function (i) { return !i.done && (i.date >= t || i.recurrence); }).sort(compareAgenda);
+    // 「全部安排」要直接列出该日全部卡片：过期的未完成项也留在当天分组里，
+    // 不再用一句「可在上方逾期里查看」把内容藏起来。
+    const undone = all.filter(function (i) { return !i.done; }).sort(compareAgenda);
     const done = all.filter(function (i) { return i.done; }).sort(function (a, b) {
       return (b.doneAt || 0) - (a.doneAt || 0);
     });
@@ -3882,18 +3929,9 @@
       undone.forEach(function (item) { rows += swipeRowHTML(item); });
     }
 
-    if (!undone.length) {
-      let text = T('新的一天，从计划开始');
-      if (total > 0 && doneCount === total) {
-        text = T('这一天的安排都完成了');
-      } else if (total > 0 && !doneCount) {
-        text = all.length === 1
-          ? T('这一项还没完成，可在上方「逾期」里查看')
-          : T('还有 {n} 项未完成，可在上方「逾期」里查看', { n: all.length });
-      } else if (total > 0) {
-        text = T('未完成的项目已归入上方「逾期」');
-      }
-      rows = '<div class="day-empty">' + esc(text) + '</div>';
+    // 只有这一天真的没有任何条目时才出现虚线空态；有历史卡片就照常列出
+    if (!undone.length && !doneCount) {
+      rows = '<div class="day-empty">' + esc(T('新的一天，从计划开始')) + '</div>';
     }
 
     let doneHTML = '';
@@ -3966,11 +4004,11 @@
     bar.hidden = false;
   }
 
-  // 把某个日期分组滚到可视区，供「回到今日」与上下翻动定位
-  function agendaScrollTo(key, smooth) {
+  // 把某个日期分组滚到可视区，供「回到今日」与手势跳转定位
+  function agendaScrollTo(key, smooth, block) {
     const el = document.getElementById('day-' + key);
     if (!el || !el.scrollIntoView) return;
-    el.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+    el.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: block || 'start' });
   }
 
   // 「全部安排」的即时搜索：标题、备注、地点、分类名都参与匹配
@@ -3987,11 +4025,67 @@
     return hay.indexOf(q) !== -1;
   }
 
+  // 锚点之后 / 之前最近一个有行程的日期；重复项按规则逐日展开，命中即停
+  function agendaNearestDate(dir) {
+    const anchor = state.agendaAnchor || todayKey();
+    const filters = state.agendaFilters;
+    const pool = filters.length
+      ? state.items.filter(function (i) { return filters.indexOf(i.categoryId) !== -1; })
+      : state.items;
+    let best = '';
+    const LIMIT = 4000;
+
+    pool.forEach(function (item) {
+      if (!item.recurrence) {
+        if (dir === 'fwd' ? item.date > anchor : item.date < anchor) {
+          if (!best || (dir === 'fwd' ? item.date < best : item.date > best)) best = item.date;
+        }
+        return;
+      }
+
+      const until = item.recurrence.until || '';
+      const startWeek = startOfWeek(item.date);
+      let key = dir === 'fwd' ? (item.date > anchor ? item.date : addDays(anchor, 1)) : addDays(anchor, -1);
+      if (dir === 'back' && until && until < key) key = until;
+
+      for (let i = 0; i < LIMIT; i++) {
+        if (dir === 'fwd' ? (until && key > until) : key < item.date) return;
+        if (matchesRecurrence(item, key, startWeek)) {
+          if (!best || (dir === 'fwd' ? key < best : key > best)) best = key;
+          return;
+        }
+        key = addDays(key, dir === 'fwd' ? 1 : -1);
+      }
+    });
+
+    return best;
+  }
+
+  // 手势提示：加载中 / 还能继续跳 / 已到边界
+  // 上滑看更晚、下滑看更早，所以底部提示「上滑跳到下一个有行程的日期」，顶部相反
+  function agendaEdgeHint(dir, loading, available) {
+    const loadingText = T('正在跳转…');
+    const readyText = dir === 'back' ? T('下滑跳到上一个有行程的日期') : T('上滑跳到下一个有行程的日期');
+    const endText = dir === 'back' ? T('没有更早的行程') : T('没有更晚的行程');
+    const label = loading
+      ? '<span class="am-spin" aria-hidden="true"></span>' + esc(loadingText)
+      : esc(available ? readyText : endText);
+    return '<span class="agenda-more-end' + (loading ? ' is-loading' : '') +
+      '"><span class="am-label">' + label + '</span></span>';
+  }
+
+  // 列表里的进度条宽度按 data-pct 统一绘制
+  function paintAgendaBars() {
+    $$('.mini-bar i', $('#agendaList')).forEach(function (el) {
+      if (el.dataset.pct !== undefined) el.style.width = el.dataset.pct + '%';
+    });
+  }
+
   function renderAgenda() {
     const t = todayKey();
     const anchor = state.agendaAnchor || t;
-    const back = Math.max(AGENDA_STEP_DAYS, state.agendaBack || AGENDA_BACK_DAYS);
-    const fwd = Math.max(AGENDA_STEP_DAYS, state.agendaFwd || AGENDA_FWD_DAYS);
+    const back = Math.max(0, state.agendaBack || 0);
+    const fwd = Math.max(0, state.agendaFwd || 0);
 
     renderAgendaFilterBar();
 
@@ -4025,9 +4119,27 @@
       return;
     }
 
-    // 以焦点日为轴：向上 back 天历史、向下 fwd 天未来，边界按钮再按步扩展
-    let start = addDays(anchor, -back);
-    let end = addDays(anchor, fwd);
+    // 搜索时改用全库结果：不受当前日期窗口限制，命中的条目按日期先后铺开
+    if (q) {
+      const byDate = {};
+      visibleItems.forEach(function (item) {
+        if (!byDate[item.date]) byDate[item.date] = [];
+        byDate[item.date].push(item);
+      });
+      let html = '';
+      Object.keys(byDate).sort().forEach(function (key) {
+        html += dayGroupHTML(key, byDate[key]);
+      });
+      $('#agendaList').innerHTML = html;
+      requestAnimationFrame(paintAgendaBars);
+      return;
+    }
+
+    // 以焦点日为轴：向上 back 天历史、向下 fwd 天未来；默认 back/fwd = 0，只显示当天
+    const start = addDays(anchor, -back);
+    const end = addDays(anchor, fwd);
+    const hasEarlier = !!agendaNearestDate('back');
+    const hasLater = !!agendaNearestDate('fwd');
 
     const byDate = {};
     expandOccurrences(visibleItems, start, end).forEach(function (item) {
@@ -4036,17 +4148,11 @@
     });
 
     const overdue = visibleItems
-      .filter(function (i) { return !i.recurrence && !i.done && i.date < t; })
+      .filter(function (i) { return i.type === 'todo' && !i.recurrence && !i.done && i.date < t; })
       .sort(compareOverdue);
 
     let html = '<div class="agenda-more top">' +
-      '<button class="agenda-more-btn" type="button" data-agenda-more="back">' +
-        '<span class="am-label">' +
-          '<svg class="am-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12.5V4M4.6 7.4 8 4l3.4 3.4"/></svg>' +
-          '<span class="am-text">' + esc(T('加载更早的安排')) + '</span>' +
-        '</span>' +
-      '</button>' +
-      '<span class="agenda-more-note">' + esc(T('当前展示近 {n} 天历史', { n: back })) + '</span>' +
+      agendaEdgeHint('back', state.agendaLoading === 'back', hasEarlier) +
     '</div>';
 
     if (overdue.length) {
@@ -4071,34 +4177,79 @@
       guard += 1;
     }
 
-    // 窗口末尾之后是否还有数据：重复条目看 until（没有 until 视为一直延续）
-    const hasLater = visibleItems.some(function (i) {
-      if (i.recurrence) {
-        const until = i.recurrence.until || '';
-        return !until || until > end;
-      }
-      return i.date > end;
-    });
-
     html += '<div class="agenda-more bottom">' +
-      (hasLater
-        ? '<button class="agenda-more-btn" type="button" data-agenda-more="fwd">' +
-            '<span class="am-label">' +
-              '<svg class="am-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5V12M4.6 8.6 8 12l3.4-3.4"/></svg>' +
-              '<span class="am-text">' + esc(T('加载更晚的安排')) + '</span>' +
-            '</span>' +
-          '</button>'
-        : '<span class="agenda-more-end"><span class="am-label">' + esc(T('已经是最新')) + '</span></span>') +
-      '<span class="agenda-more-note">' + esc(T('已展示到 {date}', { date: monthDay(end) })) + '</span>' +
+      agendaEdgeHint('fwd', state.agendaLoading === 'fwd', hasLater) +
     '</div>';
 
     $('#agendaList').innerHTML = html;
 
-    requestAnimationFrame(function () {
-      $$('.mini-bar i', $('#agendaList')).forEach(function (el) {
-        if (el.dataset.pct !== undefined) el.style.width = el.dataset.pct + '%';
-      });
+    requestAnimationFrame(paintAgendaBars);
+  }
+
+  // 纵向手势跳转：上滑跳到未来最近有行程的一天，下滑跳到过去最近有行程的一天。
+  // 加载中忽略重复触发；到边界时把列表滚到对应端，让边界提示露出来。
+  function jumpAgenda(dir) {
+    if (state.agendaLoading) return;
+    const scroller = document.querySelector('.agenda-body');
+    const target = agendaNearestDate(dir);
+
+    if (!target) {
+      if (scroller) scroller.scrollTop = dir === 'fwd' ? scroller.scrollHeight : 0;
+      return;
+    }
+
+    // 记住当前窗口；跳转后的窗口与它取并集，首屏内容和新拉取的分组始终在同一条列表里连续排列
+    const anchor = state.agendaAnchor || todayKey();
+    const back = Math.max(0, state.agendaBack || 0);
+    const fwd = Math.max(0, state.agendaFwd || 0);
+    const oldStart = addDays(anchor, -back);
+    const oldEnd = addDays(anchor, fwd);
+
+    state.agendaLoading = dir;
+    renderAgenda();
+
+    // 先给一帧加载反馈，再把焦点移到目标日期；两侧各留几天上下文，目标日仍居中
+    setTimeout(function () {
+      state.agendaAnchor = target;
+      state.agendaBack = Math.max(AGENDA_JUMP_SPAN, daysBetween(oldStart, target));
+      state.agendaFwd = Math.max(AGENDA_JUMP_SPAN, daysBetween(target, oldEnd));
+      state.agendaLoading = '';
+      renderAgenda();
+      agendaScrollTo(target, false, 'center');
+    }, 200);
+  }
+
+  // 页面级纵向手势：只接管明显纵向滑动，横向手势仍留给卡片的编辑/删除
+  function bindAgendaSwipe() {
+    const page = $('#agendaPage');
+    if (!page || page.dataset.agendaSwipe) return;
+    page.dataset.agendaSwipe = '1';
+    let st = null;
+
+    page.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      st = { id: e.pointerId, x: e.clientX, y: e.clientY, active: false, horizontal: false };
     });
+
+    page.addEventListener('pointermove', function (e) {
+      if (!st || e.pointerId !== st.id || st.active) return;
+      const dx = e.clientX - st.x;
+      const dy = e.clientY - st.y;
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dx) > Math.abs(dy)) { st.horizontal = true; return; }
+      if (st.horizontal) return;
+      if (Math.abs(dy) >= 56) {
+        st.active = true;
+        // 上滑（dy < 0）看更晚，下滑看更早
+        jumpAgenda(dy < 0 ? 'fwd' : 'back');
+      }
+    });
+
+    function end(e) {
+      if (st && e.pointerId === st.id) st = null;
+    }
+    page.addEventListener('pointerup', end);
+    page.addEventListener('pointercancel', end);
   }
 
   // ==================== 渲染：行程表（一周 × 时段） ====================
@@ -4430,13 +4581,23 @@
     '</div>';
   }
 
+  // 每个周期自己的完成数：周只算这一周、月只算这一月、年只算这一年
+  function planDoneCount(list) {
+    return list.filter(function (p) { return p.done; }).length;
+  }
+
+  function planPeriodStatText(list) {
+    return T('完成 {done}/{total}', { done: planDoneCount(list), total: list.length });
+  }
+
   function planCardHTML(kind, t) {
     const start = planPeriodStart(kind, t);
     const ofKind = state.plans.filter(function (p) { return p.kind === kind; });
     const current = ofKind.filter(function (p) { return p.periodStart === start; }).sort(planSort);
-    const others = ofKind.filter(function (p) { return p.periodStart !== start; })
+    // 「其他」区块只列当前周期之后的未来周期，按时间正序
+    const others = ofKind.filter(function (p) { return p.periodStart > start; })
       .sort(function (a, b) {
-        if (a.periodStart !== b.periodStart) return a.periodStart < b.periodStart ? 1 : -1;
+        if (a.periodStart !== b.periodStart) return a.periodStart > b.periodStart ? 1 : -1;
         return planSort(a, b);
       });
     const done = current.filter(function (p) { return p.done; }).length;
@@ -4452,6 +4613,8 @@
     if (others.length) {
       rows += '<p class="plan-other-head">' + esc(T(PLAN_SCOPE_OTHER[kind], { n: others.length })) + '</p>';
       others.forEach(function (plan) { rows += planSwipeHTML(plan, true); });
+    } else {
+      rows += '<p class="plan-other-head">' + esc(T(PLAN_SCOPE_FUTURE_EMPTY[kind])) + '</p>';
     }
 
     return '<div class="plan-card" data-plan-card="' + kind + '">' +
@@ -4512,6 +4675,9 @@
       '<button class="swipe-edit" type="button" data-plan-edit="' + plan.id + '" aria-label="编辑这条计划">' +
         '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 19.8h4L19.4 8.6a1.8 1.8 0 0 0 0-2.6l-1.4-1.4a1.8 1.8 0 0 0-2.6 0L4.2 15.8v4z"/><path d="M13.6 6.6l3.8 3.8"/></svg>' +
       '</button>' +
+      '<button class="swipe-del" type="button" data-plan-del="' + plan.id + '" aria-label="删除这条计划">' +
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M9.5 7V5.3h5V7M6.9 7l.8 11.2h8.6L17.1 7"/><path d="M10 10.4v4.6M14 10.4v4.6"/></svg>' +
+      '</button>' +
       '<div class="swipe-inner">' +
         '<div class="plan-hist-item' + (p.done ? ' done' : '') + (overdue ? ' overdue' : '') + '">' +
           '<span class="plan-hist-dot" style="background:' +
@@ -4526,6 +4692,8 @@
   }
 
   let planHistorySearch = '';
+  // 历史计划按周期分组的展开/收起状态（仅本次会话，不写盘）
+  const planHistCollapsed = new Set();
 
   function planHistoryItemMatches(plan, q) {
     if (!q) return true;
@@ -4539,13 +4707,13 @@
     let html = '';
     ['week', 'month', 'year'].forEach(function (kind) {
       const currentStart = planPeriodStart(kind, today);
-      // 只收已经翻过去的周期，当前周期仍留在主页；搜索只过滤标题与备注
+      // 只收已经翻过去的周期（历史归档）；当前与未来周期留在计划主页
       const past = state.plans.filter(function (p) {
-        return p.kind === kind && p.periodStart !== currentStart && planHistoryItemMatches(p, q);
+        return p.kind === kind && p.periodStart < currentStart && planHistoryItemMatches(p, q);
       });
       if (!past.length) return;
       past.sort(function (a, b) {
-        if (a.periodStart !== b.periodStart) return a.periodStart < b.periodStart ? 1 : -1;
+        if (a.periodStart !== b.periodStart) return a.periodStart > b.periodStart ? -1 : 1;
         return planSort(a, b);
       });
       const groups = [];
@@ -4554,20 +4722,22 @@
         if (!last || last.start !== p.periodStart) groups.push({ start: p.periodStart, list: [p] });
         else last.list.push(p);
       });
-      const doneAll = past.filter(function (p) { return p.done; }).length;
       html += '<section class="plan-hist-kind">' +
-        '<h3 class="plan-hist-kind-title">' + esc(planKindLabel(kind)) +
-          '<span class="plan-hist-kind-stat">' + esc(T('完成 {done}/{total}', { done: doneAll, total: past.length })) + '</span>' +
-        '</h3>' +
+        '<h3 class="plan-hist-kind-title">' + esc(planKindLabel(kind)) + '</h3>' +
         groups.map(function (g) {
-          const done = g.list.filter(function (p) { return p.done; }).length;
-          const pct = Math.round((done / g.list.length) * 100);
-          return '<div class="plan-hist-group">' +
-            '<div class="plan-hist-head">' +
+          const gkey = kind + '|' + g.start;
+          const collapsed = planHistCollapsed.has(gkey);
+          return '<div class="plan-hist-group" data-hist-group="' + gkey + '">' +
+            '<button class="plan-hist-head" type="button" data-hist-toggle="' + gkey + '" aria-expanded="' + (!collapsed ? 'true' : 'false') + '">' +
               '<span class="plan-hist-period">' + esc(planPeriodLabel(kind, g.start)) + '</span>' +
-              '<span class="plan-hist-stat">' + done + '/' + g.list.length + ' · ' + pct + '%</span>' +
+              '<span class="plan-hist-head-right">' +
+                '<span class="plan-hist-stat">' + esc(planPeriodStatText(g.list)) + '</span>' +
+                '<svg class="plan-hist-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>' +
+              '</span>' +
+            '</button>' +
+            '<div class="plan-hist-list' + (collapsed ? ' collapsed' : '') + '" data-hist-list="' + gkey + '">' +
+              '<div class="plan-hist-list-inner">' + g.list.map(planHistoryItemHTML).join('') + '</div>' +
             '</div>' +
-            g.list.map(planHistoryItemHTML).join('') +
           '</div>';
         }).join('') +
       '</section>';
@@ -4591,6 +4761,19 @@
   function renderPlanHistory() {
     const body = $('#planHistoryBody');
     if (body) body.innerHTML = planHistoryBodyHTML();
+  }
+
+  // 历史计划分组的展开 / 收起：高度用 grid-template-rows 过渡，避免跳变
+  function togglePlanHistoryGroup(key, btn) {
+    const list = document.querySelector('#planHistoryBody [data-hist-list="' + key + '"]');
+    if (!list) return;
+    const collapsed = !list.classList.contains('collapsed');
+    list.classList.toggle('collapsed', collapsed);
+    if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    if (collapsed) planHistCollapsed.add(key);
+    else planHistCollapsed.delete(key);
+    closeAllSwipes();
+    haptic(6);
   }
 
   function openPlanHistoryPage() {
@@ -4625,7 +4808,6 @@
     const ver = $('#profileVersion');
     if (ver) ver.textContent = 'V' + APP_VERSION;
     renderCardStyleEntry();
-    renderFontEntry();
     renderCategoryList();
   }
 
@@ -4650,78 +4832,7 @@
     el.textContent = cardStyleLabel(current) + (tip ? ' · ' + tip : '');
   }
 
-  // ==================== 字体：默认栈 / 跟随系统 ====================
-  const FONT_MODES = ['default', 'system'];
-
-  function normalizeFontMode(raw) {
-    return raw === 'system' ? 'system' : 'default';
-  }
-
-  function fontMode() {
-    return normalizeFontMode(state.meta.fontMode);
-  }
-
-  function fontModeLabel(mode) {
-    return T(normalizeFontMode(mode) === 'system' ? '系统字体' : '默认字体');
-  }
-
-  // 只切换 html 上的开关，字体栈由 CSS 变量 --font 接管；
-  // 开屏字标与皮肤预览卡各自写死 family，不受影响。
-  function applyFont() {
-    document.documentElement.dataset.font = fontMode();
-  }
-
-  function renderFontEntry() {
-    const el = $('#fontValue');
-    if (el) el.textContent = fontModeLabel(fontMode());
-    const page = $('#fontPage');
-    if (page && !page.hidden) renderFontPage();
-  }
-
-  function renderFontPage() {
-    const list = $('#fontList');
-    if (!list) return;
-    const current = fontMode();
-    const sample = 'Aa 永字八法 2026';
-    list.innerHTML = FONT_MODES.map(function (mode) {
-      const active = mode === current;
-      return '<button class="font-cell' + (active ? ' active' : '') + '" type="button" data-font-mode="' + mode + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
-        '<span class="font-cell-name">' + esc(fontModeLabel(mode)) +
-          '<span class="font-cell-check" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.5 12.5l4.5 4.5 8.5-9.5"/></svg></span></span>' +
-        '<span class="font-cell-sample">' + esc(sample) + '</span>' +
-      '</button>';
-    }).join('');
-  }
-
-  function openFontPage() {
-    const page = $('#fontPage');
-    if (!page) return;
-    renderFontPage();
-    page.hidden = false;
-    requestAnimationFrame(function () { page.classList.add('open'); });
-    const body = page.querySelector('.settings-body');
-    if (body) body.scrollTop = 0;
-  }
-
-  function closeFontPage() {
-    const page = $('#fontPage');
-    if (!page || page.hidden) return;
-    page.classList.remove('open');
-    window.setTimeout(function () {
-      if (page.classList.contains('open')) return;
-      page.hidden = true;
-    }, 240);
-  }
-
-  async function chooseFontMode(mode) {
-    const next = normalizeFontMode(mode);
-    if (fontMode() === next) return;
-    state.meta.fontMode = next;
-    applyFont();
-    renderFontEntry();
-    haptic(8);
-    await persistMeta();
-  }
+  // ==================== 皮肤演示卡 ====================
 
   function skinDemoHTML(id, large) {
     const en = isEn();
@@ -5020,6 +5131,8 @@
     return { num: String(-d), unit: T('天前'), dir: T('已经'), label: T('已经 {n} 天', { n: -d }), sub: cdDateLine(cd, next), tone: 'up' };
   }
 
+  // 日记页横滑卡片固定四行：标题 / 正倒数日期 / 设置日期 / 标签。
+  // 高度由内容撑开，四行都不截断；横向滑动由 cd-strip 统一处理。
   function countdownCardHTML(cd) {
     const info = cdView(cd);
     const cat = getCategory(cd.categoryId);
@@ -5032,10 +5145,9 @@
       '<span class="cd-card-top"><i class="cd-dot"></i><span class="cd-card-title">' + esc(cd.title) + '</span>' +
         (cd.pinned ? '<span class="cd-pin-mark">' + T('置顶') + '</span>' : '') +
       '</span>' +
-      '<span class="cd-card-main"><b>' + esc(info.num) + '</b><em>' + esc(info.unit) + '</em></span>' +
-      '<span class="cd-card-date"><span class="cd-dir">' + esc(info.dir) + '</span>' + esc(info.sub) + '</span>' +
-      cdMetaChipsHTML(cd, 'cd-card-meta') +
-      catChip +
+      '<span class="cd-card-count">' + esc(info.label) + '</span>' +
+      '<span class="cd-card-date">' + esc(cd.date) + '</span>' +
+      '<span class="cd-card-tags">' + cdMetaChipsHTML(cd, 'cd-card-meta') + catChip + '</span>' +
     '</button>';
   }
 
@@ -6504,19 +6616,31 @@
     $('#viewSchedule').hidden = view !== 'schedule';
     $('#viewDiary').hidden = view !== 'diary';
     $('#viewProfile').hidden = view !== 'profile';
+    // 更多页的深浅色开关已移入「外观」分组；右上角图标在这页隐藏但保留占位，
+    // 保证五个页面的右侧图标右边距完全一致
+    const themeBtn = $('#themeBtn');
+    if (themeBtn) {
+      themeBtn.hidden = false;
+      themeBtn.classList.toggle('ghost', view === 'profile');
+      themeBtn.toggleAttribute('aria-hidden', view === 'profile');
+    }
     $('#content').scrollTop = 0;
     // 离开日历视图时收起年历，避免回来时还停在年历
     if (view !== 'calendar') closeYearView();
     // 切换视图时退出批量模式并清空已选
     if (state.batchMode) clearBatchState();
+    // 进入日记页时也先尝试拉一次最新天气；失败/超时静默保留缓存
+    if (view === 'diary' && weatherEnabled() && window.Weather) window.Weather.refresh(true);
     renderAll();
   }
 
   // 「全部安排」：原议程页降级为日历页内的全屏流式入口，能力（连续历史/未来 + 分类筛选）完整保留
   function openAgenda(anchor) {
     state.agendaAnchor = anchor || state.agendaAnchor || todayKey();
-    state.agendaBack = '';
-    state.agendaFwd = '';
+    // 默认只显示当天，由纵向手势再逐步加载历史 / 未来
+    state.agendaBack = 0;
+    state.agendaFwd = 0;
+    state.agendaLoading = '';
     // 每次打开都从全量开始，清掉上次的搜索词
     agendaSearchQuery = '';
     const searchInput = $('#agendaSearch');
@@ -6581,7 +6705,9 @@
       btn.setAttribute('title', dark ? T('切换到浅色模式') : T('切换到深色模式'));
     }
     applyCardStyle();
-    applyFont();
+    // 更多页「外观」里的开关与右上角图标共用同一份 meta.theme，这里统一回写
+    const darkToggle = $('#profileDarkToggle');
+    if (darkToggle) darkToggle.checked = dark;
   }
 
   // ==================== Toast / Snackbar ====================
@@ -8285,9 +8411,16 @@
   async function deletePlanNow(id) {
     const idx = state.plans.findIndex(function (p) { return p.id === id; });
     if (idx === -1) return;
+    // 历史计划页：先让该行收起消失，再重排列表与统计，避免整页跳变
+    const row = document.querySelector('#planHistoryBody .plan-hist-swipe[data-id="' + id + '"]');
+    if (row) {
+      row.classList.add('hist-leaving');
+      await new Promise(function (resolve) { setTimeout(resolve, 200); });
+    }
     state.plans.splice(idx, 1);
     await persistPlans();
     renderPlan();
+    renderPlanHistory();
     showToast(T('已删除'), 1200);
   }
 
@@ -8315,9 +8448,10 @@
       stopWeatherTimer();
       return;
     }
-    window.Weather.refresh();
+    // 每次启动都强制拉一次最新（缓存已先渲染，失败/超时静默保留缓存）
+    window.Weather.refresh(true);
     if (!weatherTimer) {
-      // 打开时拉一次，之后每 45 分钟刷新；回到前台时也会按需刷新
+      // 之后每 45 分钟刷新；回到前台时也会按需刷新
       weatherTimer = setInterval(function () {
         if (weatherEnabled()) window.Weather.refresh();
       }, 45 * 60 * 1000);
@@ -8707,6 +8841,9 @@
   function renderSettings() {
     if (!storage.status) return;
 
+    const ver = $('#settingsVersion');
+    if (ver) ver.textContent = T('氢计划 · 版本 {v}', { v: APP_VERSION });
+
     $('#lunarToggle').checked = lunarVisible();
     const en = isEn();
     $$('#calendarCardSeg [data-cal-card]').forEach(function (btn) {
@@ -8827,11 +8964,17 @@
     el.textContent = T('官方签名指纹：{fp}（可在系统应用信息中核对）', { fp: OFFICIAL_CERT_SHA256 });
   }
 
+  function renderAboutVersion() {
+    const el = $('#aboutVersion');
+    if (el) el.textContent = 'V' + APP_VERSION;
+  }
+
   function openAgreement() {
     const page = $('#aboutPage');
     if (!page) return;
     renderConsentInfo();
     renderFingerprint();
+    renderAboutVersion();
     $('#agreementActions').hidden = false;
     $('#aboutClose').hidden = true;
     page.hidden = false;
@@ -8898,6 +9041,7 @@
     const page = $('#aboutPage');
     renderConsentInfo();
     renderFingerprint();
+    renderAboutVersion();
     page.classList.remove('agreement-mode');
     $('#agreementActions').hidden = true;
     $('#aboutClose').hidden = false;
@@ -9762,6 +9906,10 @@
     });
 
     $('#summaryBtn').addEventListener('click', function () {
+      // 点了立即收起并记住当前指纹；数字不变时下次启动也不再出现
+      state.meta.summaryDismissed = summaryFingerprint;
+      persistMeta();
+      $('#summaryBar').hidden = true;
       openAgenda(todayKey());
     });
 
@@ -9777,16 +9925,8 @@
       renderAgenda();
       agendaScrollTo(state.agendaAnchor, true);
     });
-    $('#agendaPrev').addEventListener('click', function () {
-      state.agendaAnchor = addDays(state.agendaAnchor || todayKey(), -1);
-      renderAgenda();
-      agendaScrollTo(state.agendaAnchor, false);
-    });
-    $('#agendaNext').addEventListener('click', function () {
-      state.agendaAnchor = addDays(state.agendaAnchor || todayKey(), 1);
-      renderAgenda();
-      agendaScrollTo(state.agendaAnchor, false);
-    });
+    // 「更早 / 更晚」按钮已移除，改为页面级纵向手势翻页
+    bindAgendaSwipe();
     // 「全部安排」搜索：输入即时过滤（200ms 防抖），清空恢复全量
     let agendaSearchTimer = null;
     $('#agendaSearch').addEventListener('input', function () {
@@ -10242,13 +10382,6 @@
       });
       renderCardStylePage();
     });
-    // ---------- 字体：默认字体 / 系统字体 ----------
-    $('#fontEntryBtn').addEventListener('click', openFontPage);
-    $('#fontBack').addEventListener('click', closeFontPage);
-    $('#fontList').addEventListener('click', function (e) {
-      const btn = e.target.closest('[data-font-mode]');
-      if (btn) chooseFontMode(btn.dataset.fontMode);
-    });
     $('#profileCountdownBtn').addEventListener('click', openCountdownPage);
     $('#profileTripTagsBtn').addEventListener('click', openTripTagsPage);
     $('#profileMoodTagsBtn').addEventListener('click', openMoodPage);
@@ -10273,13 +10406,25 @@
       renderPlanHistory();
       $('#planHistorySearch').focus();
     });
-    // 左滑露出编辑按钮，点击进入编辑（复用新建计划面板）
+    // 左滑露出编辑/删除按钮；标题行可展开收起该周期的条目
     $('#planHistoryBody').addEventListener('click', function (e) {
+      const toggle = e.target.closest('[data-hist-toggle]');
+      if (toggle) {
+        togglePlanHistoryGroup(toggle.dataset.histToggle, toggle);
+        return;
+      }
       const edit = e.target.closest('[data-plan-edit]');
       if (edit) {
         if (Date.now() < state.swipeClickLock) return;
         closeAllSwipes();
         openPlanEditSheet(edit.dataset.planEdit);
+        return;
+      }
+      const del = e.target.closest('[data-plan-del]');
+      if (del) {
+        if (Date.now() < state.swipeClickLock) return;
+        closeAllSwipes();
+        askDeletePlan(del.dataset.planDel);
         return;
       }
       if (handleSwipeClick(e)) return;
@@ -10670,9 +10815,15 @@
     $('#agreementAccept').addEventListener('click', acceptAgreement);
     $('#agreementDecline').addEventListener('click', declineAgreement);
 
-    // 顶栏深浅色切换：唯一开关，点一下立即生效，并持久保存
+    // 顶栏深浅色切换：其余四页用；更多页改用「外观」里的开关，两者同一个 meta.theme
     $('#themeBtn').addEventListener('click', function () {
       state.meta.theme = preferredTheme() === 'dark' ? 'light' : 'dark';
+      applyTheme();
+      persistMeta();
+      haptic(8);
+    });
+    $('#profileDarkToggle').addEventListener('change', function () {
+      state.meta.theme = this.checked ? 'dark' : 'light';
       applyTheme();
       persistMeta();
       haptic(8);
@@ -10731,26 +10882,6 @@
       if (state.batchMode) {
         if (Date.now() < state.batchLock) return;
         handleBatchClick(e);
-        return;
-      }
-      const more = e.target.closest('[data-agenda-more]');
-      if (more) {
-        // 加载中忽略重复点击
-        if (state.agendaLoading || more.disabled) return;
-        const dir = more.dataset.agendaMore;
-        state.agendaLoading = dir;
-        more.disabled = true;
-        more.classList.add('is-loading');
-        more.setAttribute('aria-busy', 'true');
-        more.innerHTML = '<span class="am-label"><span class="am-spin" aria-hidden="true"></span>' +
-          '<span class="am-text">' + esc(T('加载中…')) + '</span></span>';
-        // 留出一帧以上让加载态可见，再展开窗口
-        setTimeout(function () {
-          if (dir === 'back') state.agendaBack += AGENDA_STEP_DAYS;
-          else state.agendaFwd += AGENDA_STEP_DAYS;
-          state.agendaLoading = '';
-          renderAgenda();
-        }, 220);
         return;
       }
       if (handleSwipeClick(e)) return;
@@ -10952,12 +11083,14 @@
     if (!$('#cdSheet').hidden) { closeCdSheet(); return true; }
     if (!$('#moodPop').hidden) { closeMoodPop(); return true; }
     if (!$('#planHistoryPage').hidden) { closePlanHistoryPage(); return true; }
+    if (!$('#tripTagsPage').hidden) { closeTripTagsPage(); return true; }
     if (!$('#moodPage').hidden) { closeMoodPage(); return true; }
     if (!$('#countdownPage').hidden) { closeCountdownPage(); return true; }
     if (!$('#agendaPage').hidden) { closeAgenda(); return true; }
     if (!$('#catPop').hidden) { closeCatPop(); return true; }
     if (!$('#modalCard').hidden) { closeModal(); return true; }
-    // 日记：预览 → 写作页 → 附件/备份选择 → 管理态，逐层退出
+    // 日记：详情页 → 预览 → 写作页 → 附件/备份选择 → 管理态，逐层退出
+    if (!$('#diaryDetailPage').hidden) { closeDiaryDetail(); return true; }
     if (!$('#diaryViewer').hidden) { closeDiaryViewer(); return true; }
     if (!$('#attachSheet').hidden) { closeAttachSheet(); return true; }
     if (!$('#exportSheet').hidden) { closeExportSheet(); return true; }
@@ -10975,6 +11108,9 @@
       closeAbout();
       return true;
     }
+    // 设置下的二级页：有层级就先回设置页，不能直接退到系统
+    if (!$('#cardStylePage').hidden) { closeCardStylePage(); return true; }
+    if (!$('#zodiacPage').hidden) { closeZodiacPage(); return true; }
     if (state.settingsOpen) { closeSettings(); return true; }
     // 年历：返回键先回到月历
     if (state.yearView) { closeYearView(); return true; }
@@ -12322,6 +12458,59 @@
     scheduleDiarySave();
   }
 
+  // 「当前位置」直接复用天气系统里已经设置的地点（同一份 meta.weatherCity，
+  // 不另存一份）。天气被关闭或模块未就绪时，退回读 meta 里的那份设置。
+  function weatherCitySource() {
+    const W = window.Weather;
+    const live = W && typeof W.city === 'function' ? W.city() : null;
+    if (live && live.name) return live;
+    const saved = state.meta && state.meta.weatherCity;
+    if (saved && saved.name) return saved;
+    return null;
+  }
+
+  // 天气城市只有「城市 · 区县」两个短名，这里回到内置区划表里找省市区
+  function regionForWeatherCity(city) {
+    const name = String((city && city.name) || '').trim();
+    const segs = String((city && city.label) || '').split('·')
+      .map(function (s) { return s.trim(); }).filter(Boolean);
+    const data = regionData();
+    for (let pi = 0; pi < data.length; pi++) {
+      const cities = data[pi].cities || [];
+      for (let ci = 0; ci < cities.length; ci++) {
+        const c = cities[ci];
+        if (c !== name && segs.indexOf(c) === -1) continue;
+        let district = '';
+        const opts = districtsFor(c);
+        segs.forEach(function (s) {
+          if (opts.indexOf(s) !== -1) district = s;
+        });
+        return { province: data[pi].province, city: c, district: district };
+      }
+    }
+    // 表里没有（海外或新地名）：只写城市名，仍然能查天气
+    return { province: '', city: name, district: '' };
+  }
+
+  function useWeatherCityAsLocation() {
+    const draft = state.diaryDraft;
+    if (!draft) return;
+    const city = weatherCitySource();
+    if (!city) {
+      showToast(T('还没有设置天气位置，请先在日历页选择城市'));
+      return;
+    }
+    const region = regionForWeatherCity(city);
+    const text = draft.location && draft.location.text ? draft.location.text : '';
+    diarySetLocation({
+      province: region.province,
+      city: region.city,
+      district: region.district,
+      text: text
+    });
+    haptic(8);
+  }
+
   // ---------- 日记天气：只用滚轮选的位置，结果随日记持久化 ----------
   const NO_DISTRICT = '不限';
   let diaryWeatherTimer = null;
@@ -13451,6 +13640,7 @@
       diarySetLocation(loc);
     });
     $('#deLocPick').addEventListener('click', openRegionSheet);
+    $('#deLocCurrent').addEventListener('click', useWeatherCityAsLocation);
     $('#deLocClear').addEventListener('click', function () {
       diarySetLocation(null);
       const input = $('#deLocText');
@@ -13799,6 +13989,8 @@
     await ensurePersist();
 
     applyTheme();
+    // 旧版本可能在 html 上留过字号档位属性，启动时清掉，避免残留状态
+    document.documentElement.removeAttribute('data-fs');
     updateStorageBanner();
     renderAll();
     initWeather();

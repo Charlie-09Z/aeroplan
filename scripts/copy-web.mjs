@@ -44,7 +44,9 @@ const html = await minifyHtml(htmlSource, {
 fs.writeFileSync(path.join(www, 'index.html'), html);
 
 // ---------- CSS ----------
-const cssResult = new CleanCSS({ level: 1 }).minify(read('styles.css'));
+// 原样压缩：不做任何 font-size 改写（字号功能已移除，源码里的 px 就是最终值）
+const cssSource = read('styles.css');
+const cssResult = new CleanCSS({ level: 1 }).minify(cssSource);
 if (cssResult.errors && cssResult.errors.length) {
   console.error('CSS 压缩失败：' + cssResult.errors.join('; '));
   process.exit(1);

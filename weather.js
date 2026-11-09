@@ -294,7 +294,8 @@
       '&timezone=auto';
 
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
-    var timer = controller ? setTimeout(function () { controller.abort(); }, 9000) : null;
+    // 首屏优先：4 秒没回来就放弃，直接用本地缓存渲染，不阻塞页面
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 4200) : null;
     if (controller) store.abort = controller;
 
     return fetch(url, {
