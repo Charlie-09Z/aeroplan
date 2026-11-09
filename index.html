@@ -7,10 +7,10 @@
 
   <meta name="description" content="氢计划（AeroPlan）：日历、日程、待办、行程表与周月年计划，数据只存在本机，无需账号。">
   <title>氢计划</title>
-  <link rel="manifest" href="./manifest.webmanifest?v=1.28">
-  <link rel="icon" href="./icons/icon-192.png?v=1.28">
-  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png?v=1.28">
-  <link rel="stylesheet" href="./styles.css?v=1.28">
+  <link rel="manifest" href="./manifest.webmanifest?v=1.39">
+  <link rel="icon" href="./icons/icon-192.png?v=1.39">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png?v=1.39">
+  <link rel="stylesheet" href="./styles.css?v=1.39">
 </head>
 <body>
   <div class="phone">
@@ -32,7 +32,14 @@
           <button class="nav-btn" id="prevBtn" type="button" aria-label="上一页">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
           </button>
-          <button class="topbar-title" id="topbarTitle" type="button" aria-label="切换年月">日历</button>
+          <button class="topbar-title" id="topbarTitle" type="button" aria-label="切换年月">
+            <span class="topbar-ico" aria-hidden="true">
+              <svg class="tb-ico" data-ico="plan" viewBox="0 0 24 24"><path d="M5 4.8h14v14.4H5z"/><path d="M8.4 9.2h7.2M8.4 12.4h7.2M8.4 15.6h4.4"/></svg>
+              <svg class="tb-ico" data-ico="diary" viewBox="0 0 24 24"><path d="M5.2 4.8h9.1A2.5 2.5 0 0 1 16.8 7.3v12.4H7.7a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M5.2 4.8v12.4a2.5 2.5 0 0 0 2.5 2.5h9.1"/><path d="M8.6 8.7h5M8.6 12.1h5"/></svg>
+              <svg class="tb-ico" data-ico="profile" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/></svg>
+            </span>
+            <span class="topbar-text" id="topbarText">日历</span>
+          </button>
           <button class="nav-btn" id="nextBtn" type="button" aria-label="下一页">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>
           </button>
@@ -133,6 +140,11 @@
                 <span class="row-arrow" aria-hidden="true">›</span>
               </button>
             </div>
+            <label class="setting-row toggle-row">
+              <span>智能提示</span>
+              <input type="checkbox" id="smartTipToggle">
+              <span class="toggle" aria-hidden="true"></span>
+            </label>
           </section>
 
           <section class="setting-group">
@@ -159,7 +171,7 @@
             </button>
           </section>
 
-          <p class="profile-version" id="profileVersion">V1.2.8</p>
+          <p class="profile-version" id="profileVersion">V1.2.19</p>
         </section>
 
         <section class="view" id="viewPlan" hidden>
@@ -267,6 +279,10 @@
       <button class="fab" id="fab" type="button" aria-label="新建条目">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"/></svg>
       </button>
+
+      <!-- 统一悬浮横幅：天气 / 行程 / 计划三类通知共用一层，
+           绝对定位浮在内容之上，不参与布局、不挤压页面高度 -->
+      <div class="smart-banner" id="smartTipBanner" role="status" aria-live="polite" hidden></div>
 
       <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
       <div class="sheet item-sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
@@ -630,8 +646,17 @@
               <button class="de-loc-clear" id="deLocClear" type="button" hidden>清除</button>
             </div>
             <p class="de-loc-summary" id="deLocSummary"></p>
+            <p class="de-loc-hint" id="deLocHint"></p>
             <div class="de-weather" id="deWeather" hidden></div>
             <input class="de-loc-text" id="deLocText" type="text" maxlength="60" autocomplete="off" placeholder="具体位置（可选），如街道、店铺、楼栋">
+            <label class="de-wx-toggle" id="deWxToggleRow">
+              <input class="de-wx-input" id="deWxToggle" type="checkbox">
+              <span class="de-wx-circle" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M6.4 12.4l3.7 3.7 7.5-7.7"/></svg>
+              </span>
+              <span class="de-wx-label">天气</span>
+            </label>
+            <p class="de-wx-hint" id="deWxHint" hidden></p>
           </div>
           <div class="de-attach">
             <div class="de-attach-head">
@@ -655,13 +680,15 @@
         <button class="dv-close" id="diaryViewerClose" type="button" aria-label="关闭">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
-        <img id="diaryViewerImg" alt="">
-        <video id="diaryViewerVideo" playsinline controls hidden></video>
+        <div class="dv-stage" id="diaryViewerStage">
+          <img id="diaryViewerImg" alt="">
+          <video id="diaryViewerVideo" playsinline controls hidden></video>
+          <p class="dv-name" id="diaryViewerName"></p>
+        </div>
         <button class="dv-save" id="diaryViewerSave" type="button" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0 0-4-4m4 4 4-4M5 19h14"/></svg>
           <span>保存图片</span>
         </button>
-        <p class="dv-name" id="diaryViewerName"></p>
       </div>
 
       <!-- 备份：是否包含附件 -->
@@ -810,7 +837,7 @@
           </section>
 
           <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
-          <div class="settings-version" id="settingsVersion">氢计划 · 版本 V1.2.8</div>
+          <div class="settings-version" id="settingsVersion">氢计划 · 版本 V1.2.19</div>
         </div>
       </div>
 
@@ -899,7 +926,7 @@
             <p>请通过你获取本应用的渠道联系我们：应用商店页面、发布页面或仓库 Issue。</p>
           </section>
 
-          <p class="about-version" id="aboutVersion">V1.2.8</p>
+          <p class="about-version" id="aboutVersion">V1.2.19</p>
         </div>
 
         <div class="agreement-actions" id="agreementActions" hidden>
@@ -1173,10 +1200,10 @@
 
     </div>
   </div>
-  <script src="./i18n.js?v=1.28"></script>
-  <script src="./regions.js?v=1.28"></script>
-  <script src="./districts.js?v=1.28"></script>
-  <script src="./weather.js?v=1.28"></script>
-  <script src="./app.js?v=1.28"></script>
+  <script src="./i18n.js?v=1.39"></script>
+  <script src="./regions.js?v=1.39"></script>
+  <script src="./districts.js?v=1.39"></script>
+  <script src="./weather.js?v=1.39"></script>
+  <script src="./app.js?v=1.39"></script>
 </body>
 </html>

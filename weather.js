@@ -167,6 +167,9 @@
           code: keys.map(function (k) { return obj.days[k].code; }),
           max: keys.map(function (k) { return obj.days[k].max; }),
           min: keys.map(function (k) { return obj.days[k].min; }),
+          pop: keys.map(function (k) { return obj.days[k].pop; }),
+          uv: keys.map(function (k) { return obj.days[k].uv; }),
+          wind: keys.map(function (k) { return obj.days[k].wind; }),
           label: c.name
         }
       };
@@ -182,7 +185,14 @@
       // 随这次写入一起被替换掉，不会累积历史记录。
       var days = {};
       data.time.forEach(function (k, i) {
-        days[k] = { code: data.code[i], max: data.max[i], min: data.min[i] };
+        days[k] = {
+          code: data.code[i],
+          max: data.max[i],
+          min: data.min[i],
+          pop: (data.pop || [])[i],
+          uv: (data.uv || [])[i],
+          wind: (data.wind || [])[i]
+        };
       });
       localStorage.setItem(WCACHE_KEY, JSON.stringify({
         v: 1,
@@ -291,6 +301,7 @@
       '?latitude=' + pos.latitude.toFixed(3) +
       '&longitude=' + pos.longitude.toFixed(3) +
       '&daily=weather_code,temperature_2m_max,temperature_2m_min' +
+      ',precipitation_probability_max,uv_index_max,wind_speed_10m_max' +
       '&forecast_days=' + FORECAST_DAYS +
       '&timezone=auto';
 
@@ -329,6 +340,10 @@
         code: keep.map(function (i) { return (daily.weather_code || [])[i]; }),
         max: keep.map(function (i) { return (daily.temperature_2m_max || [])[i]; }),
         min: keep.map(function (i) { return (daily.temperature_2m_min || [])[i]; }),
+        // 智能提示用：降水概率（%）、紫外线指数、最大风速（km/h）
+        pop: keep.map(function (i) { return (daily.precipitation_probability_max || [])[i]; }),
+        uv: keep.map(function (i) { return (daily.uv_index_max || [])[i]; }),
+        wind: keep.map(function (i) { return (daily.wind_speed_10m_max || [])[i]; }),
         label: pos.label
       };
     }).catch(function (err) {
@@ -474,10 +489,29 @@
           code: data.code[idx],
           max: data.max[idx],
           min: data.min[idx],
+          pop: (data.pop || [])[idx],
+          uv: (data.uv || [])[idx],
+          wind: (data.wind || [])[idx],
           date: key,
           at: Date.now()
         };
       });
+  }
+
+  // 供智能提示读取某一天的完整数据（同步、只读；不联网）
+  function dayFor(key) {
+    if (!store.enabled || !store.data || !key) return null;
+    var i = store.data.time.indexOf(key);
+    if (i === -1) return null;
+    return {
+      date: key,
+      code: store.data.code[i],
+      max: store.data.max[i],
+      min: store.data.min[i],
+      pop: (store.data.pop || [])[i],
+      uv: (store.data.uv || [])[i],
+      wind: (store.data.wind || [])[i]
+    };
   }
 
   function paint(el, key) {
@@ -928,6 +962,7 @@
     search: search,
     searchAddress: searchAddress,
     dailyForPlace: dailyForPlace,
+    dayFor: dayFor,
     infoFor: infoFor,
     clearCache: clearCache,
     cacheStats: cacheStats,

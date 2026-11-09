@@ -2,7 +2,7 @@
   "name": "AeroPlan",
   "short_name": "AeroPlan",
   "description": "AeroPlan：日历、日程、待办、行程表、天气和计划，数据只存在本机，无需账号。",
-  "version": "1.2.8",
+  "version": "1.2.19",
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": "./index.html",

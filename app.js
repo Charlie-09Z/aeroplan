@@ -45,7 +45,7 @@
     lang: 'light-schedule.lang'
   };
 
-  const APP_VERSION = '1.2.8';
+  const APP_VERSION = '1.2.19';
   const POLICY_VERSION = 'privacy-1.2';
   // 生成新 keystore 后，把证书 SHA-256 指纹填在这里（README 有步骤）
   const OFFICIAL_CERT_SHA256 = '';
@@ -1278,8 +1278,13 @@
     meta.cardStyle = normalizeCardStyleId(meta.cardStyle);
     meta.progressStyle = meta.progressStyle === 'battery' ? 'battery' : 'bar';
     meta.moods = normalizeMoods(meta.moods);
-    // 逾期提示条点过「查看」后记住当时的指纹，数字不变就不再弹
-    meta.summaryDismissed = typeof meta.summaryDismissed === 'string' ? meta.summaryDismissed : '';
+    // 智能提示升级为统一横幅：天气 / 行程 / 计划各记一份确认指纹。
+    // 老版本的单份 smartTipAck 只代表天气，这里迁移到天气指纹，避免升级后又弹一次
+    meta.smartTipAckWeather = typeof meta.smartTipAckWeather === 'string'
+      ? meta.smartTipAckWeather
+      : (typeof meta.smartTipAck === 'string' ? meta.smartTipAck : '');
+    meta.smartTipAckTrip = typeof meta.smartTipAckTrip === 'string' ? meta.smartTipAckTrip : '';
+    meta.smartTipAckPlan = typeof meta.smartTipAckPlan === 'string' ? meta.smartTipAckPlan : '';
     return meta;
   }
 
@@ -1575,6 +1580,8 @@
       tags: tags,
       location: location,
       weather: weather,
+      // 英文模式日记天气勾选：每篇日记独立保存，中文模式不显示该开关
+      weatherOn: raw.weatherOn === true,
       attachments: attachments,
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
       updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now()
@@ -2203,6 +2210,7 @@
 
   function updateTopbar() {
     const title = $('#topbarTitle');
+    const titleText = $('#topbarText');
     const prev = $('#prevBtn');
     const next = $('#nextBtn');
     const t = todayKey();
@@ -2211,9 +2219,9 @@
 
     if (state.view === 'calendar') {
       if (state.yearView) {
-        title.textContent = isEn() ? String(state.yearViewYear) : state.yearViewYear + ' 年';
+        titleText.textContent = isEn() ? String(state.yearViewYear) : state.yearViewYear + ' 年';
       } else {
-        title.textContent = isEn()
+        titleText.textContent = isEn()
           ? MONTH_EN[state.month.getMonth()] + ' ' + state.month.getFullYear()
           : state.month.getFullYear() + '年' + (state.month.getMonth() + 1) + '月';
       }
@@ -2222,15 +2230,20 @@
         : state.month.getFullYear() === td.getFullYear() && state.month.getMonth() === td.getMonth();
     } else if (state.view === 'schedule') {
       const start = state.scheduleAnchor || startOfWeek(t);
-      title.textContent = shortDate(start) + ' – ' + shortDate(addDays(start, 6));
+      titleText.textContent = shortDate(start) + ' – ' + shortDate(addDays(start, 6));
       onToday = start === startOfWeek(t);
     } else if (state.view === 'diary') {
-      title.textContent = T('日记');
+      titleText.textContent = T('日记');
     } else if (state.view === 'profile') {
-      title.textContent = T('更多');
+      titleText.textContent = T('更多');
     } else {
-      title.textContent = T('计划');
+      titleText.textContent = T('计划');
     }
+
+    // 计划 / 日记 / 更多三页在标题左侧带页面图标；日历、行程表的标题是日期文本，不配图标
+    title.dataset.tbicon = (state.view === 'plan' || state.view === 'diary' || state.view === 'profile')
+      ? state.view
+      : '';
 
     // 五个页面顶栏统一：无翻页/无「今天」的页面用占位（visibility:hidden），
     // 保留与日历页相同的左/右空间，标题与图标的横坐标不因内容缺失而位移
@@ -2250,8 +2263,10 @@
     todayBtn.classList.toggle('is-current', onToday);
   }
 
-  // 提示条指纹：逾期数 + 今日未完成数。点过「查看」后若数字不变就不再出现
-  let summaryFingerprint = '';
+  // 汇总气泡常驻：显示条件只看「今天有没有行程 / 待办」。
+  // 不再记录点过「查看」的指纹，点过之后仍然显示；
+  // 有未完成项时给数字，全部完成时只给结论句，避免出现「还有 0 项未完成」。
+  let summaryHasPending = false;
 
   function renderSummary() {
     if (state.batchMode) {
@@ -2265,33 +2280,39 @@
     }
     const t = todayKey();
     const todayItems = expandOccurrences(state.items, t, t);
-    // 只有待办过期才算逾期；日程没有逾期概念，过日期按普通历史显示
-    const overdue = state.items.filter(function (i) {
-      return i.type === 'todo' && !i.recurrence && !i.done && i.date < t;
+    // 唯一隐藏条件：今天完全没有行程 / 待办（空状态）
+    if (!todayItems.length) {
+      summaryHasPending = false;
+      $('#summaryBar').hidden = true;
+      return;
+    }
+    const clock = new Date();
+    const nowMinutes = clock.getHours() * 60 + clock.getMinutes();
+
+    // 口径：今天、还没完成的两类才算——
+    // 1）待办（todo）只要没勾选完成就计数；
+    // 2）日程（event）只算今天且开始时间还没到的，今天已经过去的、其它日期的都不算；
+    // 已完成的、逾期的（其它日期）一律排除。
+    const pending = todayItems.filter(function (i) {
+      if (i.done) return false;
+      if (i.type === 'todo') return true;
+      if (i.type !== 'event') return false;
+      // 全天日程没有具体开始时刻，谈不上「已过去」，按今天待办处理
+      if (!i.time) return true;
+      const parts = String(i.time).split(':');
+      const startMinutes = (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+      return startMinutes > nowMinutes;
     });
-    const pending = todayItems.filter(function (i) { return !i.done; });
-    const doneToday = todayItems.filter(function (i) { return i.done; });
 
-    if (!overdue.length && !pending.length) {
-      $('#summaryBar').hidden = true;
+    if (!pending.length) {
+      summaryHasPending = false;
+      $('#summaryText').innerHTML = esc(T('今天的安排都完成了'));
+      $('#summaryBar').hidden = false;
       return;
     }
 
-    summaryFingerprint = overdue.length + '|' + pending.length;
-    if (state.meta.summaryDismissed === summaryFingerprint) {
-      $('#summaryBar').hidden = true;
-      return;
-    }
-
-    const parts = [];
-    if (overdue.length) {
-      parts.push('<span class="sum-danger">' + esc(T('逾期 {n} 项', { n: overdue.length })) + '</span>');
-    }
-    parts.push(esc(T('今天还有 {n} 项未完成', { n: pending.length })));
-    if (doneToday.length) {
-      parts.push(esc(T('已完成 {n} 项', { n: doneToday.length })));
-    }
-    $('#summaryText').innerHTML = parts.join('<span class="sum-sep">·</span>');
+    summaryHasPending = true;
+    $('#summaryText').innerHTML = esc(T('今天还有 {n} 项未完成', { n: pending.length }));
     $('#summaryBar').hidden = false;
   }
 
@@ -4076,6 +4097,8 @@
 
   // 「全部安排」的即时搜索：标题、备注、地点、分类名都参与匹配
   let agendaSearchQuery = '';
+  // 从汇总条「查看」进入时为 true：今天已过去的日程不再列出，和统计口径保持一致
+  let agendaPendingOnly = false;
 
   function agendaItemMatches(item, q) {
     const cat = getCategory(item.categoryId);
@@ -4204,13 +4227,22 @@
     const hasEarlier = !!agendaNearestDate('back');
     const hasLater = !!agendaNearestDate('fwd');
 
+    // 从汇总条进入时，今天已开始的日程不铺进时间线，保证列表条目数与「今天还有 n 项」一致
+    const clock = new Date();
+    const nowMinutes = clock.getHours() * 60 + clock.getMinutes();
     const byDate = {};
     expandOccurrences(visibleItems, start, end).forEach(function (item) {
+      if (agendaPendingOnly && item.date === t && item.type === 'event' && item.time) {
+        const parts = String(item.time).split(':');
+        const startMinutes = (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+        if (startMinutes <= nowMinutes) return;
+      }
       if (!byDate[item.date]) byDate[item.date] = [];
       byDate[item.date].push(item);
     });
 
-    const overdue = visibleItems
+    // 汇总条口径不含其它日期的逾期项，进入时也不再把逾期分组顶在最上面
+    const overdue = agendaPendingOnly ? [] : visibleItems
       .filter(function (i) { return i.type === 'todo' && !i.recurrence && !i.done && i.date < t; })
       .sort(compareOverdue);
 
@@ -4653,6 +4685,14 @@
     return T('完成 {done}/{total}', { done: planDoneCount(list), total: list.length });
   }
 
+  // 卡头副标题：范围词 · 周期（仅周） · 完成 n/m；进度变化时原地只改这行文字
+  function planSubText(kind, total, done, start) {
+    return [T(PLAN_SCOPE_WORD[kind])]
+      .concat(kind === 'week' ? [planPeriodLabel(kind, start || planPeriodStart(kind, todayKey()))] : [])
+      .concat([total ? T('完成 {done}/{total}', { done: done, total: total }) : T('暂无计划')])
+      .join(' · ');
+  }
+
   function planCardHTML(kind, t) {
     const start = planPeriodStart(kind, t);
     const ofKind = state.plans.filter(function (p) { return p.kind === kind; });
@@ -4666,6 +4706,7 @@
     const done = current.filter(function (p) { return p.done; }).length;
     const total = current.length;
     const pct = total ? Math.round(done / total * 100) : 0;
+    const full = pct === 100 && total > 0;
 
     let rows = '';
     if (total) {
@@ -4684,17 +4725,16 @@
       '<div class="plan-card-head">' +
         '<div class="plan-card-title">' +
           '<h2>' + esc(T(PLAN_KINDS[kind])) + '</h2>' +
-          '<p class="plan-sub">' +
-            esc([T(PLAN_SCOPE_WORD[kind])]
-              .concat(kind === 'week' ? [planPeriodLabel(kind, start)] : [])
-              .concat([total ? T('完成 {done}/{total}', { done: done, total: total }) : T('暂无计划')])
-              .join(' · ')) + '</p>' +
+          '<p class="plan-sub" data-plan-sub>' + esc(planSubText(kind, total, done, start)) + '</p>' +
         '</div>' +
-        '<div class="plan-ring">' +
+        '<div class="plan-ring' + (full ? ' is-full' : '') + '">' +
           '<svg viewBox="0 0 58 58" aria-hidden="true">' +
             '<circle class="ring-bg" cx="29" cy="29" r="24"></circle>' +
-            '<circle class="ring-fill' + (pct === 100 && total ? ' full' : '') + '" data-plan-ring="' + kind +
-              '" data-pct="' + pct + '" cx="29" cy="29" r="24" pathLength="100"></circle>' +
+            // 注意：SVG presentation attribute 会被样式表里的 .ring-fill { stroke-dashoffset: 100 } 覆盖，
+            // 初始弧长必须写进内联 style，才能和 refreshPlanRing 的原地更新走同一套规则
+            '<circle class="ring-fill' + (full ? ' full' : '') + (pct ? '' : ' zero') + '" data-plan-ring="' + kind +
+              '" data-pct="' + pct + '" cx="29" cy="29" r="24" pathLength="100"' +
+              ' style="stroke-dashoffset:' + (100 - pct) + '"></circle>' +
           '</svg>' +
           '<div class="ring-label"><b>' + (total ? pct + '%' : '—') + '</b><span>' + esc(total ? T('完成') : T('暂无')) + '</span></div>' +
         '</div>' +
@@ -4872,6 +4912,9 @@
     if (ver) ver.textContent = 'V' + APP_VERSION;
     renderCardStyleEntry();
     renderCategoryList();
+    // 「个性化」里的智能提示开关（默认开启）
+    const smartToggle = $('#smartTipToggle');
+    if (smartToggle) smartToggle.checked = smartTipEnabled();
   }
 
   function applyCardStyle() {
@@ -6655,6 +6698,8 @@
     if (state.view === 'profile') renderProfile();
     renderSettings();
     renderBatchBar();
+    // 统一悬浮横幅：五个主界面（日历 / 计划 / 行程表 / 日记 / 更多）共用一套判定
+    renderSmartTip();
     // 「全部安排」是全屏覆盖层，数据变化时同步重绘
     if (agendaPageOpen()) renderAgenda();
     // 日记编辑页是独立的覆盖层，不随视图重绘，但"写今天/续写今天"要跟着日期与数据变
@@ -6693,17 +6738,19 @@
     // 切换视图时退出批量模式并清空已选
     if (state.batchMode) clearBatchState();
     // 进入日记页时也先尝试拉一次最新天气；失败/超时静默保留缓存
-    if (view === 'diary' && weatherEnabled() && window.Weather) window.Weather.refresh(true);
+    if (view === 'diary' && weatherEnabled() && window.Weather) refreshWeather(true);
     renderAll();
   }
 
   // 「全部安排」：原议程页降级为日历页内的全屏流式入口，能力（连续历史/未来 + 分类筛选）完整保留
-  function openAgenda(anchor) {
+  function openAgenda(anchor, opts) {
     state.agendaAnchor = anchor || state.agendaAnchor || todayKey();
     // 默认只显示当天，由纵向手势再逐步加载历史 / 未来
     state.agendaBack = 0;
     state.agendaFwd = 0;
     state.agendaLoading = '';
+    // 只有从汇总条进入时才按「未完成」口径精简今天的时间线
+    agendaPendingOnly = !!(opts && opts.pendingOnly);
     // 每次打开都从全量开始，清掉上次的搜索词
     agendaSearchQuery = '';
     const searchInput = $('#agendaSearch');
@@ -8317,7 +8364,10 @@
       plan.doneAt = plan.done ? Date.now() : null;
       plan.updatedAt = Date.now();
       await persistPlans();
-      renderPlan();
+      // 原地刷新这一条与卡头进度，不重建整张列表
+      paintPlanRow(plan);
+      refreshPlanRing(plan.kind);
+      reorderPlanRow(plan);
       haptic(10);
       if (plan.done) showToast(T('已完成 · {title}', { title: shorten(plan.title, 16) }), 1400);
       return;
@@ -8343,14 +8393,13 @@
     }
     haptic(plan.done ? 16 : 9);
     bumpPlanDom(plan);
+    paintPlanRow(plan);
     refreshPlanRing(plan.kind);
     if (detail.open && detail.kind === 'plan') openPlanDetail(plan.id);
     if (plan.done) {
       showToast(T('目标达成 · {title}', { title: shorten(plan.title, 16) }), 1600);
-      // 完成后重排到列表末尾，给完成态一个收尾动画
-      window.setTimeout(function () {
-        if (state.view === 'plan') renderPlan();
-      }, 900);
+      // 完成后只把这一条挪到列表末尾，不重建整张列表
+      window.setTimeout(function () { reorderPlanRow(plan); }, 900);
     }
     await persistPlans(true);
   }
@@ -8365,7 +8414,11 @@
     plan.doneAt = null;
     plan.updatedAt = Date.now();
     await persistPlans();
-    renderPlan();
+    // 撤销同样原地刷新：这一条、卡头环、排序位置
+    paintPlanProgress(plan);
+    paintPlanRow(plan);
+    refreshPlanRing(plan.kind);
+    reorderPlanRow(plan);
     if (detail.open && detail.kind === 'plan') openPlanDetail(id);
     haptic(6);
     showToast(T('已撤销一次'), 1200);
@@ -8385,11 +8438,11 @@
     showToast(T('进度已重置'), 1200);
   }
 
-  // 卡面原地刷新：不重建列表，只改数字、进度条/能量格/环形/百分数/月相
-  function bumpPlanDom(plan) {
+  // 卡面进度原地刷新：只改数字、进度条/能量格/环形/百分数/月相，不重建节点
+  function paintPlanProgress(plan) {
     const p = planProgress(plan);
     const article = document.querySelector('[data-plan-row="' + plan.id + '"]');
-    if (!article) return;
+    if (!article) return null;
     const countEl = article.querySelector('[data-plan-count]');
     if (countEl) countEl.textContent = String(p.count);
     const bar = article.querySelector('[data-plan-bar]');
@@ -8418,6 +8471,57 @@
       }
       moon.classList.toggle('is-full', k >= 0.92);
     }
+    return article;
+  }
+
+  // 勾选态原地刷新：行的 done 类、勾选/「+1」按钮外观与 aria 文案
+  function paintPlanRow(plan) {
+    const row = document.querySelector('[data-plan-row="' + plan.id + '"]');
+    if (!row) return;
+    const p = planProgress(plan);
+    row.classList.toggle('done', p.done);
+    const btn = row.querySelector('[data-plan-check]');
+    if (!btn) return;
+    if (btn.classList.contains('check')) {
+      btn.classList.toggle('checked', p.done);
+      btn.setAttribute('aria-checked', p.done ? 'true' : 'false');
+      btn.setAttribute('aria-label', T(p.done ? '标记为未完成' : '标记为完成'));
+    } else {
+      btn.classList.toggle('done', p.done);
+      btn.setAttribute('aria-label', T(p.done ? '目标已达成' : '记一次完成'));
+      const path = btn.querySelector('svg path');
+      if (path) path.setAttribute('d', p.done ? 'M5 12.5l4.2 4.2L19 7.4' : 'M12 6.2v11.6M6.2 12h11.6');
+    }
+  }
+
+  // 完成态在 planSort 里排最后：只移动这一条的节点，不重建列表
+  function reorderPlanRow(plan) {
+    const row = document.querySelector('[data-plan-row="' + plan.id + '"]');
+    const swipe = row && row.closest('.plan-swipe');
+    if (!swipe || swipe.getAttribute('data-plan-current') !== '1') return;
+    const list = swipe.parentNode;
+    if (!list) return;
+    const cur = Array.prototype.slice.call(list.querySelectorAll('.plan-swipe[data-plan-current="1"]'))
+      .map(function (el) {
+        return { el: el, plan: state.plans.find(function (x) { return x.id === el.dataset.id; }) };
+      })
+      .filter(function (x) { return !!x.plan; })
+      .sort(function (a, b) { return planSort(a.plan, b.plan); });
+    const i = cur.findIndex(function (x) { return x.el === swipe; });
+    const next = i >= 0 && i + 1 < cur.length ? cur[i + 1].el : null;
+    if (next) {
+      list.insertBefore(swipe, next);
+    } else {
+      const other = list.querySelector('.plan-other-head');
+      if (other) list.insertBefore(swipe, other);
+      else list.appendChild(swipe);
+    }
+  }
+
+  // 点击「+1」的反馈：先原地刷新数字，再补弹跳与飞字
+  function bumpPlanDom(plan) {
+    const article = paintPlanProgress(plan);
+    if (!article) return;
     const prog = article.querySelector('.plan-progress');
     if (prog) {
       prog.classList.remove('bump');
@@ -8437,7 +8541,7 @@
     }
   }
 
-  // 卡头的完成百分比环跟着进度即时刷新
+  // 卡头的完成百分比环跟着进度即时刷新（只改环与副标题，不重建列表）
   function refreshPlanRing(kind) {
     const card = document.querySelector('[data-plan-card="' + kind + '"]');
     if (!card) return;
@@ -8447,14 +8551,20 @@
     const total = current.length;
     const done = current.filter(function (p) { return p.done; }).length;
     const pct = total ? Math.round(done / total * 100) : 0;
+    const full = pct === 100 && total > 0;
     const ring = card.querySelector('[data-plan-ring="' + kind + '"]');
     const label = card.querySelector('.ring-label b');
+    const sub = card.querySelector('[data-plan-sub]');
     if (ring) {
       ring.dataset.pct = String(pct);
       ring.style.strokeDashoffset = String(100 - pct);
-      ring.classList.toggle('full', pct === 100 && total > 0);
+      ring.classList.toggle('full', full);
+      ring.classList.toggle('zero', pct === 0);
+      const wrap = ring.closest('.plan-ring');
+      if (wrap) wrap.classList.toggle('is-full', full);
     }
     if (label) label.textContent = total ? pct + '%' : '—';
+    if (sub) sub.textContent = planSubText(kind, total, done, start);
   }
 
   function askDeletePlan(id) {
@@ -8497,6 +8607,266 @@
   // 城市面板的三列滚轮状态，与日记位置的 regionPicker 各自独立
   const cityPicker = { province: 0, city: 0, district: 0 };
 
+  // ==================== 智能提示：统一悬浮横幅（天气 / 行程 / 计划） ====================
+
+  // 总开关：老数据没有该字段时默认开启
+  function smartTipEnabled() {
+    return state.meta.smartTipEnabled !== false;
+  }
+
+  // 三类通知各自一份确认指纹；老版本的单份 smartTipAck 在 normalizeMeta 里迁移到天气
+  const SMART_TIP_ACK_FIELD = {
+    weather: 'smartTipAckWeather',
+    trip: 'smartTipAckTrip',
+    plan: 'smartTipAckPlan'
+  };
+  const SMART_TIP_ICON_TRIP = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2"/>' +
+    '<path d="M12 7.6V12h3.9"/></svg>';
+  const SMART_TIP_ICON_PLAN = '<svg viewBox="0 0 24 24"><path d="M6 4.8h12v14.4H6z"/>' +
+    '<path d="M9 9h6M9 12.6h4"/></svg>';
+
+  // 本次会话内点过「关闭」或横幅本身的指纹：只存在内存里，不写 meta。
+  // 换天 / 换天气 / 换行程 / 换计划都会产生新指纹，横幅会再次出现，不会被永久屏蔽。
+  const smartTipDismissed = Object.create(null);
+  let smartTipCurrent = null;
+  let smartTipShownSig = '';
+  let smartTipHideTimer = null;
+
+  // 21:00 前用今日天气，21:00 起改用明日天气
+  function smartTipDay() {
+    if (!window.Weather || !window.Weather.dayFor) return null;
+    const tomorrow = new Date().getHours() >= 21;
+    const key = tomorrow ? addDays(todayKey(), 1) : todayKey();
+    const day = window.Weather.dayFor(key);
+    if (!day) return null;
+    day.tomorrow = tomorrow;
+    return day;
+  }
+
+  // 天气确认指纹：日期 + 这次用到的天气数据。换天或天气实质变化后才允许再出现
+  function smartTipSignature(day) {
+    function num(v, digits) {
+      const n = Number(v);
+      if (!isFinite(n)) return '';
+      return digits ? n.toFixed(digits) : String(Math.round(n));
+    }
+    return [
+      day.date,
+      String(day.code),
+      num(day.max),
+      num(day.min),
+      num(day.pop),
+      num(day.uv, 1),
+      num(day.wind)
+    ].join('|');
+  }
+
+  // 判定优先级：降水 > 紫外线 > 高温 > 低温 > 大风 > 晴/云兜底
+  // 阈值：降水概率 ≥ 50%；UV ≥ 6（10:00–16:00 正午时段放宽到 ≥ 3）；
+  //       高温 ≥ 33°；低温 ≤ 4°；大风 ≥ 30 km/h
+  function smartTipSentence(day) {
+    const code = Number(day.code);
+    // 老缓存可能没有新字段：null / undefined 一律按 NaN 处理，避免误判成 0°
+    function num(v) { return v === null || v === undefined || v === '' ? NaN : Number(v); }
+    const pop = num(day.pop);
+    const uv = num(day.uv);
+    const max = num(day.max);
+    const min = num(day.min);
+    const wind = num(day.wind);
+    const hour = new Date().getHours();
+    const noon = hour >= 10 && hour < 16;
+    const snow = (code >= 71 && code <= 77) || code === 85 || code === 86;
+    const wet = code >= 51 || (isFinite(pop) && pop >= 50);
+
+    if (wet) return snow ? T('可能有降雪，出门注意防滑保暖') : T('可能下雨，出门记得带伞');
+    if (isFinite(uv) && (uv >= 6 || (noon && uv >= 3))) return T('紫外线较强，记得做好防晒');
+    if (isFinite(max) && max >= 33) return T('气温较高，注意补充水分');
+    if (isFinite(min) && min <= 4) return T('气温偏低，出门注意保暖');
+    if (isFinite(wind) && wind >= 30) return T('风比较大，出门留意防风');
+    if (code === 0 || code === 1) return T('天气不错，适合出门走走');
+    if (code === 2 || code === 3) return T('云层较厚，出门也留意天色');
+    return T('出门前看一眼天气，安排会更从容');
+  }
+
+  function smartTipWeatherCandidate() {
+    if (!weatherEnabled()) return null;
+    const day = smartTipDay();
+    if (!day) return null;
+    const info = window.Weather && window.Weather.infoFor ? window.Weather.infoFor(Number(day.code)) : null;
+    return {
+      type: 'weather',
+      sig: smartTipSignature(day),
+      text: T('{when}：{tip}', {
+        when: day.tomorrow ? T('明天') : T('今天'),
+        tip: smartTipSentence(day)
+      }),
+      tone: info && info.tone ? info.tone : '',
+      icon: info && info.icon ? info.icon : ''
+    };
+  }
+
+  // 行程：只看今天带时间的未完成条目。开始前 60 分钟到开始后 60 分钟内提示；
+  // 「进行中」按开始后 60 分钟内算（条目没有结束时间，统一按一小时时段处理）。
+  const SMART_TIP_TRIP_WINDOW = 60;
+  function smartTipTripCandidate(now) {
+    const key = todayKey();
+    let best = null;
+    expandOccurrences(state.items, key, key).forEach(function (item) {
+      if (!item.time || item.done) return;
+      const parts = item.time.split(':');
+      const start = keyToDate(key);
+      start.setHours(Number(parts[0]) || 0, Number(parts[1]) || 0, 0, 0);
+      const mins = Math.round((start.getTime() - now.getTime()) / 60000);
+      if (mins > SMART_TIP_TRIP_WINDOW || mins < -SMART_TIP_TRIP_WINDOW) return;
+      const urgency = Math.max(0, mins);
+      if (best && best.urgency <= urgency) return;
+      let text;
+      if (mins <= 0) text = T('行程 · {title} 正在进行', { title: item.title });
+      else if (mins <= 1) text = T('行程 · {title} 即将开始', { title: item.title });
+      else text = T('行程 · {title} {n} 分钟后开始', { title: item.title, n: mins });
+      best = {
+        type: 'trip',
+        // 换行程（不同条目 / 日期 / 时间 / 标题）就是新指纹
+        sig: 'trip|' + item.id + '|' + key + '|' + item.time + '|' + item.title,
+        text: text,
+        urgency: urgency,
+        tone: '',
+        icon: SMART_TIP_ICON_TRIP
+      };
+    });
+    return best;
+  }
+
+  // 计划：只看未完成的计划，且周期结束日落在今天或明天（即「最后两天」）。
+  // 周期结束日：周 = 周日、月 = 月末、年 = 12-31，沿用 planPeriodEnd。
+  function smartTipPlanCandidate(today) {
+    let best = null;
+    state.plans.forEach(function (plan) {
+      const prog = planProgress(plan);
+      if (prog.done) return;
+      const end = planPeriodEnd(plan.kind, plan.periodStart);
+      if (today < addDays(end, -1) || today > end) return;
+      const deadline = keyToDate(end);
+      deadline.setHours(23, 59, 59, 999);
+      const mins = Math.max(0, Math.round((deadline.getTime() - Date.now()) / 60000));
+      if (best && best.urgency <= mins) return;
+      let textKey;
+      if (plan.kind === 'year') textKey = '本年计划 · {title} 快到期限了';
+      else if (plan.kind === 'month') textKey = '本月计划 · {title} 快到期限了';
+      else textKey = '本周计划 · {title} 快到期限了';
+      best = {
+        type: 'plan',
+        // 换计划（条目 / 周期 / 标题）就是新指纹；进度变化不重弹
+        sig: 'plan|' + plan.id + '|' + plan.kind + '|' + plan.periodStart + '|' + end + '|' + plan.title,
+        text: T(textKey, { title: plan.title }),
+        urgency: mins,
+        tone: '',
+        icon: SMART_TIP_ICON_PLAN
+      };
+    });
+    return best;
+  }
+
+  function smartTipAcked(candidate) {
+    return state.meta[SMART_TIP_ACK_FIELD[candidate.type]] === candidate.sig;
+  }
+
+  function smartTipBlocked(candidate) {
+    return smartTipAcked(candidate) || !!smartTipDismissed[candidate.sig];
+  }
+
+  // 优先级：行程 = 计划（按紧迫度取更急的一条，分钟数越小越急）> 天气
+  function smartTipPick() {
+    if (!smartTipEnabled()) return null;
+    const urgent = [];
+    const trip = smartTipTripCandidate(new Date());
+    const plan = smartTipPlanCandidate(todayKey());
+    if (trip) urgent.push(trip);
+    if (plan) urgent.push(plan);
+    urgent.sort(function (a, b) { return a.urgency - b.urgency; });
+    const ordered = urgent.concat([smartTipWeatherCandidate()].filter(Boolean));
+    for (let i = 0; i < ordered.length; i++) {
+      if (!smartTipBlocked(ordered[i])) return ordered[i];
+    }
+    return null;
+  }
+
+  function smartTipBannerHTML(candidate) {
+    const icon = candidate.icon
+      ? '<span class="smart-banner-icon' + (candidate.tone ? ' ' + candidate.tone : '') +
+        '" aria-hidden="true">' + candidate.icon + '</span>'
+      : '';
+    return icon +
+      '<span class="smart-banner-text">' + esc(candidate.text) + '</span>' +
+      '<span class="smart-banner-actions">' +
+        '<button class="smart-banner-ack" type="button" data-smart-tip-ack>' + esc(T('确认')) + '</button>' +
+      '</span>';
+  }
+
+  function hideSmartTipBanner() {
+    const banner = $('#smartTipBanner');
+    if (!banner || banner.hidden) return;
+    banner.classList.remove('open');
+    clearTimeout(smartTipHideTimer);
+    smartTipHideTimer = setTimeout(function () {
+      if (!banner.classList.contains('open')) banner.hidden = true;
+    }, 240);
+  }
+
+  function renderSmartTip() {
+    const banner = $('#smartTipBanner');
+    if (!banner) return;
+    const pick = smartTipPick();
+    if (!pick) {
+      smartTipCurrent = null;
+      smartTipShownSig = '';
+      hideSmartTipBanner();
+      return;
+    }
+    smartTipCurrent = pick;
+    // 位置由 CSS 固定在 .app 顶部（滚动区之外），这里不再做任何测量
+    // 同一条内容已经在显示时不动它，避免每次 renderAll 都重播动画；
+    // 语言也算进比较键，切中英文时同一条通知要按新语言重绘
+    const shownKey = pick.sig + '|' + (isEn() ? 'en' : 'zh');
+    if (smartTipShownSig === shownKey && !banner.hidden) return;
+    smartTipShownSig = shownKey;
+    banner.innerHTML = smartTipBannerHTML(pick);
+    banner.hidden = false;
+    banner.classList.remove('open');
+    void banner.offsetWidth;
+    requestAnimationFrame(function () {
+      if (smartTipShownSig === shownKey) banner.classList.add('open');
+    });
+  }
+
+  // 「确认」：写对应类型的指纹，之后同类内容不再出现
+  function ackSmartTip() {
+    const cur = smartTipCurrent;
+    if (!cur) return;
+    state.meta[SMART_TIP_ACK_FIELD[cur.type]] = cur.sig;
+    persistMeta();
+    haptic(8);
+    renderSmartTip();
+  }
+
+  // 「关闭」/ 点横幅自身：只收起本次，不写 meta
+  function dismissSmartTip() {
+    const cur = smartTipCurrent;
+    if (!cur) return;
+    smartTipDismissed[cur.sig] = true;
+    smartTipCurrent = null;
+    smartTipShownSig = '';
+    hideSmartTipBanner();
+    haptic(6);
+  }
+
+  // 拉到新天气后重算一次提示（失败也重算，用缓存/隐藏）
+  function refreshWeather(force) {
+    if (!window.Weather) return;
+    const p = window.Weather.refresh(force);
+    if (p && typeof p.then === 'function') p.then(renderSmartTip, renderSmartTip);
+  }
+
   function initWeather() {
     if (!window.Weather) return;
     window.Weather.configure({
@@ -8512,11 +8882,11 @@
       return;
     }
     // 每次启动都强制拉一次最新（缓存已先渲染，失败/超时静默保留缓存）
-    window.Weather.refresh(true);
+    refreshWeather(true);
     if (!weatherTimer) {
       // 之后每 45 分钟刷新；回到前台时也会按需刷新
       weatherTimer = setInterval(function () {
-        if (weatherEnabled()) window.Weather.refresh();
+        if (weatherEnabled()) refreshWeather();
       }, 45 * 60 * 1000);
     }
   }
@@ -8536,14 +8906,15 @@
     if (on) {
       if (!weatherTimer) {
         weatherTimer = setInterval(function () {
-          if (weatherEnabled()) window.Weather.refresh();
+          if (weatherEnabled()) refreshWeather();
         }, 45 * 60 * 1000);
       }
-      window.Weather.refresh();
+      refreshWeather();
     } else {
       stopWeatherTimer();
     }
     if (state.view === 'calendar' && state.selectedDate) renderDayDetail();
+    renderSmartTip();
   }
 
   function openCitySheet() {
@@ -8588,14 +8959,16 @@
     }, 300);
   }
 
-  // 搜索是兜底入口：默认收起，点开才出现输入框
+  // 搜索是兜底入口：默认收起，点开才出现输入框。
+  // 英文模式下没有滚轮，搜索是唯一入口，所以强制展开。
   function setCitySearchExpanded(open) {
     const toggle = $('#citySearchToggle');
     const body = $('#citySearchBody');
     if (!toggle || !body) return;
-    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    body.hidden = !open;
-    if (!open) $('#citySearch').blur();
+    const force = isEn();
+    toggle.setAttribute('aria-expanded', (force || open) ? 'true' : 'false');
+    body.hidden = !(force || open);
+    if (!force && !open) $('#citySearch').blur();
   }
 
   // 打开时把滚轮停在当前天气城市；匹配不到就回到第一项，不猜
@@ -9969,11 +10342,10 @@
     });
 
     $('#summaryBtn').addEventListener('click', function () {
-      // 点了立即收起并记住当前指纹；数字不变时下次启动也不再出现
-      state.meta.summaryDismissed = summaryFingerprint;
-      persistMeta();
-      $('#summaryBar').hidden = true;
-      openAgenda(todayKey());
+      // 气泡常驻：点「查看」只跳转，不再收起、也不再写指纹
+      // 进入今天之前清掉分类筛选，保证列表口径与统计数字一致
+      state.agendaFilters = [];
+      openAgenda(todayKey(), { pendingOnly: summaryHasPending });
     });
 
     $('#topbarTitle').addEventListener('click', function () {
@@ -10941,6 +11313,29 @@
       renderAll();
     });
 
+    // 「个性化 · 智能提示」总开关：关掉后日记 / 日历 / 行程表三处气泡一起收起
+    if ($('#smartTipToggle')) {
+      $('#smartTipToggle').addEventListener('change', function () {
+        state.meta.smartTipEnabled = this.checked;
+        persistMeta();
+        renderSmartTip();
+        haptic(8);
+      });
+    }
+
+    // 统一横幅：「确认」写对应类型指纹；点横幅正文只收起本次（不写指纹）
+    const smartBanner = $('#smartTipBanner');
+    if (smartBanner) {
+      smartBanner.addEventListener('click', function (e) {
+        if (e.target.closest('[data-smart-tip-ack]')) {
+          e.stopPropagation();
+          ackSmartTip();
+          return;
+        }
+        dismissSmartTip();
+      });
+    }
+
     $('#agendaList').addEventListener('click', function (e) {
       if (state.batchMode) {
         if (Date.now() < state.batchLock) return;
@@ -11123,7 +11518,7 @@
         } else {
           renderSummary();
         }
-        if (weatherEnabled() && window.Weather) window.Weather.refresh();
+        if (weatherEnabled() && window.Weather) refreshWeather();
       }
     });
 
@@ -11688,6 +12083,14 @@
   const SHARE_PAD = 44;
   const SHARE_FONT = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif';
   const SHARE_EMOJI_FONT = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif';
+  // 长图图片区规则：单张最高 520px（按原比例缩宽度，不拉伸）；
+  // 最多排 9 张、图片区总高 4200px，超出用一行提示收尾；
+  // 画布总高超过 12000px 时整体等比缩小，避开安卓 WebView 的 canvas 上限。
+  const SHARE_IMG_MAX_H = 520;
+  const SHARE_IMG_GAP = 18;
+  const SHARE_IMG_MAX = 9;
+  const SHARE_IMG_BUDGET = 4200;
+  const SHARE_MAX_H = 12000;
 
   const SHARE_MOOD_EMOJI = {
     happy: '😊', calm: '😌', tired: '😪', sad: '😢', annoyed: '😤', hopeful: '🌱',
@@ -12039,7 +12442,7 @@
   }
 
   // 先量后画：先在测量用的 ctx 上排好版，拿到画布高度再真正建 canvas
-  function shareLayout(ctx, chips, lines, imgH) {
+  function shareLayout(ctx, chips, lines, imgHs, imgHint) {
     const W = SHARE_W;
     const EDGE = SHARE_EDGE;
     const PAD = SHARE_PAD;
@@ -12060,10 +12463,19 @@
     const bodyBase = y + 26;
     y = bodyBase + (lines.length - 1) * 42;
     let imgY = 0;
-    if (imgH) {
+    if (imgHs.length) {
       y += 24;
       imgY = y;
-      y += imgH;
+      for (let i = 0; i < imgHs.length; i++) {
+        y += imgHs[i];
+        if (i < imgHs.length - 1) y += SHARE_IMG_GAP;
+      }
+    }
+    let hintY = 0;
+    if (imgHint) {
+      y += imgHs.length ? 14 : 20;
+      hintY = y + 20;
+      y += 24;
     }
     const footY = y + 44;
     return {
@@ -12078,6 +12490,7 @@
       meta: meta,
       bodyBase: bodyBase,
       imgY: imgY,
+      hintY: hintY,
       footY: footY
     };
   }
@@ -12086,37 +12499,97 @@
   // 也下载不了 blob:，所以把这次生成的 PNG 留一份，给「保存图片」按钮和长按兜底用
   let shareImageBlob = null;
 
+  // 长图大标题：有标题用标题；没有标题回退正文首行摘要（与卡片一致），仍为空用「无标题日记」。
+  // 相对日期（今天/昨天/前天）只出现在页脚，不再当标题。
+  function shareTitle(entry) {
+    const title = (entry.title || '').trim();
+    if (title) return { text: title, weak: false };
+    const firstLine = (entry.text || '').trim().split(/\r?\n/)[0].trim();
+    if (firstLine) {
+      const brief = firstLine.length > 40 ? firstLine.slice(0, 40) + '…' : firstLine;
+      return { text: brief, weak: true };
+    }
+    return { text: T('无标题日记'), weak: true };
+  }
+
+  // 标题单行绘制：先按宽度缩字号（34 → 24px），仍放不下再截断补省略号
+  function shareFitTitle(ctx, text, maxW) {
+    let size = 34;
+    ctx.font = '600 ' + size + 'px ' + SHARE_FONT;
+    while (size > 24 && ctx.measureText(text).width > maxW) {
+      size -= 2;
+      ctx.font = '600 ' + size + 'px ' + SHARE_FONT;
+    }
+    const chars = Array.from(text);
+    let out = text;
+    while (chars.length > 1 && ctx.measureText(out + '…').width > maxW) {
+      chars.pop();
+      out = chars.join('');
+    }
+    return out === text ? text : out + '…';
+  }
+
   async function shareDiaryLongImage() {
     const entry = diaryByDate(diaryDetailDate);
     if (!entry) return;
     const probe = document.createElement('canvas').getContext('2d');
     const innerW = SHARE_W - (SHARE_EDGE + SHARE_PAD) * 2;
 
-    const text = entry.text.trim() || diaryCardTitle(entry, '').html.replace(/<[^>]+>/g, '') || T('这篇只有心情和附件');
+    const head = shareTitle(entry);
+    const rawText = (entry.text || '').trim();
+    // 标题用了正文首行时，正文跳过首行，避免同一句话画两遍
+    const bodyText = rawText
+      ? (head.weak ? rawText.split(/\r?\n/).slice(1).join('\n').trim() : rawText)
+      : T('这篇只有心情和附件');
     probe.font = '400 26px ' + SHARE_FONT;
-    let lines = wrapCanvasLines(probe, text, innerW);
+    let lines = wrapCanvasLines(probe, bodyText, innerW);
     // 画布高度有上限：超长正文截到 180 行，末尾补省略号
     if (lines.length > 180) {
       lines = lines.slice(0, 180);
       lines[179] = lines[179].replace(/[\s\S]$/, '') + '…';
     }
 
-    let firstImg = null;
-    let firstImgUrl = '';
-    const imgMeta = (entry.attachments || []).find(function (a) { return a.kind === 'image'; });
-    if (imgMeta) {
+    // 图片：按附件顺序（正文顺序）依次排进长图；视频、文件不参与。
+    // 单张加载失败就跳过继续，不能让整张长图跟着挂掉。
+    const imgMetas = (entry.attachments || []).filter(function (a) { return a.kind === 'image'; });
+    const imgBlocks = [];
+    const imgUrls = [];
+    let imgTotal = 0;
+    for (let i = 0; i < imgMetas.length; i++) {
+      if (imgBlocks.length >= SHARE_IMG_MAX) break;
+      let url = '';
+      let img = null;
       try {
-        const rec = await diaryFileGet(imgMeta.id);
+        const rec = await diaryFileGet(imgMetas[i].id);
         if (rec && rec.data) {
-          firstImgUrl = URL.createObjectURL(rec.data);
-          firstImg = await loadShareImage(firstImgUrl);
+          url = URL.createObjectURL(rec.data);
+          img = await loadShareImage(url);
         }
       } catch (err) {
-        firstImg = null;
+        img = null;
       }
+      if (!img || !img.width || !img.height) {
+        if (url) { try { URL.revokeObjectURL(url); } catch (err) { /* 忽略 */ } }
+        continue;
+      }
+      let w = innerW;
+      let h = Math.round(w * img.height / img.width);
+      if (h > SHARE_IMG_MAX_H) {
+        // 单张限高：按原比例缩窄，居中摆放，不拉伸
+        h = SHARE_IMG_MAX_H;
+        w = Math.max(1, Math.round(h * img.width / img.height));
+      }
+      const add = h + (imgBlocks.length ? SHARE_IMG_GAP : 0);
+      if (imgTotal + add > SHARE_IMG_BUDGET) {
+        try { URL.revokeObjectURL(url); } catch (err) { /* 忽略 */ }
+        break;
+      }
+      imgTotal += add;
+      imgBlocks.push({ img: img, w: w, h: h });
+      imgUrls.push(url);
     }
-    const imgW = innerW;
-    const imgH = firstImg ? Math.min(520, Math.round(imgW * firstImg.height / firstImg.width)) : 0;
+    const imgHidden = imgMetas.length - imgBlocks.length;
+    const imgHint = imgHidden > 0 ? T('还有 {n} 张图片未显示', { n: imgHidden }) : '';
 
     // 心情（含自定义）→ 天气（仅快照且地点一致）→ 地区；缺失的整块不参与排版
     const chips = [];
@@ -12137,15 +12610,20 @@
     if (loc) chips.push({ kind: 'loc', emoji: '📍', text: loc });
 
     const theme = shareTheme();
-    const layout = shareLayout(probe, chips, lines, imgH);
+    const layout = shareLayout(probe, chips, lines, imgBlocks.map(function (b) { return b.h; }), !!imgHint);
     const W = layout.W;
     const H = layout.H;
     const card = { x: SHARE_EDGE, y: SHARE_EDGE, w: W - SHARE_EDGE * 2, h: H - SHARE_EDGE * 2 };
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = H;
+    // canvas 尺寸兜底：安卓 WebView 对 canvas 有边长/总像素上限，内容过高时
+    // 整体等比缩小（下面用逻辑坐标绘制），保证极端情况也能出图
+    let scale = 1;
+    if (H > SHARE_MAX_H) scale = SHARE_MAX_H / H;
+    canvas.width = Math.max(1, Math.round(W * scale));
+    canvas.height = Math.max(1, Math.round(H * scale));
     const ctx = canvas.getContext('2d');
+    if (scale !== 1) ctx.scale(scale, scale);
 
     // 底色：整张图先铺皮肤底色，再压一层薄雾，让卡片从画布里浮起来
     ctx.fillStyle = theme.bg;
@@ -12185,9 +12663,9 @@
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
+    // 标题画日记标题（见 shareTitle）；相对日期只留在页脚，不再占标题位
     ctx.fillStyle = theme.fg;
-    ctx.font = '600 34px ' + SHARE_FONT;
-    ctx.fillText(diaryDateTitle(entry.date), layout.innerX, layout.titleBase);
+    ctx.fillText(shareFitTitle(ctx, head.text, layout.innerW), layout.innerX, layout.titleBase);
 
     ctx.fillStyle = theme.fg2;
     ctx.font = '400 19px ' + SHARE_FONT;
@@ -12210,12 +12688,22 @@
       ctx.fillText(line, layout.innerX, layout.bodyBase + i * 42);
     });
 
-    if (firstImg) {
+    let imgDrawY = layout.imgY;
+    imgBlocks.forEach(function (b) {
+      // 限高后宽度变窄的图居中摆放，保持原始比例
+      const ix = layout.innerX + Math.round((layout.innerW - b.w) / 2);
       ctx.save();
-      shareRoundRect(ctx, layout.innerX, layout.imgY, imgW, imgH, Math.min(18, theme.radius));
+      shareRoundRect(ctx, ix, imgDrawY, b.w, b.h, Math.min(18, theme.radius));
       ctx.clip();
-      ctx.drawImage(firstImg, layout.innerX, layout.imgY, imgW, imgH);
+      ctx.drawImage(b.img, ix, imgDrawY, b.w, b.h);
       ctx.restore();
+      imgDrawY += b.h + SHARE_IMG_GAP;
+    });
+
+    if (imgHint) {
+      ctx.fillStyle = theme.fg2;
+      ctx.font = '400 20px ' + SHARE_FONT;
+      ctx.fillText(imgHint, layout.innerX, layout.hintY);
     }
 
     ctx.strokeStyle = theme.line;
@@ -12244,11 +12732,14 @@
       $('#diaryViewerName').textContent = T('点按「保存图片」或长按图片保存到相册');
       const saveBtn = $('#diaryViewerSave');
       if (saveBtn) saveBtn.hidden = false;
+      viewer.scrollTop = 0;
       viewer.hidden = false;
       requestAnimationFrame(function () { viewer.classList.add('open'); });
     }, 'image/png');
-    if (firstImgUrl) {
-      window.setTimeout(function () { try { URL.revokeObjectURL(firstImgUrl); } catch (err) { /* 忽略 */ } }, 4000);
+    if (imgUrls.length) {
+      window.setTimeout(function () {
+        imgUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (err) { /* 忽略 */ } });
+      }, 4000);
     }
   }
 
@@ -12482,13 +12973,15 @@
           tags: entry.tags.slice(),
           location: entry.location ? Object.assign({}, entry.location) : null,
           weather: entry.weather ? Object.assign({}, entry.weather) : null,
+          weatherOn: entry.weatherOn === true,
           attachments: entry.attachments.map(function (a) { return Object.assign({}, a); }),
           createdAt: entry.createdAt
         }
-      : { date: key, title: '', text: '', mood: '', tags: [], location: null, weather: null, attachments: [], createdAt: Date.now() };
+      : { date: key, title: '', text: '', mood: '', tags: [], location: null, weather: null, weatherOn: false, attachments: [], createdAt: Date.now() };
     state.diaryEditorOpen = true;
     state.diaryEditingDate = key;
     state.diaryDirty = false;
+    diaryWeatherNote = '';
     state.diaryAttachBlocked = diaryAttachBlockedReason();
     diaryTagValue = '';
 
@@ -12537,6 +13030,8 @@
     renderDiaryLocation();
     $('#deSaved').hidden = true;
     $('#diaryDeleteBtn').hidden = !diaryByDate(draft.date);
+    const wxToggle = $('#deWxToggle');
+    if (wxToggle) wxToggle.checked = draft.weatherOn === true;
     renderDiaryMoods();
     renderDiaryTags();
     renderDiaryAttachments();
@@ -12558,6 +13053,10 @@
     if (pick) pick.textContent = brief ? T('修改位置') : T('选择位置');
     const clear = $('#deLocClear');
     if (clear) clear.hidden = !loc;
+    // 英文模式隐藏省市滚轮后，用一行说明告诉用户还剩哪两种定位方式；
+    // 文案走 i18n，中文界面由 CSS 隐藏这行，保持原样
+    const hint = $('#deLocHint');
+    if (hint) hint.textContent = T('英文模式下不提供省市滚轮，可用「使用当前位置」或直接在下方填写位置。');
     renderDiaryWeather();
   }
 
@@ -12629,6 +13128,8 @@
   const NO_DISTRICT = '不限';
   let diaryWeatherTimer = null;
   let diaryWeatherSeq = 0;
+  // 英文勾选天气时给用户的状态提示：空 / 正在查询 / 查不到
+  let diaryWeatherNote = '';
 
   function diaryWeatherQuery(loc) {
     if (!loc || (!loc.province && !loc.city)) return '';
@@ -12639,12 +13140,21 @@
     return parts.join(' ');
   }
 
+  // 英文模式勾选「天气」后优先用手动填写的位置查询；没有手动位置时
+  // 退回「使用当前位置」写入的省市区，中文模式仍沿用省市区
+  function diaryWeatherPlace(record) {
+    const loc = normalizeDiaryLocation(record && record.location);
+    if (!loc) return '';
+    if (isEn() && record && record.weatherOn) return loc.text || diaryWeatherQuery(loc);
+    return diaryWeatherQuery(loc);
+  }
+
   // 位置变了但天气还是旧地点的一律不显示，避免张冠李戴
   function diaryWeatherHTML(record) {
+    if (isEn() && !(record && record.weatherOn)) return '';
     const w = record && record.weather;
     if (!w) return '';
-    const loc = normalizeDiaryLocation(record.location);
-    const q = diaryWeatherQuery(loc);
+    const q = diaryWeatherPlace(record);
     if (!q) return '';
     if (w.place && w.place !== q) return '';
     const W = window.Weather;
@@ -12664,9 +13174,10 @@
 
   // 卡片上只放图标 + 最高温，避免在窄卡片里堆文字
   function diaryWeatherBrief(entry) {
+    if (isEn() && !(entry && entry.weatherOn)) return '';
     const w = entry && entry.weather;
     if (!w) return '';
-    const q = diaryWeatherQuery(normalizeDiaryLocation(entry.location));
+    const q = diaryWeatherPlace(entry);
     if (!q) return '';
     if (w.place && w.place !== q) return '';
     const W = window.Weather;
@@ -12683,34 +13194,55 @@
     const box = $('#deWeather');
     if (!box) return;
     const draft = state.diaryDraft;
-    const html = diaryWeatherHTML(draft);
+    const html = (isEn() && (!draft || !draft.weatherOn)) ? '' : diaryWeatherHTML(draft);
     box.innerHTML = html;
     box.hidden = !html;
+    // 查不到 / 位置为空 / 查询中时用一行提示兜底，避免留白
+    const hint = $('#deWxHint');
+    if (hint) {
+      let note = '';
+      if (!html && isEn() && draft && draft.weatherOn) {
+        note = diaryWeatherPlace(draft) ? diaryWeatherNote : T('先填写位置，再查看天气');
+      }
+      hint.textContent = note;
+      hint.hidden = !note;
+    }
   }
 
   // 只在「今天」这一篇上主动联网；历史日记只展示已保存的快照
   function refreshDiaryWeather(force) {
     clearTimeout(diaryWeatherTimer);
+    diaryWeatherNote = '';
     diaryWeatherTimer = setTimeout(function () {
       const draft = state.diaryDraft;
       if (!draft || !state.diaryEditorOpen) return;
-      const loc = normalizeDiaryLocation(draft.location);
-      const q = diaryWeatherQuery(loc);
-      if (!q) {
-        // 没选位置就不显示天气：清掉旧快照，避免残留
+      // 英文模式未勾选「天气」：不查询、不展示，也不保留旧快照
+      if (isEn() && !draft.weatherOn) {
         if (draft.weather) {
           draft.weather = null;
-          renderDiaryWeather();
           scheduleDiarySave();
         }
+        renderDiaryWeather();
+        return;
+      }
+      const q = diaryWeatherPlace(draft);
+      if (!q) {
+        // 位置为空（英文勾选场景）或没选位置：清掉旧快照，避免残留
+        if (draft.weather) {
+          draft.weather = null;
+          scheduleDiarySave();
+        }
+        renderDiaryWeather();
         return;
       }
       if (draft.date !== todayKey()) {
+        if (isEn() && draft.weatherOn && !draft.weather) diaryWeatherNote = T('这篇日记没有保存天气');
         renderDiaryWeather();
         return;
       }
       const W = window.Weather;
       if (!W || typeof W.dailyForPlace !== 'function') {
+        if (isEn() && draft.weatherOn) diaryWeatherNote = T('天气服务暂时不可用，稍后再试');
         renderDiaryWeather();
         return;
       }
@@ -12720,18 +13252,25 @@
         return;
       }
       const seq = ++diaryWeatherSeq;
+      if (isEn() && draft.weatherOn) diaryWeatherNote = T('正在查询天气…');
+      renderDiaryWeather();
       W.dailyForPlace(q).then(function (snap) {
         if (seq !== diaryWeatherSeq) return;
         const live = state.diaryDraft;
         if (!live || !state.diaryEditorOpen || live.date !== todayKey()) return;
-        if (diaryWeatherQuery(normalizeDiaryLocation(live.location)) !== q) return;
+        if (diaryWeatherPlace(live) !== q) return;
+        diaryWeatherNote = '';
         live.weather = normalizeDiaryWeather({
           date: todayKey(), code: snap.code, max: snap.max, min: snap.min, place: q, at: snap.at
         });
         renderDiaryWeather();
         scheduleDiarySave();
       }).catch(function () {
+        if (seq !== diaryWeatherSeq) return;
         // 离线、超时或没有该地点：保留已保存的快照，不清空
+        if (isEn() && state.diaryDraft && state.diaryDraft.weatherOn) {
+          diaryWeatherNote = T('没有查到这里的天气，换个更具体的位置试试');
+        }
         renderDiaryWeather();
       });
     }, 240);
@@ -12907,6 +13446,9 @@
   }
 
   function openRegionSheet() {
+    // 英文模式不展示内置中文省市数据：入口按钮已隐藏，这里再兜一层，
+    // 防止任何其它路径（历史绑定、快捷键、后续新增入口）把滚轮翻出来
+    if (isEn()) return;
     const data = regionData();
     if (!data.length) return;
     // 先收起软键盘：浮层贴在底部，键盘还在时会被顶出可视区
@@ -13378,6 +13920,7 @@
       vid.src = url;
       vid.hidden = false;
       $('#diaryViewerName').textContent = meta.name;
+      viewer.scrollTop = 0;
       viewer.hidden = false;
       requestAnimationFrame(function () { viewer.classList.add('open'); });
       return;
@@ -13397,6 +13940,7 @@
       img.dataset.url = url;
       img.src = url;
       $('#diaryViewerName').textContent = meta.name;
+      viewer.scrollTop = 0;
       viewer.hidden = false;
       requestAnimationFrame(function () { viewer.classList.add('open'); });
       return;
@@ -13521,6 +14065,7 @@
       tags: draft.tags.slice(),
       location: location ? Object.assign({}, location) : null,
       weather: draft.weather ? Object.assign({}, draft.weather) : null,
+      weatherOn: draft.weatherOn === true,
       attachments: draft.attachments.map(function (a) { return Object.assign({}, a); }),
       createdAt: existing ? existing.createdAt : (draft.createdAt || Date.now()),
       updatedAt: Date.now()
@@ -13764,6 +14309,21 @@
     });
     $('#deLocPick').addEventListener('click', openRegionSheet);
     $('#deLocCurrent').addEventListener('click', useWeatherCityAsLocation);
+    // 英文模式：勾选后才用「手动填写的位置」查天气；取消勾选立刻停止查询并收起
+    const wxToggle = $('#deWxToggle');
+    if (wxToggle) {
+      wxToggle.addEventListener('change', function (e) {
+        const draft = state.diaryDraft;
+        if (!draft) return;
+        draft.weatherOn = !!e.target.checked;
+        if (!draft.weatherOn) draft.weather = null;
+        state.diaryDirty = true;
+        scheduleDiarySave();
+        renderDiaryWeather();
+        refreshDiaryWeather(true);
+        haptic(6);
+      });
+    }
     $('#deLocClear').addEventListener('click', function () {
       diarySetLocation(null);
       const input = $('#deLocText');
@@ -13876,7 +14436,8 @@
       saveShareImage();
     });
     $('#diaryViewer').addEventListener('click', function (e) {
-      if (e.target === $('#diaryViewer')) closeDiaryViewer();
+      // 预览区可滚动后，空白处由 .dv-stage 撑满，点它也算点背景
+      if (e.target === $('#diaryViewer') || e.target === $('#diaryViewerStage')) closeDiaryViewer();
     });
 
     // ---------- 日记详情页 ----------

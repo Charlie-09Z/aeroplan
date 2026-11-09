@@ -48,6 +48,10 @@
   --green: #5C9B83;
   --green-soft: rgba(92, 155, 131, .13);
   --ring-track: #E8ECF6;
+  /* 进度条令牌：默认跟随主题；皮肤作用域里会覆盖成各自的强调色 */
+  --progress-fill: var(--primary);
+  --progress-track: var(--ring-track);
+  --progress-green: var(--green);
   /* 月相月盘：暗面 / 亮面 / 外缘 / 环形山 / 满月高光（深色主题另有一套） */
   --moon-dark: #5C6678;
   --moon-lit: #EDF1FA;
@@ -270,6 +274,7 @@ svg { display: block; }
 .topbar-title {
   display: flex;
   align-items: center;
+  gap: 6px;
   height: 34px;
   font-size: 19px;
   font-weight: 700;
@@ -278,6 +283,51 @@ svg { display: block; }
   overflow: hidden;
   text-overflow: ellipsis;
   margin: 0 2px;
+}
+
+/* 标题左侧图标：仅计划 / 日记 / 更多三页启用，尺寸与描边沿用底部导航图标
+   日历、行程表的标题是日期文本，保持原样，图标容器不占位 */
+.topbar-ico {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--primary);
+}
+
+.topbar-ico .tb-ico {
+  display: none;
+  width: 19px;
+  height: 19px;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.topbar-title[data-tbicon="plan"] .topbar-ico,
+.topbar-title[data-tbicon="diary"] .topbar-ico,
+.topbar-title[data-tbicon="profile"] .topbar-ico { display: flex; }
+
+.topbar-title[data-tbicon="plan"] .tb-ico[data-ico="plan"],
+.topbar-title[data-tbicon="diary"] .tb-ico[data-ico="diary"],
+.topbar-title[data-tbicon="profile"] .tb-ico[data-ico="profile"] { display: block; }
+
+/* 计划 / 日记 / 更多三页：标题（含左侧图标）整体左移，与内容左边距（16px）对齐。
+   顶栏左内边距 12 + 占位翻页键 34 + 间隙 1 + 标题外边距 2 = 49，左移 33 后落到 16。
+   日历 / 行程表的日期标题没有图标，保持原位不动。 */
+.topbar-title[data-tbicon="plan"],
+.topbar-title[data-tbicon="diary"],
+.topbar-title[data-tbicon="profile"] { margin-left: -33px; }
+
+/* 英文长标题只在文字上省略，图标不被挤压 */
+.topbar-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar-right {
@@ -924,6 +974,140 @@ html[lang="en"] .cal-foot {
   line-height: 1.5;
 }
 
+/* ---------- 统一悬浮横幅（天气 / 行程 / 计划） ---------- */
+/* 绝对定位覆盖层，锚在 .app（position:relative）上：不参与 flex 布局，也不在滚动区
+   （滚动发生在 main.content 内部）里，所以页面滚动时位置纹丝不动，与标签数量、
+   内容高度、页面滚动位置都无关。贴顶：顶栏下沿再留 8px。 */
+.smart-banner {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: calc(var(--topbar-h) + var(--topbar-safe) + 8px);
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 10px 30px rgba(24, 35, 78, .18), var(--shadow-soft);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+  opacity: 0;
+  transform: translateY(-10px) scale(.985);
+  transition: opacity .22s ease, transform .22s cubic-bezier(.2, .8, .2, 1);
+  pointer-events: none;
+  will-change: opacity, transform;
+}
+
+.smart-banner[hidden] { display: none; }
+
+/* 日记页：顶栏下还有搜索行（8px 内边距 + 34px 行高），横幅让到它下方再留 8px。
+   横幅本身在滚动区外，滚动时仍钉在这个位置，不进内容区、不会跳动。 */
+body.diary-view .smart-banner {
+  top: calc(var(--topbar-h) + var(--topbar-safe) + 50px);
+}
+
+.smart-banner.open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+html.dark .smart-banner {
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .5), var(--shadow-soft);
+}
+
+.smart-banner-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--primary);
+}
+
+.smart-banner-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.smart-banner-icon.wx-sun { color: var(--amber); }
+.smart-banner-icon.wx-rain { color: #6F8FB0; }
+.smart-banner-icon.wx-snow { color: #8FA6BF; }
+.smart-banner-icon.wx-storm { color: var(--amber); }
+html.dark .smart-banner-icon.wx-rain { color: #8EAECB; }
+html.dark .smart-banner-icon.wx-snow { color: #A9BDD3; }
+
+/* 最多两行；标题再长也在框内省略，不会撑破横幅 */
+.smart-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.smart-banner-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.smart-banner-ack {
+  flex: 0 0 auto;
+  font-family: inherit;
+  color: var(--primary);
+  padding: 3px 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 与页面卡片一致：皮肤生效时就地换成皮肤底色与强调色 */
+html [data-skin] .smart-banner {
+  position: absolute;
+  isolation: isolate;
+  color: var(--cs-fg);
+  background-color: var(--cs-bg);
+  background-image: var(--cs-tex, none);
+  background-size: var(--cs-tex-size, auto);
+  background-repeat: var(--cs-tex-repeat, repeat);
+  border: var(--cs-border);
+  border-radius: var(--cs-radius);
+  box-shadow: var(--cs-shadow);
+  --text: var(--cs-fg);
+  --text-2: var(--cs-fg-2);
+  --muted: var(--cs-fg-2);
+  --primary: var(--cs-accent);
+  --amber: var(--cs-amber, #D89A38);
+}
+
+[data-skin] .smart-banner::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: var(--cs-deco-inset, 0);
+  border-radius: var(--cs-deco-radius, inherit);
+  background: var(--cs-deco, none);
+  border: var(--cs-deco-border, 0);
+  border-image-source: var(--cs-deco-image, none);
+  border-image-slice: 30;
+  border-image-width: var(--cs-deco-image-width, 11px);
+  border-image-outset: 0;
+  border-image-repeat: round;
+  pointer-events: none;
+}
+
 /* ---------- 空态 ---------- */
 .empty-state {
   display: flex;
@@ -1109,7 +1293,7 @@ html.dark .agenda-more-note { opacity: .72; }
   width: 62px;
   height: 4px;
   border-radius: 2px;
-  background: var(--ring-track);
+  background: var(--progress-track, var(--ring-track));
   overflow: hidden;
 }
 
@@ -1118,7 +1302,7 @@ html.dark .agenda-more-note { opacity: .72; }
   height: 100%;
   width: 0;
   border-radius: 2px;
-  background: var(--green);
+  background: var(--progress-green, var(--green));
   transition: width .32s cubic-bezier(.2, .8, .2, 1);
 }
 
@@ -1646,13 +1830,13 @@ html.dark .tag-high { background: rgba(240, 182, 88, .15); }
 
 .ring-bg {
   fill: none;
-  stroke: var(--ring-track);
+  stroke: var(--progress-track, var(--ring-track));
   stroke-width: 11;
 }
 
 .ring-fill {
   fill: none;
-  stroke: var(--primary);
+  stroke: var(--progress-fill, var(--primary));
   stroke-width: 11;
   stroke-linecap: round;
   stroke-dasharray: 100;
@@ -1660,7 +1844,7 @@ html.dark .tag-high { background: rgba(240, 182, 88, .15); }
   transition: stroke-dashoffset .65s cubic-bezier(.2, .8, .2, 1);
 }
 
-.ring-fill.full { stroke: var(--green); }
+.ring-fill.full { stroke: var(--progress-green, var(--green)); }
 
 .ring-label {
   position: absolute;
@@ -1964,6 +2148,13 @@ html.dark .tag-high { background: rgba(240, 182, 88, .15); }
 
 .plan-ring .ring-bg { stroke-width: 9; }
 .plan-ring .ring-fill { stroke-width: 9; }
+
+/* 100%：填充与底轨整体转绿。底轨用低透明度绿，深浅色与换肤下都不刺眼；
+   填充色沿用 .ring-fill.full 的 --progress-green，换肤后也走同一枚令牌。 */
+.plan-ring.is-full .ring-bg { stroke: var(--progress-green, var(--green)); opacity: .22; }
+
+/* 空进度：0% 时连圆头端点也不留（round linecap 在零长度画布上会留一个小圆点） */
+.ring-fill.zero { opacity: 0; }
 
 .plan-ring .ring-label b {
   font-size: 13px;
@@ -6367,6 +6558,92 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
   background: var(--card);
 }
 
+/* 英文模式专属：日记天气勾选（中文界面完全不显示） */
+.de-wx-toggle,
+.de-wx-hint { display: none; }
+
+html[lang="en"] .de-wx-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 2px 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.de-wx-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.de-wx-circle {
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 1.7px solid var(--line);
+  border-radius: 50%;
+  background: var(--card);
+  transition: border-color .16s ease, background .16s ease;
+}
+
+.de-wx-circle svg {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 3px;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+  transform: scale(.7);
+  transition: opacity .16s ease, transform .16s ease;
+}
+
+.de-wx-input:checked + .de-wx-circle {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.de-wx-input:checked + .de-wx-circle svg {
+  opacity: 1;
+  transform: none;
+}
+
+.de-wx-input:focus-visible + .de-wx-circle {
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+html[lang="en"] .de-wx-hint {
+  display: block;
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* 英文下把天气芯片排到勾选框之后：先填位置 → 勾选 → 看天气 */
+html[lang="en"] .de-loc { display: flex; flex-direction: column; }
+html[lang="en"] .de-loc-head { order: 1; }
+html[lang="en"] .de-loc-summary { order: 2; }
+html[lang="en"] .de-loc-hint { order: 3; }
+html[lang="en"] .de-loc-text { order: 4; }
+html[lang="en"] .de-wx-toggle { order: 5; }
+html[lang="en"] .de-wx-hint { order: 6; }
+html[lang="en"] .de-weather { order: 7; }
+
 .de-loc-head {
   display: flex;
   align-items: center;
@@ -6442,6 +6719,33 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
   line-height: 1.5;
   color: var(--muted);
   text-align: center;
+}
+
+/* ---------- 英文模式：隐藏内置中文省市滚轮 ---------- */
+/* 天气城市改走搜索（打开时由脚本强制展开），滚轮与“确定”整块隐藏，不留空槽 */
+html[lang="en"] .city-wheels,
+html[lang="en"] .city-wheel-actions,
+html[lang="en"] .city-search-toggle,
+html[lang="en"] #deLocPick,
+html[lang="en"] #regionBackdrop,
+html[lang="en"] #regionSheet {
+  display: none !important;
+}
+
+/* 搜索是天气城市的唯一入口，和标题之间留出正常间距 */
+html[lang="en"] .city-search-fold { margin-top: 10px; }
+
+/* 省市入口隐藏后，把「使用当前位置」推到右侧，保持一头一尾的自然布局 */
+html[lang="en"] .de-loc-now { margin-left: auto; }
+
+/* 英文下才出现的一行说明；中文界面完全保持原样 */
+.de-loc-hint { display: none; }
+html[lang="en"] .de-loc-hint {
+  display: block;
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 /* 视频附件：首帧封面 + 播放标识 + 时长 */
@@ -6790,15 +7094,18 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
 
 /* ---------- 图片全屏预览 ---------- */
 
+/* 预览区是可滚动的整屏容器：长图按原比例铺满宽度、上下滑动看全图。
+   overscroll-behavior: contain 让滑到头后不再带着外层页面一起滚。 */
 .diary-viewer {
   position: fixed;
   inset: 0;
   z-index: var(--z-diary-viewer);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
+  display: block;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: calc(56px + env(safe-area-inset-top)) 12px calc(88px + env(safe-area-inset-bottom));
   background: rgba(8, 10, 16, .94);
   opacity: 0;
   transition: opacity .18s ease;
@@ -6806,9 +7113,22 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
 
 .diary-viewer.open { opacity: 1; }
 
+/* 内容舞台：短图居中、长图从顶部开始自然撑高，滚动区不会把顶部裁掉 */
+.dv-stage {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
 .diary-viewer img {
+  width: auto;
+  height: auto;
   max-width: 100%;
-  max-height: 80vh;
+  /* 长图不再压到 80vh：按原比例完整展开，交给外层滚动查看 */
+  max-height: none;
   object-fit: contain;
   display: block;
   /* 分享长图要能长按存图：不要拦系统长按菜单，也不要禁掉图片选择 */
@@ -6826,9 +7146,10 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
 }
 
 .dv-close {
-  position: absolute;
+  position: fixed;
   top: calc(14px + env(safe-area-inset-top));
   right: 16px;
+  z-index: 3;
   width: 34px;
   height: 34px;
   padding: 0;
@@ -6850,8 +7171,16 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
   stroke-linecap: round;
 }
 
-/* 分享长图的保存按钮：WebView 里长按没有系统菜单时的兜底入口 */
+/* 分享长图的保存按钮：WebView 里长按没有系统菜单时的兜底入口。
+   固定在预览区底部居中，长图滚到哪里都点得到；不压关闭按钮，也不挡内容 */
 .dv-save {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 3;
+  width: max-content;
+  margin: 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -6864,6 +7193,7 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .34);
 }
 
 .dv-save[hidden] { display: none; }
@@ -7248,7 +7578,7 @@ body.profile-view #fab { display: none; }
   min-width: 0;
   height: 5px;
   border-radius: 3px;
-  background: var(--ring-track);
+  background: var(--progress-track, var(--ring-track));
   overflow: hidden;
 }
 
@@ -7256,7 +7586,7 @@ body.profile-view #fab { display: none; }
   display: block;
   height: 100%;
   border-radius: 3px;
-  background: var(--primary);
+  background: var(--progress-fill, var(--primary));
   transition: width .3s cubic-bezier(.22, .9, .28, 1);
 }
 
@@ -7272,11 +7602,11 @@ body.profile-view #fab { display: none; }
   width: 7px;
   height: 11px;
   border-radius: 2px;
-  background: var(--ring-track);
+  background: var(--progress-track, var(--ring-track));
   transition: background .2s ease;
 }
 
-.plan-cell.on { background: var(--primary); }
+.plan-cell.on { background: var(--progress-fill, var(--primary)); }
 
 .plan-cells.dense { gap: 2px; }
 .plan-cells.dense .plan-cell { width: 4px; height: 9px; }
@@ -7306,13 +7636,13 @@ body.profile-view #fab { display: none; }
 
 .pr-track {
   fill: none;
-  stroke: var(--ring-track);
+  stroke: var(--progress-track, var(--ring-track));
   stroke-width: 3.4;
 }
 
 .pr-fill {
   fill: none;
-  stroke: var(--primary);
+  stroke: var(--progress-fill, var(--primary));
   stroke-width: 3.4;
   stroke-linecap: round;
   transition: stroke-dashoffset .4s cubic-bezier(.22, .9, .28, 1);
@@ -7496,8 +7826,8 @@ body.profile-view #fab { display: none; }
 
 /* 进度型计划完成后的收尾 */
 .plan-item.done .row-card { opacity: .78; }
-.plan-item.done .plan-bar i { background: var(--green); }
-.plan-item.done .plan-cell.on { background: var(--green); }
+.plan-item.done .plan-bar i { background: var(--progress-green, var(--green)); }
+.plan-item.done .plan-cell.on { background: var(--progress-green, var(--green)); }
 /* 月相坚持「灰暗面 → 蓝色亮面」，完成后也不换成绿色 */
 
 /* 进度视觉选择器：五个小预览块，点选即选中 */
@@ -8701,7 +9031,7 @@ html.dark .theme-btn .theme-moon { display: block; }
   height: 4px;
   margin-top: 3px;
   border-radius: 2px;
-  background: var(--ring-track);
+  background: var(--progress-track, var(--ring-track));
   overflow: hidden;
 }
 
@@ -8710,7 +9040,7 @@ html.dark .theme-btn .theme-moon { display: block; }
   width: 46%;
   height: 100%;
   border-radius: 2px;
-  background: var(--primary);
+  background: var(--progress-fill, var(--primary));
 }
 
 /* 每个皮肤容器先落一套完整默认值：未声明的变量不会从 body（当前皮肤）继承，
@@ -8747,6 +9077,15 @@ html.dark .theme-btn .theme-moon { display: block; }
 }
 
 /* ---------- 皮肤基座：所有卡片共用一套规则 ---------- */
+/* 进度条：每套皮肤在自己的作用域里给出填充/底轨/完成色；
+   没有定义 --cs-accent / --cs-track / --cs-green 的皮肤自动回落到主题色。
+   进度环、横条、能量格、小环都从这三枚令牌取色，保证换肤后形态一致。 */
+[data-skin] {
+  --progress-fill: var(--cs-accent, var(--primary));
+  --progress-track: var(--cs-track, var(--ring-track));
+  --progress-green: var(--cs-green, var(--green));
+}
+
 /* 选择器带 html 前缀是为了压过 html.dark .row-card / html.dark .setting-group：
    那两条旧规则的 background 简写会把皮肤的底色与纹理整层重置掉。 */
 html [data-skin] .row-card,
@@ -8905,6 +9244,137 @@ html.dark .skin-demo[data-skin] {
   --high-text: #F0C276;
   --green: #8FC7B0;
   --amber: #F0B658;
+}
+
+/* ---------- 行程表：接入皮肤 ---------- */
+/* 行程表是 24 × 7 的密集网格，直接套整卡基座会把格线、时段底纹与选中列
+   一起覆盖掉，所以只给「网格容器」上材质，再就地重映射内部令牌：
+   文字 / 格线 / 今天列 / 色块 / 逾期 / 高优都会跟着皮肤走。 */
+html [data-skin] .sch-grid {
+  position: relative;
+  isolation: isolate;
+  color: var(--cs-fg);
+  background-color: var(--cs-bg);
+  background-image: var(--cs-tex, none);
+  background-size: var(--cs-tex-size, auto);
+  background-repeat: var(--cs-tex-repeat, repeat);
+  border: var(--cs-border);
+  border-radius: var(--cs-radius);
+  box-shadow: var(--cs-shadow);
+
+  --text: var(--cs-fg);
+  --text-2: var(--cs-fg-2);
+  --muted: var(--cs-fg-2);
+  --card: var(--cs-bg-soft);
+  --card-soft: var(--cs-bg-soft);
+  --card-batch: var(--cs-batch);
+  --line: var(--cs-line);
+  --line-strong: var(--cs-line-strong);
+  --ring-track: var(--cs-track);
+  --primary: var(--cs-accent);
+  --primary-soft: var(--cs-accent-soft);
+  --primary-soft-2: var(--cs-accent-soft);
+  --shadow-soft: var(--cs-shadow);
+  --event: #3F5BD6;
+  --todo: #0A7C6B;
+  --danger: #C0563C;
+  --plan-overdue: #96483F;
+  --high-text: #7A5106;
+  --green: #3E7C66;
+  --amber: #D89A38;
+}
+
+[data-skin] .sch-grid::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: var(--cs-deco-inset, 0);
+  border-radius: var(--cs-deco-radius, inherit);
+  background: var(--cs-deco, none);
+  border: var(--cs-deco-border, 0);
+  border-image-source: var(--cs-deco-image, none);
+  border-image-slice: 30;
+  border-image-width: var(--cs-deco-image-width, 11px);
+  border-image-outset: 0;
+  border-image-repeat: round;
+  pointer-events: none;
+}
+
+/* 表头日期格 / 时间轴刻度 / 全天行标签：底色与文字统一换成皮肤 */
+html [data-skin] .sch-day,
+html [data-skin] .sch-corner,
+html [data-skin] .sch-adlabel,
+html [data-skin] .sch-hourlabel {
+  background: var(--cs-bg-soft);
+}
+
+html [data-skin] .sch-day { border-left-color: var(--cs-line); }
+html [data-skin] .sch-adlabel { border-top-color: var(--cs-line-strong); }
+html [data-skin] .sch-hourlabel { border-top-color: var(--cs-line); }
+
+html [data-skin] .sch-adcell,
+html [data-skin] .sch-cell {
+  border-top-color: var(--cs-line);
+  border-left-color: var(--cs-line);
+}
+
+/* 今天整列：换成皮肤强调色的浅底 */
+html [data-skin] .sch-cell.today-col,
+html [data-skin] .sch-adcell.today-col {
+  background-color: var(--cs-accent-soft);
+}
+
+/* 时段底纹改用皮肤强调色/暖色的低透明度叠层，不依赖 color-mix */
+html [data-skin] .sch-cell.band-night::before,
+html [data-skin] .sch-cell.band-evening::before,
+html [data-skin] .sch-cell.band-afternoon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+html [data-skin] .sch-cell.band-night::before { background: var(--cs-accent); opacity: .05; }
+html [data-skin] .sch-cell.band-evening::before { background: var(--cs-accent); opacity: .03; }
+html [data-skin] .sch-cell.band-afternoon::before { background: var(--cs-amber, #D89A38); opacity: .05; }
+
+/* 色块：底色从自身颜色推导浅底（不支持的引擎保留原 --chip-soft），
+   换肤后不会残留与皮肤无关的灰底；分类色块仍保留自己的分类色 */
+html [data-skin] .sch-chip { background: var(--chip-soft, var(--card-soft)); }
+html [data-skin] .sch-chip {
+  background: color-mix(in srgb, var(--chip-color, var(--cs-accent)) 15%, transparent);
+}
+
+/* 已完成色块：跟随皮肤内层底色，比正常色块淡一档 */
+html [data-skin] .sch-chip.done {
+  background: var(--cs-bg-soft);
+  color: var(--cs-fg-2);
+}
+
+html [data-skin] .sch-foot { color: var(--cs-fg-2); }
+
+html.dark [data-skin] .sch-grid {
+  --event: #9FB2FF;
+  --todo: #63D6C0;
+  --danger: #EE9C84;
+  --plan-overdue: #DDA096;
+  --high-text: #F0C276;
+  --green: #8FC7B0;
+  --amber: #F0B658;
+}
+
+/* 深色下旧的硬编码浅灰/蓝色也要让位给皮肤色 */
+html.dark [data-skin] .sch-day .sch-dow,
+html.dark [data-skin] .sch-adlabel,
+html.dark [data-skin] .sch-hourlabel {
+  color: var(--cs-fg-2);
+}
+
+html.dark [data-skin] .sch-day.today .sch-dow { color: var(--cs-accent); }
+
+html.dark [data-skin] .sch-day.today .sch-dnum {
+  background: var(--cs-accent);
+  color: #fff;
 }
 
 /* 逾期卡片：把原来的固定混色换成本皮肤底色，红味保留但不盖掉材质 */
