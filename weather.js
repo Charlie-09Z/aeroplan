@@ -29,6 +29,7 @@
     data: null,          // {time:[], code:[], max:[], min:[], label:''}
     at: 0,               // 上次成功拉取的时间
     pending: null,
+    err: '',             // 上一次拉取的失败原因：'' / 'net' / 'unsupported'
     gen: 0,              // 清理代号：丢弃清理前发出的请求结果
     el: null,
     key: '',
@@ -285,7 +286,7 @@
 
   // ---------- 拉取天气 ----------
 
-  function fetchForecast(pos) {
+  function fetchForecast(pos, timeoutMs) {
     var url = 'https://api.open-meteo.com/v1/forecast' +
       '?latitude=' + pos.latitude.toFixed(3) +
       '&longitude=' + pos.longitude.toFixed(3) +
@@ -294,8 +295,8 @@
       '&timezone=auto';
 
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
-    // 首屏优先：4 秒没回来就放弃，直接用本地缓存渲染，不阻塞页面
-    var timer = controller ? setTimeout(function () { controller.abort(); }, 4200) : null;
+    // 首屏优先：默认 4.2 秒没回来就放弃，不阻塞页面；境外请求重试时由调用方给更长的超时
+    var timer = controller ? setTimeout(function () { controller.abort(); }, timeoutMs || 4200) : null;
     if (controller) store.abort = controller;
 
     return fetch(url, {
@@ -306,7 +307,11 @@
     }).then(function (res) {
       if (timer) clearTimeout(timer);
       store.abort = null;
-      if (!res.ok) throw new Error('http-' + res.status);
+      if (!res.ok) {
+        var httpErr = new Error('http-' + res.status);
+        httpErr.status = res.status;
+        throw httpErr;
+      }
       return res.json();
     }).then(function (json) {
       var daily = json && json.daily;
@@ -346,18 +351,26 @@
 
     var cityRef = store.city;
     var gen = store.gen;
+    store.err = '';
     store.pending = resolvePosition()
-      .then(fetchForecast)
+      .then(function (pos) { return fetchForecast(pos, 4200); })
+      .catch(function (err) {
+        // 超时/网络问题再给一次更长的机会；坐标本身无效（400）不重试
+        if (!err || err.status === 400) throw err;
+        return resolvePosition().then(function (pos) { return fetchForecast(pos, 9000); });
+      })
       .then(function (data) {
         if (gen !== store.gen) return;
         store.data = data;
         store.at = Date.now();
+        store.err = '';
         saveWeatherCache(cityRef, data, store.at);
       })
-      .catch(function () {
+      .catch(function (err) {
         // 离线或失败：保留上一次有效缓存，不清空、不弹错误框；
-        // 从未成功拉取过时保持占位状态。
+        // 从未成功拉取过时，标记失败原因，界面给一条可翻译的降级提示
         if (gen !== store.gen) return;
+        store.err = (err && (err.status === 400 || err.message === 'empty-window')) ? 'unsupported' : 'net';
       })
       .then(function () {
         if (gen !== store.gen) return;
@@ -398,6 +411,16 @@
   function setEl(el, key) {
     store.el = el || null;
     store.key = key || '';
+    if (el && !el.__wxRetryBound) {
+      el.__wxRetryBound = true;
+      el.addEventListener('click', function (e) {
+        var btn = e.target && e.target.closest ? e.target.closest('[data-weather-retry]') : null;
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        refresh(true);
+      });
+    }
   }
 
   function render() {
@@ -417,21 +440,44 @@
   function dailyForPlace(query) {
     var q = String(query || '').trim();
     if (!q) return Promise.reject(new Error('no-place'));
-    return search(q).then(function (list) {
-      if (!list || !list.length) throw new Error('no-place');
-      return fetchForecast(list[0]);
-    }).then(function (data) {
-      var key = todayKey();
-      var idx = data.time.indexOf(key);
-      if (idx === -1) throw new Error('no-today');
-      return {
-        code: data.code[idx],
-        max: data.max[idx],
-        min: data.min[idx],
-        date: key,
-        at: Date.now()
-      };
-    });
+
+    // 地名和当前天气城市对得上时直接用已有坐标：境外地名按名字再搜一次常常
+    // 命不中 place:* 标签（行政边界是 boundary:administrative），会白跑一趟
+    function posFromCurrentCity() {
+      var c = store.city;
+      if (!c || !isFinite(Number(c.latitude)) || !isFinite(Number(c.longitude))) {
+        throw new Error('no-match');
+      }
+      var segs = String(c.label || '').split('·').map(function (s) { return String(s).trim(); }).filter(Boolean);
+      segs.push(String(c.name || '').trim());
+      var hit = segs.some(function (s) {
+        return s && (s === q || q.indexOf(s) !== -1 || s.indexOf(q) !== -1);
+      });
+      if (!hit) throw new Error('no-match');
+      return { latitude: Number(c.latitude), longitude: Number(c.longitude), label: c.name || q };
+    }
+
+    return Promise.resolve()
+      .then(posFromCurrentCity)
+      .catch(function () {
+        return search(q).then(function (list) {
+          if (!list || !list.length) throw new Error('no-place');
+          return list[0];
+        });
+      })
+      .then(function (pos) { return fetchForecast(pos, 9000); })
+      .then(function (data) {
+        var key = todayKey();
+        var idx = data.time.indexOf(key);
+        if (idx === -1) throw new Error('no-today');
+        return {
+          code: data.code[idx],
+          max: data.max[idx],
+          min: data.min[idx],
+          date: key,
+          at: Date.now()
+        };
+      });
   }
 
   function paint(el, key) {
@@ -458,8 +504,9 @@
 
     var idx = store.data.time.indexOf(key);
     if (idx === -1) {
-      el.hidden = true;
-      el.innerHTML = '';
+      // 地点有数据但这一天不在预报窗口里：给一句可读的说明，不要留空白
+      el.innerHTML = '<div class="wx-now wx-empty">' +
+        '<div class="wx-row wx-text">' + esc(T('该地区暂不支持天气')) + '</div></div>';
       return;
     }
 
@@ -498,7 +545,18 @@
 
   function weatherPlaceholder() {
     if (store.city) {
-      return '<span class="wx-placeholder">—</span>';
+      // 已选地点但还没有任何数据：区分「还在拉」和「拉不到」，
+      // 给一句可翻译的说明和一个重试入口，避免只有一条「—」看不出发生了什么
+      var place = store.city.label || store.city.name || '';
+      var text = store.err === 'unsupported'
+        ? T('该地区暂不支持天气')
+        : (store.pending || !store.err ? T('正在获取天气…') : T('天气暂时获取不到'));
+      var retry = store.err === 'unsupported' ? '' :
+        '<button class="wx-retry" type="button" data-weather-retry="1">' + esc(T('重试')) + '</button>';
+      return '<div class="wx-now wx-empty">' +
+        (place ? '<div class="wx-row wx-place" title="' + esc(place) + '">' + esc(place) + '</div>' : '') +
+        '<div class="wx-row wx-text">' + esc(text) + '</div>' + retry +
+      '</div>';
     }
     // 还没有选择地点：给一个不打扰的手动入口（定位小图标 + 细字，热区靠 CSS 外扩）
     return '<button class="wx-city-btn" type="button" data-weather-city="1">' +

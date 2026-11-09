@@ -760,6 +760,13 @@ svg { display: block; }
   align-self: start;
   aspect-ratio: 1 / 1;
   border-radius: 13px;
+  /* 网格列是 repeat(7, 1fr)，1fr 的「最小列宽」默认取内容最小宽度：
+     日格里的节日名是 nowrap，中文短、英文长（Lunar New Year's Eve 等），
+     会把所在那一列撑宽，aspect-ratio 再让该格跟着变高，月历就大小不一了。
+     把最小宽度归零 + 裁掉溢出，7 列严格等宽，格高只由 aspect-ratio 决定，
+     两种语言、有无节日、有无角标都等高。 */
+  min-width: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -867,7 +874,7 @@ svg { display: block; }
   grid-column: 1;
   grid-row: 1;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 4px 10px;
@@ -892,13 +899,20 @@ svg { display: block; }
 }
 
 .month-stat {
-  /* 统计文案必须读完整：不禁用换行、不省略号；放不下就整行折到下一行 */
+  /* 中英文都必须和左侧图注同一行：不换行，空间不够时整体省略而不是折行 */
   flex: 1 1 auto;
   min-width: 0;
   text-align: right;
   line-height: 1.4;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 英文文案更长：同一行内先压缩间距和字号，尽量不触发省略号 */
+html[lang="en"] .cal-foot {
+  gap: 4px 8px;
+  font-size: 11px;
 }
 
 .cal-tip {
@@ -3952,6 +3966,14 @@ html.dark { --festival: #F0A48F; --today-red: #E8897F; }
 
 .cal-cell .cal-lunar.is-term { color: var(--text-2); }
 .cal-cell .cal-lunar.is-festival { color: var(--festival); font-weight: 600; }
+
+/* 英文节日名（New Year's Eve 等）比中文长得多：单独降字号并允许省略，
+   保证在日格里不换行、不溢出，中文保持原字号 */
+html[lang="en"] .cal-cell .cal-lunar {
+  font-size: 8.5px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+}
 .cal-cell.other .cal-lunar { opacity: .75; }
 
 .cal-cell.selected {
@@ -5335,6 +5357,23 @@ html.dark .wx-snow { color: #A9BDD3; }
   color: var(--muted);
   opacity: .7;
 }
+
+/* 已选地点但暂时没有数据：说明文字 + 重试，沿用 wx-now 的四行布局，不撑破版 */
+.wx-retry {
+  justify-self: end;
+  padding: 0;
+  margin-top: 1px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1.4;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.wx-retry:active { opacity: .6; }
 
 /* 选择城市：视觉上是「定位小图标 + 浅色小字」，不再是按钮块；
    透明 ::after 把可点范围外扩到 44×44，视觉与热区分离 */
@@ -6772,6 +6811,10 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
   max-height: 80vh;
   object-fit: contain;
   display: block;
+  /* 分享长图要能长按存图：不要拦系统长按菜单，也不要禁掉图片选择 */
+  -webkit-touch-callout: default;
+  -webkit-user-select: auto;
+  user-select: auto;
 }
 
 .dv-name {
@@ -6805,6 +6848,35 @@ html.dark #viewDiary mark { background: rgba(227, 163, 60, .32); }
   stroke: currentColor;
   stroke-width: 1.8;
   stroke-linecap: round;
+}
+
+/* 分享长图的保存按钮：WebView 里长按没有系统菜单时的兜底入口 */
+.dv-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .92);
+  color: #16181F;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dv-save[hidden] { display: none; }
+.dv-save:active { transform: scale(.97); }
+
+.dv-save svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* ---------- 日历黄历卡片下方的日记入口 ---------- */

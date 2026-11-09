@@ -350,6 +350,8 @@
     '计划保存失败，请重试': 'Could not save the plan. Please try again.',
     '分类保存失败：{msg}': 'Could not save the category: {msg}',
     '浏览器拒绝写入': 'the browser refused the write',
+    '写入失败': 'the write failed',
+    '写入被中断': 'the write was interrupted',
     '正在读取…': 'Reading…',
 
     // ---------- 节日 ----------
@@ -513,6 +515,8 @@
     '忌': 'Avoid',
     '冲煞': 'Clash',
     '值神': 'Day spirit',
+    '（黄道）': ' (Auspicious)',
+    '（黑道）': ' (Inauspicious)',
 
     '纯本地的日程与行程工具：日历、议程、行程表、计划、日记、天气与黄历。没有账号，也没有服务端。': 'A fully local schedule and planning tool: calendar, agenda, timetable, plans, journal, weather and almanac. No accounts and no server.',
     '条目、计划、分类、偏好与同意记录只保存在本机：优先 IndexedDB，不可用时退回 localStorage。没有服务器副本。': 'Items, plans, categories, preferences and the consent record stay on this device only: IndexedDB is preferred, with localStorage as a fallback. There is no server copy.',
@@ -731,6 +735,9 @@
     '情绪标签管理': 'Mood tags',
     '分享长图': 'Share as image',
     '长按图片保存到相册': 'Long-press the image to save',
+    '点按「保存图片」或长按图片保存到相册': 'Tap "Save image", or long-press the image to save',
+    '保存图片': 'Save image',
+    '保存或分享图片': 'Save or share image',
     '还没有纪念日': 'No anniversaries yet',
     '新建一个，记住重要的日子。': 'Add one to remember a day that matters.',
     '例如：生日、考试、旅行': 'e.g. birthday, exam, trip',
@@ -768,7 +775,53 @@
 
     // ---------- 安装包说明 ----------
     '保存失败：未能写入本机': 'Save failed: nothing was written to this device',
-    '这是 AeroPlan 的新安装包（com.aeroplan.app）。如需保留旧数据，请先在旧版「设置 → 备份数据」导出，再在本版「恢复数据」导入；新旧包名不同，不能直接覆盖升级。': 'This is the new AeroPlan package (com.aeroplan.app). To keep old data, export a backup from the old version (Settings → Backup data) and restore it here; the package name changed, so it cannot update the old app in place.'
+    '这是 AeroPlan 的新安装包（com.aeroplan.app）。如需保留旧数据，请先在旧版「设置 → 备份数据」导出，再在本版「恢复数据」导入；新旧包名不同，不能直接覆盖升级。': 'This is the new AeroPlan package (com.aeroplan.app). To keep old data, export a backup from the old version (Settings → Backup data) and restore it here; the package name changed, so it cannot update the old app in place.',
+
+    // ---------- 年历 / 捏合手势 / 日历提示 ----------
+    '左右滑动切换年份 · 捏合或返回回到月历': 'Swipe to change years · Pinch or go back to the month view',
+    '日历卡片内容': 'Calendar card content',
+    '视图': 'Views',
+
+    // ---------- 省市区县选择 ----------
+    '省': 'Province',
+    '市': 'City',
+    '区/县': 'District',
+    '省份': 'Province',
+    '城市': 'City',
+    '选择省市': 'Choose region',
+    '省市区县列表来自应用内置，完全离线，不联网、不定位、不上传。': 'The region list is built into the app: fully offline, no network, no location, nothing uploaded.',
+
+    // ---------- 农历 / 样式 / 通用按钮与提示 ----------
+    '农历日期': 'Lunar date',
+    '农历年份': 'Lunar year',
+    '农历月份': 'Lunar month',
+    '农历日': 'Lunar day',
+    '心情': 'Mood',
+    '样式筛选': 'Style filter',
+    '和纸': 'Washi',
+    '图标': 'Icon',
+    '添加': 'Add',
+    '清除': 'Clear',
+    '纯本地的日程与行程工具：日历、计划、行程表、日记、纪念日、天气与黄历。没有账号，也没有服务端。': 'A fully local schedule and planning tool: calendar, plans, timetable, journal, anniversaries, weather and almanac. No accounts and no server.',
+    '按住可拖动排序，长按可编辑或删除。标签颜色会用在名称文字上。': 'Press and drag to reorder; press and hold to edit or delete. Tag colors are used for the name text.',
+
+    // ---------- 历史计划空态 / 日记写作与分类标签页的动态文案 ----------
+    '还没有历史计划': 'No past plans yet',
+    '过去的周 / 月 / 年计划会归档在这里。': 'Past weekly, monthly and yearly plans are archived here.',
+    '自定义': 'Custom',
+    '默认色点': 'Default color dot',
+    '更多信息': 'More info',
+
+    // ---------- 天气：加载中 / 拉取失败 / 地区不支持 ----------
+    '更新于 {time}': 'Updated {time}',
+    '更新于 {time} · 可能已过期': 'Updated {time} · may be out of date',
+    '正在获取天气…': 'Getting the weather…',
+    '天气暂时获取不到': 'Weather is unavailable right now',
+    '该地区暂不支持天气': 'Weather is not available for this area',
+    '重试': 'Retry',
+    '日记保存失败，请重试': 'Could not save the journal entry. Try again.',
+    '当前环境不支持附件，备份里的附件没有还原': 'Attachments are not supported here; attachments in the backup were not restored.',
+    '将删除 {items} 条安排、{plans} 条计划、{diary} 篇日记、{cats} 个分类，以及全部设置与本地缓存。\n\n删除后无法恢复，建议先备份。': 'This will delete {items} items, {plans} plans, {diary} journal entries and {cats} categories, plus all settings and local cache.\n\nThis cannot be undone — back up first.'
   };
 
   var ATTRS = ['placeholder', 'aria-label', 'title', 'alt'];

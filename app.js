@@ -45,7 +45,7 @@
     lang: 'light-schedule.lang'
   };
 
-  const APP_VERSION = '1.2.2';
+  const APP_VERSION = '1.2.8';
   const POLICY_VERSION = 'privacy-1.2';
   // 生成新 keystore 后，把证书 SHA-256 指纹填在这里（README 有步骤）
   const OFFICIAL_CERT_SHA256 = '';
@@ -423,6 +423,19 @@
     '6-1': '儿童节', '10-31': '万圣夜', '12-24': '平安夜', '12-25': '圣诞节', '12-31': '跨年夜'
   };
 
+  // 英文界面的世界节日（固定公历日期）。日格宽度只有 45px 左右，
+  // 名字按「一眼能认出来」压到最短，不放完整官方名
+  const EN_SOLAR_FESTIVALS = {
+    '1-1': 'New Year',
+    '2-14': 'Valentine',
+    '3-17': "St. Pat's",
+    '4-1': 'April Fools',
+    '10-31': 'Halloween',
+    '12-24': 'Xmas Eve',
+    '12-25': 'Christmas',
+    '12-31': "Year's Eve"
+  };
+
   const lunarDayCache = {};
   const solarTermCache = {};
   const dayMetaCache = {};
@@ -606,20 +619,56 @@
     return SOLAR_FESTIVALS[m + '-' + d] || '';
   }
 
+  // 复活节：春分后第一个满月之后的第一个星期日（公历 computus，匿名算法）
+  function easterOf(y) {
+    const a = y % 19;
+    const b = Math.floor(y / 100);
+    const c = y % 100;
+    const d = Math.floor(b / 4);
+    const e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4);
+    const k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    return {
+      month: Math.floor((h + l - 7 * m + 114) / 31),
+      day: ((h + l - 7 * m + 114) % 31) + 1
+    };
+  }
+
+  // 英文界面专用的节日表：固定公历 + 复活节、母亲节、父亲节、感恩节四个浮动节日
+  function enFestivalOf(y, m, d) {
+    if (m === 5 && d === nthWeekdayOfMonth(y, 5, 0, 2)) return "Mother's";
+    if (m === 6 && d === nthWeekdayOfMonth(y, 6, 0, 3)) return "Father's";
+    if (m === 11 && d === nthWeekdayOfMonth(y, 11, 4, 4)) return 'Thanks';
+    if (m === 3 || m === 4) {
+      const e = easterOf(y);
+      if (e.month === m && e.day === d) return 'Easter';
+    }
+    return EN_SOLAR_FESTIVALS[m + '-' + d] || '';
+  }
+
   // 每天的农历 / 节气 / 节日，按天缓存
+  // 节日表随语言切换（中文传统节日 / 英文世界节日），所以缓存里记下语言，
+  // 语言变了就地重算，不依赖调用方记得清缓存
   function dayMeta(key) {
-    if (dayMetaCache[key]) return dayMetaCache[key];
+    const en = isEn();
+    if (dayMetaCache[key] && dayMetaCache[key].en === en) return dayMetaCache[key];
     const dt = keyToDate(key);
     const y = dt.getFullYear();
     const m = dt.getMonth() + 1;
     const d = dt.getDate();
     const lunar = solarToLunar(y, m, d);
     const term = solarTermsOfYear(y)[m + '-' + d] || '';
-    const lunarFestival = lunarFestivalOf(lunar);
-    let festival = lunarFestival || solarFestivalOf(y, m, d);
+    // 英文界面换一整套世界节日：不显示农历节日、二十四节气和公历里的中国节日
+    const lunarFestival = en ? '' : lunarFestivalOf(lunar);
+    let festival = en ? enFestivalOf(y, m, d) : (lunarFestival || solarFestivalOf(y, m, d));
     // 清明既是节气也是传统节日，归到「跟随农历」这一类；公历/国际节日则始终显示
-    let festivalKind = lunarFestival ? 'lunar' : (festival ? 'solar' : '');
-    if (!festival && term === '清明') { festival = '清明'; festivalKind = 'lunar'; }
+    let festivalKind = en ? (festival ? 'solar' : '') : (lunarFestival ? 'lunar' : (festival ? 'solar' : ''));
+    if (!en && !festival && term === '清明') { festival = '清明'; festivalKind = 'lunar'; }
     const monthName = LUNAR_MONTH_NAMES[lunar.month - 1];
     const meta = {
       lunar: lunar,
@@ -629,10 +678,21 @@
       lunarFull: (lunar.isLeap ? '闰' : '') + monthName + '月' + LUNAR_DAY_NAMES[lunar.day - 1],
       term: term,
       festival: festival,
-      festivalKind: festivalKind
+      festivalKind: festivalKind,
+      en: en
     };
     dayMetaCache[key] = meta;
     return meta;
+  }
+
+  // 英文界面用数字写农历（8/15），中文保持「八月十五 / 初一」；
+  // 和纪念日卡片的农历写法一致，避免英文日历里出现汉字
+  function lunarDigits(meta) {
+    return meta.lunar.month + '/' + meta.lunar.day;
+  }
+
+  function lunarLabel(meta) {
+    return isEn() ? T('农历 {d}', { d: lunarDigits(meta) }) : meta.lunarFull;
   }
 
   // ==================== 重复规则 ====================
@@ -1830,8 +1890,8 @@
       }
       tx.objectStore(IDB_STORE).put({ key: key, value: value });
       tx.oncomplete = function () { resolve(true); };
-      tx.onerror = function () { reject(tx.error || new Error('写入失败')); };
-      tx.onabort = function () { reject(tx.error || new Error('写入被中断')); };
+      tx.onerror = function () { reject(tx.error || new Error(T('写入失败'))); };
+      tx.onabort = function () { reject(tx.error || new Error(T('写入被中断'))); };
     });
   }
 
@@ -1848,8 +1908,8 @@
       const store = tx.objectStore(IDB_STORE);
       entries.forEach(function (pair) { store.put({ key: pair[0], value: pair[1] }); });
       tx.oncomplete = function () { resolve(true); };
-      tx.onerror = function () { reject(tx.error || new Error('写入失败')); };
-      tx.onabort = function () { reject(tx.error || new Error('写入被中断')); };
+      tx.onerror = function () { reject(tx.error || new Error(T('写入失败'))); };
+      tx.onabort = function () { reject(tx.error || new Error(T('写入被中断'))); };
     });
   }
 
@@ -2296,7 +2356,9 @@
   }
 
   // 节假日标记跟随「农历」开关：关掉农历就一并隐藏，不单独提供开关
+  // 英文界面不显示中国法定节假日与调休（含假/班角标），改用世界节日
   function holidayInfo(key) {
+    if (isEn()) return null;
     if (!lunarVisible()) return null;
     if (!holidayMap) holidayMap = buildHolidayMap();
     return holidayMap[key] || null;
@@ -2365,14 +2427,14 @@
       const solarFestival = meta.festivalKind === 'solar' ? meta.festival : '';
       const mainFestival = tradFestival || solarFestival;
       const subText = isEn()
-        ? (mainFestival ? T(mainFestival) : (showLunar ? meta.lunarText : ''))
+        ? (mainFestival ? T(mainFestival) : (showLunar ? lunarDigits(meta) : ''))
         : (mainFestival || (showLunar ? meta.term : '') || (showLunar ? meta.lunarText : ''));
       const subClass = mainFestival ? ' is-festival'
-        : ((showLunar && meta.term) ? ' is-term' : '');
+        : ((!isEn() && showLunar && meta.term) ? ' is-term' : '');
 
       const ariaTextBase = isEn()
         ? monthDay(key) + ' ' + weekdayOf(key) +
-          (showLunar ? ' ' + meta.lunarFull : '') +
+          (showLunar ? ' ' + lunarLabel(meta) : '') +
           (mainFestival ? ', ' + T(mainFestival) : '') +
           ', ' + T('{n} 项安排', { n: dayItems.length })
         : monthDay(key) + ' ' + weekdayOf(key) + ' ' + (showLunar ? meta.lunarFull : '') +
@@ -2383,6 +2445,7 @@
           : '，' + (hol.type === 'workday' ? '调休上班' : hol.name + '假期')) : '');
 
       // 「假 / 班」标记固定在内层日期格右下角内侧，绘制在文字下层，不遮日期数字
+      // 英文界面 holidayInfo 恒为 null，角标不渲染，所以这里只用中文单字
       const holBadge = hol
         ? '<span class="cal-holiday ' + hol.type + '" aria-hidden="true">' +
           (hol.type === 'workday' ? '班' : '假') + '</span>'
@@ -2948,7 +3011,7 @@
       '<div class="alm-line"><b class="alm-tag no">' + esc(T('忌')) + '</b><span>' + esc(a.ji) + '</span></div>' +
       '<div class="alm-foot">' +
         '<span>' + esc(T('冲煞')) + '：' + esc(a.chong) + '</span>' +
-        '<span>' + esc(T('值神')) + '：' + esc(a.god) + (a.godGood ? '（黄道）' : '（黑道）') + '</span>' +
+        '<span>' + esc(T('值神')) + '：' + esc(a.god) + esc(T(a.godGood ? '（黄道）' : '（黑道）')) + '</span>' +
       '</div>' +
     '</div>';
   }
@@ -3008,7 +3071,7 @@
     const subParts = [];
     // 农历关闭时，农历、节气、传统节日、节假日信息一起隐藏；公历/国际节日照常
     const showLunar = lunarVisible();
-    if (showLunar) subParts.push(meta.lunarFull);
+    if (showLunar) subParts.push(lunarLabel(meta));
     if (showLunar && !isEn() && meta.term && meta.term !== meta.festival) subParts.push(meta.term);
     if (meta.festival && (showLunar || meta.festivalKind === 'solar')) {
       subParts.push(isEn() ? T(meta.festival) : meta.festival);
@@ -11227,8 +11290,8 @@
     const showLunar = lunarVisible();
     const bits = [weekdayFullOf(key)];
     if (meta.festival && (showLunar || meta.festivalKind === 'solar')) bits.push(T(meta.festival));
-    else if (showLunar && meta.term) bits.push(T(meta.term));
-    if (showLunar) bits.push((isEn() ? '' : '农历') + meta.lunarFull);
+    else if (!isEn() && showLunar && meta.term) bits.push(T(meta.term));
+    if (showLunar) bits.push(isEn() ? lunarLabel(meta) : '农历' + meta.lunarFull);
     return bits.join(' · ');
   }
 
@@ -12019,6 +12082,10 @@
     };
   }
 
+  // 长图展示在 <img> 上的 url 是 blob:，Android WebView 既没有内置的图片长按菜单，
+  // 也下载不了 blob:，所以把这次生成的 PNG 留一份，给「保存图片」按钮和长按兜底用
+  let shareImageBlob = null;
+
   async function shareDiaryLongImage() {
     const entry = diaryByDate(diaryDetailDate);
     if (!entry) return;
@@ -12168,18 +12235,65 @@
       const viewer = $('#diaryViewer');
       const vid = $('#diaryViewerVideo');
       const img = $('#diaryViewerImg');
+      shareImageBlob = blob;
       if (vid) { vid.hidden = true; try { vid.pause(); } catch (err) { /* 忽略 */ } vid.removeAttribute('src'); }
       if (img.dataset.url) { try { URL.revokeObjectURL(img.dataset.url); } catch (err) { /* 忽略 */ } }
       img.dataset.url = url;
       img.src = url;
       img.hidden = false;
-      $('#diaryViewerName').textContent = T('长按图片保存到相册');
+      $('#diaryViewerName').textContent = T('点按「保存图片」或长按图片保存到相册');
+      const saveBtn = $('#diaryViewerSave');
+      if (saveBtn) saveBtn.hidden = false;
       viewer.hidden = false;
       requestAnimationFrame(function () { viewer.classList.add('open'); });
     }, 'image/png');
     if (firstImgUrl) {
       window.setTimeout(function () { try { URL.revokeObjectURL(firstImgUrl); } catch (err) { /* 忽略 */ } }, 4000);
     }
+  }
+
+  function shareImageName() {
+    return (isEn() ? 'AeroPlan-diary-' : '氢计划日记-') + (diaryDetailDate || dateKey(new Date())) + '.png';
+  }
+
+  // 保存长图：原生环境写进缓存目录 → 交给系统面板（用户在里面选「保存到相册 / 文件」），
+  // 网页环境退回普通下载。
+  async function saveShareImage() {
+    if (!shareImageBlob) return;
+    const name = shareImageName();
+    const fs = plugin('Filesystem');
+    const share = plugin('Share');
+    if (fs && isNativeApp()) {
+      const path = 'share-image/' + name;
+      try {
+        await fs.writeFile({
+          path: path,
+          data: await blobToBase64(shareImageBlob),
+          directory: 'CACHE',
+          recursive: true
+        });
+        const uriRes = await fs.getUri({ path: path, directory: 'CACHE' });
+        const uri = uriRes && uriRes.uri;
+        if (share && typeof share.share === 'function' && uri) {
+          await share.share({
+            title: T('保存图片'),
+            dialogTitle: T('保存或分享图片'),
+            files: [uri]
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('调起系统保存面板失败：', err);
+      }
+    }
+    const url = URL.createObjectURL(shareImageBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
   }
 
   function diaryDurationText(sec) {
@@ -13252,6 +13366,9 @@
       const viewer = $('#diaryViewer');
       const vid = $('#diaryViewerVideo');
       const img = $('#diaryViewerImg');
+      shareImageBlob = null;
+      const saveBtn = $('#diaryViewerSave');
+      if (saveBtn) saveBtn.hidden = true;
       if (img) { img.hidden = true; img.removeAttribute('src'); }
       if (vid.dataset.url) {
         try { URL.revokeObjectURL(vid.dataset.url); } catch (err) { /* 忽略 */ }
@@ -13269,6 +13386,9 @@
       const viewer = $('#diaryViewer');
       const img = $('#diaryViewerImg');
       const vid = $('#diaryViewerVideo');
+      shareImageBlob = null;
+      const saveBtn = $('#diaryViewerSave');
+      if (saveBtn) saveBtn.hidden = true;
       if (vid) { vid.hidden = true; vid.pause(); vid.removeAttribute('src'); }
       if (img.dataset.url) {
         try { URL.revokeObjectURL(img.dataset.url); } catch (err) { /* 忽略 */ }
@@ -13296,6 +13416,9 @@
   function closeDiaryViewer() {
     const viewer = $('#diaryViewer');
     if (!viewer || viewer.hidden) return;
+    shareImageBlob = null;
+    const saveBtn = $('#diaryViewerSave');
+    if (saveBtn) saveBtn.hidden = true;
     const img = $('#diaryViewerImg');
     if (img && img.dataset.url) {
       try { URL.revokeObjectURL(img.dataset.url); } catch (err) { /* 忽略 */ }
@@ -13742,6 +13865,16 @@
     });
 
     $('#diaryViewerClose').addEventListener('click', closeDiaryViewer);
+    $('#diaryViewerSave').addEventListener('click', function (e) {
+      e.stopPropagation();
+      saveShareImage();
+    });
+    // 浏览器 / 部分环境长按会派发 contextmenu：拦下来直接走同一条保存路径
+    $('#diaryViewerImg').addEventListener('contextmenu', function (e) {
+      if (!shareImageBlob) return;
+      e.preventDefault();
+      saveShareImage();
+    });
     $('#diaryViewer').addEventListener('click', function (e) {
       if (e.target === $('#diaryViewer')) closeDiaryViewer();
     });
