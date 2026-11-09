@@ -45,7 +45,7 @@
     lang: 'light-schedule.lang'
   };
 
-  const APP_VERSION = '1.2.19';
+  const APP_VERSION = '1.5.0';
   const POLICY_VERSION = 'privacy-1.2';
   // 生成新 keystore 后，把证书 SHA-256 指纹填在这里（README 有步骤）
   const OFFICIAL_CERT_SHA256 = '';
@@ -69,7 +69,7 @@
     '本版本不申请存储、定位、通知与闹钟权限：备份经系统保存或分享面板完成，导入由你手动选择文件。',
     '',
     '四、备份文件',
-    '备份是未加密的 JSON 文件，含条目、计划、分类、偏好和同意记录。请存放在可信位置。',
+    '备份是一个未加密的 zip：文字数据压缩，附件按原文件原样放入。请存放在可信位置。',
     '',
     '五、协议',
     '本页内容构成使用协议。协议更新时随新版本发布并标注新的生效日期，重大变更会再次提示确认。继续使用即表示你已阅读并接受本协议。',
@@ -90,7 +90,7 @@
     'This version requests no storage, location, notification or alarm permission: backups go through the system save/share panel, and imports use the file you pick manually.',
     '',
     '4. Backup files',
-    'A backup is an unencrypted JSON file containing items, plans, categories, preferences and the consent record. Keep it somewhere you trust.',
+    'A backup is an unencrypted zip: text data is compressed and attachments are stored as original files. Keep it somewhere you trust.',
     '',
     '5. Terms',
     'This page forms the terms of use. Updated terms ship with a new version and carry a new effective date; major changes prompt for confirmation again. Continuing to use the app means you have read and accept these terms.'
@@ -1241,7 +1241,8 @@
     { id: 'chalkboard', zh: '黑板粉笔', en: 'Chalkboard', mode: 'both' },
     { id: 'canlabel', zh: '罐头标签', en: 'Can label', mode: 'light' },
     { id: 'window', zh: '格窗光斑', en: 'Window light', mode: 'light' },
-    { id: 'subtitle', zh: '字幕卡', en: 'Subtitle card', mode: 'both' },
+    // 字幕卡只做了深色一套，浅色下不成立
+    { id: 'subtitle', zh: '字幕卡', en: 'Subtitle card', mode: 'dark' },
     { id: 'neon', zh: '霓虹灯牌', en: 'Neon sign', mode: 'dark' },
     { id: 'clip', zh: '便签回形针', en: 'Clipped note', mode: 'light' },
     { id: 'quilt', zh: '绗缝棉被', en: 'Quilt', mode: 'light' },
@@ -1278,13 +1279,19 @@
     meta.cardStyle = normalizeCardStyleId(meta.cardStyle);
     meta.progressStyle = meta.progressStyle === 'battery' ? 'battery' : 'bar';
     meta.moods = normalizeMoods(meta.moods);
-    // 智能提示升级为统一横幅：天气 / 行程 / 计划各记一份确认指纹。
-    // 老版本的单份 smartTipAck 只代表天气，这里迁移到天气指纹，避免升级后又弹一次
-    meta.smartTipAckWeather = typeof meta.smartTipAckWeather === 'string'
-      ? meta.smartTipAckWeather
-      : (typeof meta.smartTipAck === 'string' ? meta.smartTipAck : '');
+    // 智能提示：天气只记上次确认的时间戳（3 小时内不再提醒天气），
+    // 行程 / 计划 / 爱心各记一份确认指纹（同类内容不变就不重复）
+    meta.smartTipWeatherAckAt = typeof meta.smartTipWeatherAckAt === 'number' && isFinite(meta.smartTipWeatherAckAt)
+      ? meta.smartTipWeatherAckAt
+      : 0;
     meta.smartTipAckTrip = typeof meta.smartTipAckTrip === 'string' ? meta.smartTipAckTrip : '';
     meta.smartTipAckPlan = typeof meta.smartTipAckPlan === 'string' ? meta.smartTipAckPlan : '';
+    meta.smartTipAckLove = typeof meta.smartTipAckLove === 'string' ? meta.smartTipAckLove : '';
+    meta.smartTipAckFestival = typeof meta.smartTipAckFestival === 'string' ? meta.smartTipAckFestival : '';
+    meta.smartTipAckRest = typeof meta.smartTipAckRest === 'string' ? meta.smartTipAckRest : '';
+    meta.smartTipAckNight = typeof meta.smartTipAckNight === 'string' ? meta.smartTipAckNight : '';
+    meta.smartTipAckDiary = typeof meta.smartTipAckDiary === 'string' ? meta.smartTipAckDiary : '';
+    meta.smartTipAckOverdue = typeof meta.smartTipAckOverdue === 'string' ? meta.smartTipAckOverdue : '';
     return meta;
   }
 
@@ -1450,19 +1457,20 @@
     return max + 1;
   }
 
-  // 附件上限：单篇 20 个、单个 20MB、整体 500MB
+  // 附件上限：单篇 20 个、单个 80MB、单篇合计 80MB；全局不设限，最终受系统给应用的存储配额约束
   const DIARY_MAX_FILES = 20;
-  const DIARY_MAX_FILE_BYTES = 20 * 1024 * 1024;
-  const DIARY_STORE_LIMIT = 500 * 1024 * 1024;
-  const DIARY_IMG_MAX = 1600;
-  const DIARY_IMG_QUALITY = 0.82;
+  const DIARY_ENTRY_LIMIT_MB = 80;
+  const DIARY_ENTRY_LIMIT = DIARY_ENTRY_LIMIT_MB * 1024 * 1024;
+  // 单个文件与单篇上限对齐：超过 80MB 的单个文件必然放不进一篇
+  const DIARY_MAX_FILE_BYTES = DIARY_ENTRY_LIMIT;
+  // 附件原样入库（不压缩、不转码）；只生成 320px 缩略图供列表显示，随附件一起删除
   const DIARY_THUMB_MAX = 320;
   const DIARY_THUMB_QUALITY = 0.72;
-  // 标题上限 60 字；视频单篇最多 1 个、单个 50MB。
+  // 标题上限 60 字；视频单篇最多 1 个、单个 80MB。
   // WebView 里无法转码，视频原样入库，只抽首帧做封面（约 320px）。
   const DIARY_TITLE_MAX = 60;
   const DIARY_MAX_VIDEOS = 1;
-  const DIARY_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+  const DIARY_VIDEO_MAX_BYTES = DIARY_ENTRY_LIMIT;
   const DIARY_VIDEO_COVER_MAX = 320;
 
   function moodMeta(id) {
@@ -1615,6 +1623,12 @@
       (entry.attachments || []).forEach(function (a) { total += a.size || 0; });
     });
     return total;
+  }
+
+  function diaryAttachmentCount() {
+    let n = 0;
+    state.diary.forEach(function (entry) { n += (entry.attachments || []).length; });
+    return n;
   }
 
   function diaryCoverAttachment(entry) {
@@ -4979,7 +4993,10 @@
     }).map(function (s) {
       const active = s.id === current;
       const modeTip = cardStyleModeLabel(s.id);
-      return '<button class="skin-cell' + (active ? ' active' : '') + '" type="button" data-card-style="' + s.id + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
+      // 单模式皮肤只在对应主题下可选：不适配时保留展示（方便预览），但按钮禁用
+      const fits = cardStyleFitsTheme(s.id);
+      return '<button class="skin-cell' + (active ? ' active' : '') + '" type="button" data-card-style="' + s.id + '" aria-pressed="' + (active ? 'true' : 'false') + '"' +
+        (fits ? '' : ' disabled aria-disabled="true"') + '>' +
         '<span class="skin-cell-shot">' + skinDemoHTML(s.id, false) + '</span>' +
         '<span class="skin-cell-name">' + esc(isEn() ? s.en : s.zh) +
           (modeTip ? '<i class="skin-cell-mode">' + esc(modeTip) + '</i>' : '') +
@@ -6713,7 +6730,7 @@
 
   function setView(view) {
     // 离开日记页前先把没来得及自动保存的内容落盘，避免切 tab 丢字
-    if (state.view === 'diary' && view !== 'diary') closeDiaryEditor(true);
+    if (state.view === 'diary' && view !== 'diary') closeDiaryEditor(true, { backToDiary: false });
     if (state.diaryManage) exitDiaryManage();
     state.view = view;
     $$('.tab').forEach(function (tab) {
@@ -6930,6 +6947,16 @@
       state.busyChecks.delete(busyKey);
       renderAll();
       return;
+    }
+
+    // 勾完今天最后一项行程：置位「早点休息」提醒（今天提醒过就不再置位）
+    if (next && target.type === 'event' && occDate === todayKey()) {
+      const left = expandOccurrences(state.items, occDate, occDate).filter(function (i) {
+        return i.type === 'event' && !i.done;
+      });
+      if (!left.length && state.meta.smartTipAckRest !== ('rest|' + occDate)) {
+        restTipPending = true;
+      }
     }
 
     const row = button ? button.closest('.row') : null;
@@ -8614,16 +8641,163 @@
     return state.meta.smartTipEnabled !== false;
   }
 
-  // 三类通知各自一份确认指纹；老版本的单份 smartTipAck 在 normalizeMeta 里迁移到天气
+  // 行程 / 计划 / 爱心各一份确认指纹；天气改为「上次确认时间戳 + 3 小时冷却」
   const SMART_TIP_ACK_FIELD = {
-    weather: 'smartTipAckWeather',
     trip: 'smartTipAckTrip',
-    plan: 'smartTipAckPlan'
+    plan: 'smartTipAckPlan',
+    love: 'smartTipAckLove',
+    festival: 'smartTipAckFestival',
+    rest: 'smartTipAckRest',
+    night: 'smartTipAckNight',
+    diary: 'smartTipAckDiary',
+    overdue: 'smartTipAckOverdue'
   };
+  const SMART_TIP_WEATHER_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+  // 爱心横幅：今天日程条数达到这个数就提醒注意休息（条目没有结束时间，只能按条数算）
+  const SMART_TIP_LOVE_MIN_EVENTS = 5;
+  const SMART_TIP_OVERDUE_MIN = 3;
   const SMART_TIP_ICON_TRIP = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2"/>' +
     '<path d="M12 7.6V12h3.9"/></svg>';
   const SMART_TIP_ICON_PLAN = '<svg viewBox="0 0 24 24"><path d="M6 4.8h12v14.4H6z"/>' +
     '<path d="M9 9h6M9 12.6h4"/></svg>';
+  const SMART_TIP_ICON_LOVE = '<svg viewBox="0 0 24 24"><path d="M12 20.1S4.9 15.6 4.9 10.7A4.2 4.2 0 0 1 12 7.7a4.2 4.2 0 0 1 7.1 3c0 4.9-7.1 9.4-7.1 9.4z"/></svg>';
+  const SMART_TIP_ICON_FESTIVAL = '<svg viewBox="0 0 24 24"><path d="M4.8 9.6h14.4v3H4.8z"/>' +
+    '<path d="M6.4 12.6v6.6h11.2v-6.6M12 9.6v9.6"/>' +
+    '<path d="M9 9.6c-1.5 0-2.6-.8-2.6-2s1-2 2.2-2c1.8 0 3.4 2.3 3.4 4M15 9.6c1.5 0 2.6-.8 2.6-2s-1-2-2.2-2c-1.8 0-3.4 2.3-3.4 4"/></svg>';
+  const SMART_TIP_ICON_REST = '<svg viewBox="0 0 24 24"><path d="M19.2 14.2A7.4 7.4 0 0 1 9.8 4.8a7.6 7.6 0 1 0 9.4 9.4z"/></svg>';
+  const SMART_TIP_ICON_NIGHT = '<svg viewBox="0 0 24 24"><path d="M18.4 14.3A6.6 6.6 0 0 1 10 5.9a6.8 6.8 0 1 0 8.4 8.4z"/>' +
+    '<path d="M17.4 5.2l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
+  const SMART_TIP_ICON_DIARY = '<svg viewBox="0 0 24 24"><path d="M4.8 19.2l4.1-1 9.3-9.3-3.1-3.1-9.3 9.3z"/>' +
+    '<path d="M14.2 6.7l3.1 3.1"/></svg>';
+  const SMART_TIP_ICON_OVERDUE = '<svg viewBox="0 0 24 24"><path d="M7 4.8h10M7 19.2h10"/>' +
+    '<path d="M8.2 4.8c0 3 3.8 4 3.8 7.2s-3.8 4.2-3.8 7.2M15.8 4.8c0 3-3.8 4-3.8 7.2s3.8 4.2 3.8 7.2"/></svg>';
+
+  // 每类情形 4 套文案。展示时按「类型 + 指纹」随机选一套并记住，
+  // 同一指纹的重绘 / 中英切换都沿用同一条，不会每帧换句。
+  const SMART_TIP_WEATHER_VARIANTS = {
+    rain: [
+      '可能下雨，出门记得带伞',
+      '有降雨的可能，带把伞更稳妥',
+      '今天可能下雨，路上慢一点',
+      '雨水可能在路上，出门备好雨具'
+    ],
+    snow: [
+      '可能有降雪，出门注意防滑保暖',
+      '有降雪的可能，路面湿滑，走慢些',
+      '可能下雪，记得穿暖一点、注意脚下',
+      '雪花可能来，出门多留点时间'
+    ],
+    uv: [
+      '紫外线较强，记得做好防晒',
+      '日晒有点强，防晒别偷懒',
+      '紫外线偏高，出门涂好防晒',
+      '阳光里的紫外线不弱，遮阳更舒服'
+    ],
+    hot: [
+      '气温较高，注意补充水分',
+      '天气偏热，记得多喝水',
+      '今天有点热，别在太阳下待太久',
+      '气温不低，注意防暑降温'
+    ],
+    cold: [
+      '气温偏低，出门注意保暖',
+      '天气偏冷，记得多穿一件',
+      '今天有点冷，注意别着凉',
+      '气温不高，出门把自己裹暖些'
+    ],
+    wind: [
+      '风比较大，出门留意防风',
+      '今天风不小，注意别被吹乱行程',
+      '风力偏大，出门带件防风外套',
+      '风有点大，走路骑车都慢一些'
+    ],
+    sunny: [
+      '天气不错，适合出门走走',
+      '今天放晴，安排点户外活动吧',
+      '阳光正好，别辜负好天气',
+      '天晴了，出门透透气'
+    ],
+    cloudy: [
+      '云层较厚，出门也留意天色',
+      '今天多云，随身看一眼天气更安心',
+      '天色偏阴，出门记得留意变化',
+      '云有点多，带把伞也不碍事'
+    ],
+    fallback: [
+      '出门前看一眼天气，安排会更从容',
+      '天气可能有变化，出门前再确认一下',
+      '今天天色不太确定，备好再出门',
+      '出门前扫一眼天气，心里更有底'
+    ]
+  };
+  const SMART_TIP_TRIP_VARIANTS = {
+    now: [
+      '行程 · {title} 正在进行',
+      '行程 · {title} 已经开始了',
+      '行程 · 正在 {title}，别错过后续安排',
+      '行程 · {title} 进行中，留意时间'
+    ],
+    soon: [
+      '行程 · {title} {n} 分钟后开始',
+      '行程 · 还有 {n} 分钟就到 {title} 了',
+      '行程 · {title} 即将在 {n} 分钟后开始',
+      '行程 · {n} 分钟后是 {title}，可以准备出发了'
+    ]
+  };
+  const SMART_TIP_PLAN_VARIANTS = [
+    '{title} 快到期限了',
+    '{title} 记得安排时间收尾',
+    '{title} 只剩最后一点时间了',
+    '{title} 别忘在期限前完成'
+  ];
+  const SMART_TIP_LOVE_VARIANTS = [
+    '今天有 {n} 项日程，记得给自己留点喘息的时间',
+    '今天日程有点满（{n} 项），忙里也要照顾好自己',
+    '今天 {n} 项日程排得挺紧，中间记得起来活动一下',
+    '今天的节奏有点密（{n} 项日程），别忘了喝水休息'
+  ];
+  const SMART_TIP_FESTIVAL_VARIANTS = [
+    '{festival}，愿今天有一点小小的欢喜',
+    '{festival}快乐，别忘了给自己留一点温柔',
+    '今天是{festival}，愿你所念皆如愿，所行皆坦途'
+  ];
+  const SMART_TIP_REST_VARIANTS = [
+    '今天的行程都走完了，早点休息，明天见',
+    '最后一项也完成了，辛苦了，今晚早点睡',
+    '一天的事收好尾了，剩下的时间留给自己',
+    '日程走完了。天色不早的话，就早点休息吧',
+    '待办都清空了，今晚不用再惦记还有什么事'
+  ];
+  const SMART_TIP_NIGHT_VARIANTS = [
+    '夜已经深了，剩下的事明天再说，先去睡吧',
+    '这个点还醒着的话，给自己留点睡眠时间',
+    '深夜了，屏幕的光再好看，也不如好好睡一觉',
+    '夜深了，愿你把今天的疲惫留在今天',
+    '该睡了。明天的你，会感谢今晚早睡的自己'
+  ];
+  const SMART_TIP_DIARY_VARIANTS = [
+    '今天记下了，就好好休息吧',
+    '写完这一天，可以把剩下的时间交给睡眠了',
+    '字落在纸上，心也可以放下了，晚安',
+    '今天已经记在这一页了，剩下的明天再写也不迟',
+    '记录完今天，愿今晚睡得安稳'
+  ];
+  const SMART_TIP_OVERDUE_VARIANTS = [
+    '有 {n} 条周计划已经过期，量力而行，慢慢来',
+    '这一周有 {n} 条计划没赶上，不必苛责自己，先挑重要的做',
+    '{n} 条周计划过期了，调整一下节奏也完全可以',
+    '过期的 {n} 条里，做完的部分一样算数',
+    '计划没跟上也没关系，{n} 条过期项，重新排一排就好'
+  ];
+
+  // 指纹 → 选中的文案下标，只存在本次会话内
+  const smartTipVariantIndex = Object.create(null);
+  function smartTipVariantText(key, keys, params) {
+    if (smartTipVariantIndex[key] === undefined) {
+      smartTipVariantIndex[key] = Math.floor(Math.random() * keys.length);
+    }
+    return T(keys[smartTipVariantIndex[key]], params || {});
+  }
 
   // 本次会话内点过「关闭」或横幅本身的指纹：只存在内存里，不写 meta。
   // 换天 / 换天气 / 换行程 / 换计划都会产生新指纹，横幅会再次出现，不会被永久屏蔽。
@@ -8631,6 +8805,10 @@
   let smartTipCurrent = null;
   let smartTipShownSig = '';
   let smartTipHideTimer = null;
+  // 一次性触发标记：勾完今天最后一项行程 / 刚写完日记返回。
+  // 只活到下次确认或关闭，不落盘；跨天自然失效。
+  let restTipPending = false;
+  let diaryTipPending = false;
 
   // 21:00 前用今日天气，21:00 起改用明日天气
   function smartTipDay() {
@@ -8664,7 +8842,7 @@
   // 判定优先级：降水 > 紫外线 > 高温 > 低温 > 大风 > 晴/云兜底
   // 阈值：降水概率 ≥ 50%；UV ≥ 6（10:00–16:00 正午时段放宽到 ≥ 3）；
   //       高温 ≥ 33°；低温 ≤ 4°；大风 ≥ 30 km/h
-  function smartTipSentence(day) {
+  function smartTipWeatherKind(day) {
     const code = Number(day.code);
     // 老缓存可能没有新字段：null / undefined 一律按 NaN 处理，避免误判成 0°
     function num(v) { return v === null || v === undefined || v === '' ? NaN : Number(v); }
@@ -8678,14 +8856,14 @@
     const snow = (code >= 71 && code <= 77) || code === 85 || code === 86;
     const wet = code >= 51 || (isFinite(pop) && pop >= 50);
 
-    if (wet) return snow ? T('可能有降雪，出门注意防滑保暖') : T('可能下雨，出门记得带伞');
-    if (isFinite(uv) && (uv >= 6 || (noon && uv >= 3))) return T('紫外线较强，记得做好防晒');
-    if (isFinite(max) && max >= 33) return T('气温较高，注意补充水分');
-    if (isFinite(min) && min <= 4) return T('气温偏低，出门注意保暖');
-    if (isFinite(wind) && wind >= 30) return T('风比较大，出门留意防风');
-    if (code === 0 || code === 1) return T('天气不错，适合出门走走');
-    if (code === 2 || code === 3) return T('云层较厚，出门也留意天色');
-    return T('出门前看一眼天气，安排会更从容');
+    if (wet) return snow ? 'snow' : 'rain';
+    if (isFinite(uv) && (uv >= 6 || (noon && uv >= 3))) return 'uv';
+    if (isFinite(max) && max >= 33) return 'hot';
+    if (isFinite(min) && min <= 4) return 'cold';
+    if (isFinite(wind) && wind >= 30) return 'wind';
+    if (code === 0 || code === 1) return 'sunny';
+    if (code === 2 || code === 3) return 'cloudy';
+    return 'fallback';
   }
 
   function smartTipWeatherCandidate() {
@@ -8693,12 +8871,17 @@
     const day = smartTipDay();
     if (!day) return null;
     const info = window.Weather && window.Weather.infoFor ? window.Weather.infoFor(Number(day.code)) : null;
+    const sig = smartTipSignature(day);
+    const tip = smartTipVariantText(
+      'weather|' + sig,
+      SMART_TIP_WEATHER_VARIANTS[smartTipWeatherKind(day)]
+    );
     return {
       type: 'weather',
-      sig: smartTipSignature(day),
+      sig: sig,
       text: T('{when}：{tip}', {
         when: day.tomorrow ? T('明天') : T('今天'),
-        tip: smartTipSentence(day)
+        tip: tip
       }),
       tone: info && info.tone ? info.tone : '',
       icon: info && info.icon ? info.icon : ''
@@ -8720,15 +8903,14 @@
       if (mins > SMART_TIP_TRIP_WINDOW || mins < -SMART_TIP_TRIP_WINDOW) return;
       const urgency = Math.max(0, mins);
       if (best && best.urgency <= urgency) return;
-      let text;
-      if (mins <= 0) text = T('行程 · {title} 正在进行', { title: item.title });
-      else if (mins <= 1) text = T('行程 · {title} 即将开始', { title: item.title });
-      else text = T('行程 · {title} {n} 分钟后开始', { title: item.title, n: mins });
+      const sig = 'trip|' + item.id + '|' + key + '|' + item.time + '|' + item.title;
+      const variants = mins <= 0 ? SMART_TIP_TRIP_VARIANTS.now : SMART_TIP_TRIP_VARIANTS.soon;
+      const params = mins <= 0 ? { title: item.title } : { title: item.title, n: mins };
       best = {
         type: 'trip',
         // 换行程（不同条目 / 日期 / 时间 / 标题）就是新指纹
-        sig: 'trip|' + item.id + '|' + key + '|' + item.time + '|' + item.title,
-        text: text,
+        sig: sig,
+        text: smartTipVariantText('trip|' + sig, variants, params),
         urgency: urgency,
         tone: '',
         icon: SMART_TIP_ICON_TRIP
@@ -8750,15 +8932,13 @@
       deadline.setHours(23, 59, 59, 999);
       const mins = Math.max(0, Math.round((deadline.getTime() - Date.now()) / 60000));
       if (best && best.urgency <= mins) return;
-      let textKey;
-      if (plan.kind === 'year') textKey = '本年计划 · {title} 快到期限了';
-      else if (plan.kind === 'month') textKey = '本月计划 · {title} 快到期限了';
-      else textKey = '本周计划 · {title} 快到期限了';
+      const sig = 'plan|' + plan.id + '|' + plan.kind + '|' + plan.periodStart + '|' + end + '|' + plan.title;
+      const scope = plan.kind === 'year' ? '本年计划' : (plan.kind === 'month' ? '本月计划' : '本周计划');
       best = {
         type: 'plan',
         // 换计划（条目 / 周期 / 标题）就是新指纹；进度变化不重弹
-        sig: 'plan|' + plan.id + '|' + plan.kind + '|' + plan.periodStart + '|' + end + '|' + plan.title,
-        text: T(textKey, { title: plan.title }),
+        sig: sig,
+        text: T(scope) + ' · ' + smartTipVariantText('plan|' + sig, SMART_TIP_PLAN_VARIANTS, { title: plan.title }),
         urgency: mins,
         tone: '',
         icon: SMART_TIP_ICON_PLAN
@@ -8767,7 +8947,117 @@
     return best;
   }
 
+  // 爱心：今天日程条数明显偏多时，温和提醒注意休息。
+  // 现有条目没有结束时间，无法可靠算总时长，所以只按「今天的事件条数」判断。
+  function smartTipLoveCandidate() {
+    const key = todayKey();
+    const count = expandOccurrences(state.items, key, key).filter(function (item) {
+      return item.type === 'event';
+    }).length;
+    if (count < SMART_TIP_LOVE_MIN_EVENTS) return null;
+    // 按 2 条一档做指纹：5 条确认后，加到 6 条仍是同一档（不重弹），到 7 条才进下一档
+    const sig = 'love|' + key + '|' + Math.floor((count - 1) / 2);
+    return {
+      type: 'love',
+      sig: sig,
+      text: smartTipVariantText('love|' + sig, SMART_TIP_LOVE_VARIANTS, { n: count }),
+      urgency: 0,
+      tone: 'love',
+      icon: SMART_TIP_ICON_LOVE
+    };
+  }
+
+  // 节日：直接用 dayMeta 现有的节日数据（中文农历 / 公历节日，英文世界节日）；
+  // 农历开关关闭时，传统节日不提醒，与日历显示口径一致
+  function smartTipFestivalCandidate() {
+    const key = todayKey();
+    const meta = dayMeta(key);
+    if (!meta.festival) return null;
+    if (meta.festivalKind === 'lunar' && !lunarVisible()) return null;
+    const sig = 'festival|' + key + '|' + meta.festival;
+    return {
+      type: 'festival',
+      sig: sig,
+      text: smartTipVariantText('festival|' + sig, SMART_TIP_FESTIVAL_VARIANTS, { festival: T(meta.festival) }),
+      urgency: 0,
+      tone: 'festival',
+      icon: SMART_TIP_ICON_FESTIVAL
+    };
+  }
+
+  // 最后一项行程完成：只在勾选那一刻置位，一天只提醒一次（指纹按日期）
+  function smartTipRestCandidate() {
+    if (!restTipPending) return null;
+    const sig = 'rest|' + todayKey();
+    return {
+      type: 'rest',
+      sig: sig,
+      text: smartTipVariantText('rest|' + sig, SMART_TIP_REST_VARIANTS),
+      urgency: 0,
+      tone: 'rest',
+      icon: SMART_TIP_ICON_REST
+    };
+  }
+
+  // 深夜 23:00–04:00：跨零点算同一段，指纹用「这个夜晚」的起始日期，
+  // 所以 23:00 和次日 03:00 只提醒一次，第二天 23:00 重新算
+  function smartTipNightCandidate() {
+    const hour = new Date().getHours();
+    if (hour >= 4 && hour < 23) return null;
+    const nightKey = hour < 4 ? addDays(todayKey(), -1) : todayKey();
+    const sig = 'night|' + nightKey;
+    return {
+      type: 'night',
+      sig: sig,
+      text: smartTipVariantText('night|' + sig, SMART_TIP_NIGHT_VARIANTS),
+      urgency: 0,
+      tone: 'night',
+      icon: SMART_TIP_ICON_NIGHT
+    };
+  }
+
+  // 晚间 20:00–24:00 写完日记返回：只由 closeDiaryEditor 置位，一天一次
+  function smartTipDiaryCandidate() {
+    if (!diaryTipPending) return null;
+    if (new Date().getHours() < 20) return null;
+    const sig = 'diary|' + todayKey();
+    return {
+      type: 'diary',
+      sig: sig,
+      text: smartTipVariantText('diary|' + sig, SMART_TIP_DIARY_VARIANTS),
+      urgency: 0,
+      tone: 'diary',
+      icon: SMART_TIP_ICON_DIARY
+    };
+  }
+
+  // 过期未完成周计划超过 3 条：沿用 planIsOverdue 的现有「过期」定义；
+  // 指纹带本周起始日 + 2 条一档，同一周同档确认后不再重复
+  function smartTipOverdueCandidate() {
+    let count = 0;
+    state.plans.forEach(function (plan) {
+      if (plan.kind === 'week' && planIsOverdue(plan)) count++;
+    });
+    if (count <= SMART_TIP_OVERDUE_MIN) return null;
+    const sig = 'overdue|' + startOfWeek(todayKey()) + '|' + Math.floor((count - 1) / 2);
+    return {
+      type: 'overdue',
+      sig: sig,
+      text: smartTipVariantText('overdue|' + sig, SMART_TIP_OVERDUE_VARIANTS, { n: count }),
+      urgency: 0,
+      tone: 'overdue',
+      icon: SMART_TIP_ICON_OVERDUE
+    };
+  }
+
+  // 天气冷却：确认后 3 小时内不再出天气横幅（即使天气没变，满 3 小时可以再提醒）
+  function smartTipWeatherCoolingDown() {
+    const ts = Number(state.meta.smartTipWeatherAckAt) || 0;
+    return ts > 0 && Date.now() - ts < SMART_TIP_WEATHER_COOLDOWN_MS;
+  }
+
   function smartTipAcked(candidate) {
+    if (candidate.type === 'weather') return smartTipWeatherCoolingDown();
     return state.meta[SMART_TIP_ACK_FIELD[candidate.type]] === candidate.sig;
   }
 
@@ -8775,7 +9065,11 @@
     return smartTipAcked(candidate) || !!smartTipDismissed[candidate.sig];
   }
 
-  // 优先级：行程 = 计划（按紧迫度取更急的一条，分钟数越小越急）> 天气
+  // 优先级：节日（最高）> 行程 / 计划（按紧迫度）> 最后行程完成 > 深夜 > 日记收尾
+  //        > 爱心 > 周计划过期 > 天气。
+  // 理由：节日一年一次，先问候；行程 / 计划有时效性；三条「刚发生」的提醒
+  // （收尾、深夜、写完日记）拖久了就失去意义，所以排在持续状态类前面；
+  // 爱心和过期计划是持续状态，可以等；天气几乎总有候选，放最后。
   function smartTipPick() {
     if (!smartTipEnabled()) return null;
     const urgent = [];
@@ -8784,7 +9078,15 @@
     if (trip) urgent.push(trip);
     if (plan) urgent.push(plan);
     urgent.sort(function (a, b) { return a.urgency - b.urgency; });
-    const ordered = urgent.concat([smartTipWeatherCandidate()].filter(Boolean));
+    const ordered = [smartTipFestivalCandidate()].filter(Boolean).concat(
+      urgent,
+      [smartTipRestCandidate()].filter(Boolean),
+      [smartTipNightCandidate()].filter(Boolean),
+      [smartTipDiaryCandidate()].filter(Boolean),
+      [smartTipLoveCandidate()].filter(Boolean),
+      [smartTipOverdueCandidate()].filter(Boolean),
+      [smartTipWeatherCandidate()].filter(Boolean)
+    );
     for (let i = 0; i < ordered.length; i++) {
       if (!smartTipBlocked(ordered[i])) return ordered[i];
     }
@@ -8839,21 +9141,37 @@
     });
   }
 
-  // 「确认」：写对应类型的指纹，之后同类内容不再出现
+  // 「确认」：天气记时间戳（3 小时冷却），其它类型写指纹（同类内容不变就不再出现）
   function ackSmartTip() {
     const cur = smartTipCurrent;
     if (!cur) return;
-    state.meta[SMART_TIP_ACK_FIELD[cur.type]] = cur.sig;
+    if (cur.type === 'weather') {
+      // 天气不记指纹，只记确认时刻；3 小时内不再提醒天气
+      state.meta.smartTipWeatherAckAt = Date.now();
+    } else {
+      state.meta[SMART_TIP_ACK_FIELD[cur.type]] = cur.sig;
+    }
+    if (cur.type === 'rest') restTipPending = false;
+    if (cur.type === 'diary') diaryTipPending = false;
     persistMeta();
     haptic(8);
     renderSmartTip();
   }
 
-  // 「关闭」/ 点横幅自身：只收起本次，不写 meta
+  // 「关闭」/ 点横幅自身：默认只收起本次，不写 meta。
+  // 节日 / 收尾 / 深夜 / 日记 / 过期这五类要求「一天 / 一晚只提醒一次」，
+  // 关闭也按同一指纹落盘，避免重启后又冒出来。
   function dismissSmartTip() {
     const cur = smartTipCurrent;
     if (!cur) return;
     smartTipDismissed[cur.sig] = true;
+    if (cur.type === 'rest') restTipPending = false;
+    if (cur.type === 'diary') diaryTipPending = false;
+    if (cur.type === 'festival' || cur.type === 'rest' || cur.type === 'night' ||
+        cur.type === 'diary' || cur.type === 'overdue') {
+      state.meta[SMART_TIP_ACK_FIELD[cur.type]] = cur.sig;
+      persistMeta();
+    }
     smartTipCurrent = null;
     smartTipShownSig = '';
     hideSmartTipBanner();
@@ -9318,6 +9636,15 @@
     });
 
     renderCategoryList();
+
+    // 附件目录入口副标题：n 个 · 已用 x（总量不设限，只显示占用）
+    const attachSub = $('#attachEntrySub');
+    if (attachSub) {
+      const n = diaryAttachmentCount();
+      attachSub.textContent = n
+        ? T('{n} 个 · 已用 {size}', { n: n, size: formatBytes(diaryUsedBytes()) })
+        : T('还没有附件');
+    }
   }
 
   // ==================== 首次启动的协议同意 ====================
@@ -9508,6 +9835,7 @@
     state.editCategoryId = '';
     closeCatPop();
     closeAbout();
+    closeAttachPage(true);
     const page = $('#settingsPage');
     page.classList.remove('open');
     setTimeout(function () {
@@ -9576,13 +9904,13 @@
 
   // ==================== 导出 / 导入 ====================
 
-  const BACKUP_FILE_RE = /^(AeroPlan-backup-|氢计划备份-).+\.json$/;
+  const BACKUP_FILE_RE = /^(AeroPlan-backup-|氢计划备份-).+\.(json|zip)$/;
   const TEMP_FILE_RE = /\.(part|tmp)$/i;
 
   function backupFileName() {
     const d = new Date();
     const stamp = dateKey(d) + '-' + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds());
-    return (isEn() ? 'AeroPlan-backup-' : '氢计划备份-') + stamp + '.json';
+    return (isEn() ? 'AeroPlan-backup-' : '氢计划备份-') + stamp + '.zip';
   }
 
   function backupFileList(files) {
@@ -9650,154 +9978,558 @@
     return new Blob([bytes], { type: type || 'application/octet-stream' });
   }
 
+  // ==================== 备份 zip ====================
+  // 结构：manifest.json + backup.json（文本，可 deflate）+
+  //       attachments/<附件id>.<扩展名>（store 原字节，不解码、不重编码）。
+  // 这样附件是无损的；zip 的收益来自去掉 base64 的约 1/3 膨胀和文字压缩。
+  const BACKUP_ZIP_VERSION = 1;
+  const ZIP_CHUNK_BYTES = 4 * 1024 * 1024;
+
+  let zipCrcCache = null;
+  function zipCrcTable() {
+    if (zipCrcCache) return zipCrcCache;
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      table[n] = c >>> 0;
+    }
+    zipCrcCache = table;
+    return table;
+  }
+
+  function zipCrcUpdate(crc, bytes) {
+    const table = zipCrcTable();
+    for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    return crc >>> 0;
+  }
+
+  // 分块读，避免把大视频整块塞进内存
+  async function zipCrcOfBlob(blob) {
+    let crc = 0xFFFFFFFF;
+    for (let off = 0; off < blob.size; off += ZIP_CHUNK_BYTES) {
+      const buf = await blob.slice(off, Math.min(blob.size, off + ZIP_CHUNK_BYTES)).arrayBuffer();
+      crc = zipCrcUpdate(crc, new Uint8Array(buf));
+      await new Promise(function (resolve) { setTimeout(resolve, 0); });
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function zipDosTime(d) {
+    return {
+      time: ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5) | ((Math.floor(d.getSeconds() / 2)) & 31),
+      date: (((d.getFullYear() - 1980) & 127) << 9) | (((d.getMonth() + 1) & 15) << 5) | (d.getDate() & 31)
+    };
+  }
+
+  function zipHeader(kind, opt) {
+    const nameBytes = new TextEncoder().encode(opt.name);
+    const local = kind === 'local';
+    const size = (local ? 30 : 46) + nameBytes.length;
+    const buf = new ArrayBuffer(size);
+    const dv = new DataView(buf);
+    const bytes = new Uint8Array(buf);
+    if (local) {
+      dv.setUint32(0, 0x04034b50, true);
+      dv.setUint16(4, 20, true);
+      dv.setUint16(6, 0x0800, true); // 文件名按 UTF-8
+      dv.setUint16(8, opt.method, true);
+      dv.setUint16(10, opt.time, true);
+      dv.setUint16(12, opt.date, true);
+      dv.setUint32(14, opt.crc >>> 0, true);
+      dv.setUint32(18, opt.csize >>> 0, true);
+      dv.setUint32(22, opt.usize >>> 0, true);
+      dv.setUint16(26, nameBytes.length, true);
+      dv.setUint16(28, 0, true);
+      bytes.set(nameBytes, 30);
+    } else {
+      dv.setUint32(0, 0x02014b50, true);
+      dv.setUint16(4, 20, true);
+      dv.setUint16(6, 20, true);
+      dv.setUint16(8, 0x0800, true);
+      dv.setUint16(10, opt.method, true);
+      dv.setUint16(12, opt.time, true);
+      dv.setUint16(14, opt.date, true);
+      dv.setUint32(16, opt.crc >>> 0, true);
+      dv.setUint32(20, opt.csize >>> 0, true);
+      dv.setUint32(24, opt.usize >>> 0, true);
+      dv.setUint16(28, nameBytes.length, true);
+      dv.setUint16(30, 0, true);
+      dv.setUint16(32, 0, true);
+      dv.setUint16(34, 0, true);
+      dv.setUint16(36, 0, true);
+      dv.setUint32(38, 0, true);
+      dv.setUint32(42, opt.offset >>> 0, true);
+      bytes.set(nameBytes, 46);
+    }
+    return bytes;
+  }
+
+  function zipEnd(entryCount, cdSize, cdOffset) {
+    const buf = new ArrayBuffer(22);
+    const dv = new DataView(buf);
+    dv.setUint32(0, 0x06054b50, true);
+    dv.setUint16(4, 0, true);
+    dv.setUint16(6, 0, true);
+    dv.setUint16(8, entryCount, true);
+    dv.setUint16(10, entryCount, true);
+    dv.setUint32(12, cdSize >>> 0, true);
+    dv.setUint32(16, cdOffset >>> 0, true);
+    dv.setUint16(20, 0, true);
+    return new Uint8Array(buf);
+  }
+
+  async function zipDeflateBytes(bytes) {
+    if (typeof CompressionStream !== 'function') return null;
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+      const packed = new Uint8Array(await new Response(stream).arrayBuffer());
+      return packed.length < bytes.length ? packed : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  async function zipInflateBlob(blob) {
+    if (typeof DecompressionStream !== 'function') throw new Error('deflate unsupported');
+    const stream = blob.stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  function zipPartSize(part) {
+    return part && typeof part.size === 'number' ? part.size : part.length;
+  }
+
+  // entries: [{ name, text }] 或 [{ name, blob }]；只有 blob 会计入附件进度
+  async function buildZipBlob(entries, totalAttachments, onProgress) {
+    const parts = [];
+    const central = [];
+    let offset = 0;
+    let done = 0;
+    const dos = zipDosTime(new Date());
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const name = entry.name;
+      let method = 0;
+      let crc = 0;
+      let usize = 0;
+      let dataPart = null;
+      if (entry.blob) {
+        if (onProgress) await onProgress(done, totalAttachments);
+        usize = entry.blob.size;
+        crc = await zipCrcOfBlob(entry.blob);
+        dataPart = entry.blob;
+      } else {
+        const bytes = new TextEncoder().encode(entry.text || '');
+        usize = bytes.length;
+        crc = (zipCrcUpdate(0xFFFFFFFF, bytes) ^ 0xFFFFFFFF) >>> 0;
+        const packed = await zipDeflateBytes(bytes);
+        if (packed) { method = 8; dataPart = packed; } else { dataPart = bytes; }
+      }
+      const csize = zipPartSize(dataPart);
+      const header = zipHeader('local', {
+        name: name, method: method, time: dos.time, date: dos.date,
+        crc: crc, csize: csize, usize: usize
+      });
+      central.push({
+        name: name, method: method, time: dos.time, date: dos.date,
+        crc: crc, csize: csize, usize: usize, offset: offset
+      });
+      parts.push(header, dataPart);
+      offset += header.length + csize;
+      if (entry.blob) {
+        done += 1;
+        if (onProgress) await onProgress(done, totalAttachments);
+      }
+    }
+    const cdParts = [];
+    let cdSize = 0;
+    central.forEach(function (c) {
+      const h = zipHeader('central', c);
+      cdParts.push(h);
+      cdSize += h.length;
+    });
+    parts.push.apply(parts, cdParts);
+    parts.push(zipEnd(central.length, cdSize, offset));
+    return new Blob(parts, { type: 'application/zip' });
+  }
+
+  function attachmentExtension(meta) {
+    const name = meta && typeof meta.name === 'string' ? meta.name : '';
+    const m = /\.([A-Za-z0-9]{1,8})$/.exec(name);
+    if (m) return m[1].toLowerCase();
+    const type = (meta && meta.type) || '';
+    const map = {
+      'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+      'image/gif': 'gif', 'image/heic': 'heic', 'image/heif': 'heif',
+      'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm',
+      'application/pdf': 'pdf'
+    };
+    return map[type] || 'bin';
+  }
+
+  function mimeFromExtension(ext) {
+    const map = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+      gif: 'image/gif', heic: 'image/heic', heif: 'image/heif',
+      mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', pdf: 'application/pdf',
+      m4a: 'audio/mp4', mp3: 'audio/mpeg', wav: 'audio/wav'
+    };
+    return map[ext] || 'application/octet-stream';
+  }
+
+  // 只读中央目录 + 本地头，附件本身仍以 file.slice 引用原文件，不整包读入内存
+  async function readZipIndex(file) {
+    const tailLen = Math.min(file.size, 65557);
+    const tail = new Uint8Array(await file.slice(file.size - tailLen).arrayBuffer());
+    let p = -1;
+    for (let i = tail.length - 22; i >= 0; i--) {
+      if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 0x05 && tail[i + 3] === 0x06) { p = i; break; }
+    }
+    if (p < 0) throw new Error('not a zip');
+    const dv = new DataView(tail.buffer, tail.byteOffset + p);
+    const count = dv.getUint16(10, true);
+    const cdSize = dv.getUint32(12, true);
+    const cdOffset = dv.getUint32(16, true);
+    const cdBuf = new Uint8Array(await file.slice(cdOffset, Math.min(file.size, cdOffset + cdSize)).arrayBuffer());
+    const cdv = new DataView(cdBuf.buffer);
+    const decoder = new TextDecoder();
+    const entries = [];
+    let q = 0;
+    for (let i = 0; i < count; i++) {
+      if (cdv.getUint32(q, true) !== 0x02014b50) break;
+      const method = cdv.getUint16(q + 10, true);
+      const csize = cdv.getUint32(q + 20, true);
+      const nameLen = cdv.getUint16(q + 28, true);
+      const extraLen = cdv.getUint16(q + 30, true);
+      const commentLen = cdv.getUint16(q + 32, true);
+      const lho = cdv.getUint32(q + 42, true);
+      const name = decoder.decode(cdBuf.subarray(q + 46, q + 46 + nameLen));
+      entries.push({ name: name, method: method, csize: csize, lho: lho });
+      q += 46 + nameLen + extraLen + commentLen;
+    }
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const lh = new Uint8Array(await file.slice(e.lho, e.lho + 30).arrayBuffer());
+      const ldv = new DataView(lh.buffer);
+      if (ldv.getUint32(0, true) !== 0x04034b50) throw new Error('bad local header');
+      const nameLen = ldv.getUint16(26, true);
+      const extraLen = ldv.getUint16(28, true);
+      e.dataStart = e.lho + 30 + nameLen + extraLen;
+    }
+    return entries;
+  }
+
+  async function readZipEntryText(file, entry) {
+    const blob = file.slice(entry.dataStart, entry.dataStart + entry.csize);
+    if (entry.method === 0) return await blob.text();
+    if (entry.method === 8) return new TextDecoder().decode(await zipInflateBlob(blob));
+    throw new Error('unsupported compression');
+  }
+
+  async function readZipBackup(file) {
+    const entries = await readZipIndex(file);
+    const backup = entries.filter(function (e) { return e.name === 'backup.json'; })[0];
+    if (!backup) throw new Error('backup.json missing');
+    const data = JSON.parse(await readZipEntryText(file, backup));
+    const metaById = {};
+    const dateById = {};
+    (Array.isArray(data.diary) ? data.diary : []).forEach(function (entry) {
+      (entry.attachments || []).forEach(function (a) {
+        if (a && a.id) { metaById[a.id] = a; dateById[a.id] = entry.date || ''; }
+      });
+    });
+    const files = [];
+    entries.forEach(function (e) {
+      if (e.name.indexOf('attachments/') !== 0) return;
+      if (e.method !== 0) return; // 自己写出的附件始终是 store；非 store 的第三方包不猜
+      const base = e.name.slice('attachments/'.length);
+      const dot = base.lastIndexOf('.');
+      const id = dot > 0 ? base.slice(0, dot) : base;
+      if (!id) return;
+      const meta = metaById[id] || null;
+      const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : '';
+      const fallbackType = mimeFromExtension(ext);
+      let kind = meta && meta.kind ? meta.kind : 'file';
+      if (!meta && fallbackType.indexOf('image/') === 0) kind = 'image';
+      if (!meta && fallbackType.indexOf('video/') === 0) kind = 'video';
+      files.push({
+        id: id,
+        blob: file.slice(e.dataStart, e.dataStart + e.csize, (meta && meta.type) || fallbackType),
+        name: (meta && meta.name) || base,
+        type: (meta && meta.type) || fallbackType,
+        kind: kind,
+        date: dateById[id] || ''
+      });
+    });
+    return { data: data, files: files };
+  }
+
+  function isZipHead(bytes) {
+    return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b &&
+      ((bytes[2] === 0x03 && bytes[3] === 0x04) || (bytes[2] === 0x05 && bytes[3] === 0x06));
+  }
+
+  // ---------- 备份进度弹窗 ----------
+  let backupBusy = false;
+
+  function setBackupProgress(done, total, note, failed) {
+    const bar = $('#backupProgressBar');
+    const count = $('#backupProgressCount');
+    const err = $('#backupProgressError');
+    const close = $('#backupProgressClose');
+    const pct = total > 0 ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0;
+    if (bar) bar.style.width = pct + '%';
+    if (count) {
+      count.textContent = total > 0
+        ? T('已处理 {done} / {total} 个附件', { done: done, total: total })
+        : (note || '');
+    }
+    if (err) {
+      err.hidden = !failed;
+      if (failed) err.textContent = note || T('备份打包失败，请重试');
+    }
+    if (close) close.hidden = !failed;
+  }
+
+  function showBackupProgress(total) {
+    const box = $('#backupProgress');
+    if (!box) return;
+    $('#backupProgressTitle').textContent = T('正在打包备份');
+    $('#backupProgressNote').textContent = T('请勿关闭或退出应用');
+    setBackupProgress(0, total, total ? '' : T('正在整理数据…'), false);
+    box.hidden = false;
+  }
+
+  function hideBackupProgress() {
+    const box = $('#backupProgress');
+    if (box) box.hidden = true;
+  }
+
+  function failBackupProgress(message) {
+    const box = $('#backupProgress');
+    if (!box) return;
+    $('#backupProgressTitle').textContent = T('备份打包失败');
+    $('#backupProgressNote').textContent = T('数据没有变化，可以稍后重试。');
+    setBackupProgress(0, 0, message || T('备份打包失败，请重试'), true);
+    box.hidden = false;
+  }
+
+  // 分块写缓存文件：writeFile 建文件、appendFile 追加，每块 4MB 转 base64，
+  // 避免把上百 MB 的 zip 一次性读进 JS 内存。
+  async function writeBlobToCache(fs, path, blob) {
+    try { await fs.deleteFile({ path: path, directory: 'CACHE' }); } catch (err) { /* 忽略 */ }
+    if (typeof fs.appendFile !== 'function') {
+      await fs.writeFile({ path: path, data: await blobToBase64(blob), directory: 'CACHE', recursive: true });
+      return;
+    }
+    let first = true;
+    for (let off = 0; off < blob.size; off += ZIP_CHUNK_BYTES) {
+      const chunk = blob.slice(off, Math.min(blob.size, off + ZIP_CHUNK_BYTES));
+      const b64 = await blobToBase64(chunk);
+      if (first) {
+        await fs.writeFile({ path: path, data: b64, directory: 'CACHE', recursive: true });
+        first = false;
+      } else {
+        await fs.appendFile({ path: path, data: b64, directory: 'CACHE' });
+      }
+      // 让出一帧，保证进度条和大文件写入期间界面仍可刷新
+      await new Promise(function (resolve) { setTimeout(resolve, 0); });
+    }
+  }
+
   async function exportJSON(includeFiles) {
-    // 「包含附件」需要把 Blob 转成 base64 一并写入；不含附件时与旧版备份完全一致
-    let withFiles = !!includeFiles && storage.status === 'idb';
-    let diaryFiles = null;
-    if (withFiles) {
-      diaryFiles = [];
-      for (let i = 0; i < state.diary.length; i++) {
-        const entry = state.diary[i];
-        for (let j = 0; j < entry.attachments.length; j++) {
-          const meta = entry.attachments[j];
+    if (backupBusy) return;
+    backupBusy = true;
+    try {
+      // 先收集附件元信息（只是引用，不读字节），再按需逐个打包
+      const metaList = [];
+      state.diary.forEach(function (entry) {
+        (entry.attachments || []).forEach(function (meta) { metaList.push(meta); });
+      });
+      const withFiles = !!includeFiles && storage.status === 'idb' && metaList.length > 0;
+      const attachmentsSkipped = !!includeFiles && !withFiles;
+      const noAttachmentsAtAll = !!includeFiles && storage.status === 'idb' && metaList.length === 0;
+
+      // manifest 只保留恢复真正需要的字段：不写设备型号，也不写时区，
+      // 避免备份在网盘/聊天里成为可关联的弱指纹。
+      const payload = {
+        app: isEn() ? 'AeroPlan' : '氢计划',
+        schema: 'aeroplan-backup',
+        manifest: {
+          formatVersion: 2,
+          schemaVersion: 10,
+          appVersion: APP_VERSION,
+          createdAt: new Date().toISOString(),
+          includeAttachments: withFiles,
+          attachmentCount: withFiles ? metaList.length : 0,
+          counts: {
+            items: state.items.length,
+            plans: state.plans.length,
+            countdowns: state.countdowns.length,
+            categories: state.categories.length,
+            diary: state.diary.length,
+            moods: customMoods().length
+          },
+          encrypted: false
+        },
+        settings: {
+          theme: preferredTheme(),
+          language: window.I18N ? window.I18N.lang : 'zh',
+          weatherEnabled: weatherEnabled(),
+          cardStyle: cardStyleId(),
+          progressStyle: state.meta.progressStyle
+        },
+        categories: state.categories,
+        items: state.items,
+        plans: state.plans,
+        countdowns: state.countdowns,
+        moods: customMoods(),
+        diary: state.diary,
+        consent: state.meta.consent || null
+      };
+
+      const zipEntries = [
+        {
+          name: 'manifest.json',
+          text: JSON.stringify({
+            format: 'aeroplan-backup-zip',
+            version: BACKUP_ZIP_VERSION,
+            appVersion: APP_VERSION,
+            createdAt: payload.manifest.createdAt,
+            includeAttachments: withFiles,
+            attachments: withFiles ? metaList.length : 0
+          })
+        },
+        { name: 'backup.json', text: JSON.stringify(payload, null, 2) }
+      ];
+
+      if (withFiles) {
+        // 逐个取 Blob（IndexedDB 里是引用，不会整块读进内存），缺失的跳过
+        const recs = [];
+        for (let i = 0; i < metaList.length; i++) {
+          const meta = metaList[i];
           let rec = null;
           try { rec = await diaryFileGet(meta.id); } catch (err) { rec = null; }
-          if (!rec || !rec.data) continue;
-          diaryFiles.push({
-            id: meta.id,
-            date: entry.date,
-            name: meta.name,
-            type: meta.type,
-            kind: meta.kind,
-            size: rec.data.size || meta.size || 0,
-            w: meta.w || 0,
-            h: meta.h || 0,
-            data: await blobToBase64(rec.data),
-            thumb: rec.thumb ? await blobToBase64(rec.thumb) : ''
+          recs.push({ meta: meta, rec: rec });
+        }
+        recs.forEach(function (item) {
+          if (!item.rec || !item.rec.data) return;
+          zipEntries.push({
+            name: 'attachments/' + item.meta.id + '.' + attachmentExtension(item.meta),
+            blob: item.rec.data
           });
-        }
-      }
-      // 没有可写的附件时退回默认模式，避免 manifest 与实际内容不一致
-      if (!diaryFiles.length) withFiles = false;
-    }
-    const attachmentsSkipped = !!includeFiles && !withFiles;
-
-    // manifest 只保留恢复真正需要的字段：不写设备型号，也不写时区，
-    // 避免备份在网盘/聊天里成为可关联的弱指纹。
-    const payload = {
-      app: isEn() ? 'AeroPlan' : '氢计划',
-      schema: 'aeroplan-backup',
-      manifest: {
-        formatVersion: 1,
-        schemaVersion: 10,
-        appVersion: APP_VERSION,
-        createdAt: new Date().toISOString(),
-        includeAttachments: withFiles,
-        counts: {
-          items: state.items.length,
-          plans: state.plans.length,
-          countdowns: state.countdowns.length,
-          categories: state.categories.length,
-          diary: state.diary.length,
-          moods: customMoods().length
-        },
-        encrypted: false
-      },
-      settings: {
-        theme: preferredTheme(),
-        language: window.I18N ? window.I18N.lang : 'zh',
-        weatherEnabled: weatherEnabled(),
-        cardStyle: cardStyleId(),
-        progressStyle: state.meta.progressStyle
-      },
-      categories: state.categories,
-      items: state.items,
-      plans: state.plans,
-      countdowns: state.countdowns,
-      moods: customMoods(),
-      diary: state.diary,
-      consent: state.meta.consent || null
-    };
-    if (withFiles) payload.diaryFiles = diaryFiles;
-
-    const json = JSON.stringify(payload, null, 2);
-    const fileName = backupFileName();
-    const fs = plugin('Filesystem');
-    const share = plugin('Share');
-    let shared = false;
-
-    // 写进缓存目录的临时文件 → 交给系统保存/分享面板 → 面板关闭后删掉临时文件，
-    // 不在应用私有目录里留副本；用户选择的位置（下载 / 微信 / 网盘）由系统接管。
-    if (fs && isNativeApp()) {
-      const tempPath = 'backup-export/' + fileName;
-      try {
-        await fs.writeFile({
-          path: tempPath,
-          data: json,
-          directory: 'CACHE',
-          encoding: 'utf8',
-          recursive: true
         });
-        if (share && typeof share.share === 'function') {
-          const uriRes = await fs.getUri({ path: tempPath, directory: 'CACHE' });
-          const uri = uriRes && uriRes.uri;
-          if (uri) {
-            await share.share({
-              title: isEn() ? 'AeroPlan backup' : '氢计划备份',
-              text: isEn() ? 'AeroPlan backup file' : '氢计划备份文件',
-              url: uri,
-              dialogTitle: isEn() ? 'Save or share backup' : '保存或分享备份'
-            });
-            shared = true;
-          }
-        }
-      } catch (err) {
-        console.warn('调起系统保存面板失败：', err);
-      } finally {
-        try { await fs.deleteFile({ path: tempPath, directory: 'CACHE' }); } catch (e2) {}
       }
-    }
 
-    if (!shared) {
-      // 网页版或系统分享不可用：直接下载，落到浏览器/WebView 的「下载」目录
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
-    }
+      // 附件按原字节 store；backup.json / manifest.json 走 deflate（不可用时退回 store）
+      // 进度总数按实际能读到的附件算，缺失的记录不会让进度条停在半截
+      const packCount = zipEntries.reduce(function (n, e) { return n + (e.blob ? 1 : 0); }, 0);
+      showBackupProgress(packCount);
+      const zipBlob = await buildZipBlob(zipEntries, packCount, async function (done) {
+        setBackupProgress(done, packCount, '', false);
+        // 让出主线程一帧，进度条能刷新，滚动/输入不被长任务卡住
+        await new Promise(function (resolve) { setTimeout(resolve, 0); });
+      });
 
-    state.meta.lastExportAt = Date.now();
-    state.meta.lastBackupName = fileName;
-    persistMeta();
-    renderSettings();
-    showToast(attachmentsSkipped
-      ? T('当前环境读不到附件，备份只包含日记文字与附件信息')
-      : (shared
-        ? T('备份已生成，请在系统面板里选择保存位置')
-        : T('已备份，文件在手机的“下载”目录里')));
+      const fileName = backupFileName();
+      const fs = plugin('Filesystem');
+      const share = plugin('Share');
+      let shared = false;
+
+      // 写进缓存目录的临时文件 → 交给系统保存/分享面板 → 面板关闭后删掉临时文件，
+      // 不在应用私有目录里留副本；用户选择的位置（下载 / 微信 / 网盘）由系统接管。
+      if (fs && isNativeApp()) {
+        const tempPath = 'backup-export/' + fileName;
+        const countEl = $('#backupProgressCount');
+        if (countEl) countEl.textContent = T('正在写入备份文件…');
+        try {
+          await writeBlobToCache(fs, tempPath, zipBlob);
+          if (share && typeof share.share === 'function') {
+            const uriRes = await fs.getUri({ path: tempPath, directory: 'CACHE' });
+            const uri = uriRes && uriRes.uri;
+            if (uri) {
+              hideBackupProgress();
+              await share.share({
+                title: isEn() ? 'AeroPlan backup' : '氢计划备份',
+                text: isEn() ? 'AeroPlan backup file' : '氢计划备份文件',
+                url: uri,
+                dialogTitle: isEn() ? 'Save or share backup' : '保存或分享备份'
+              });
+              shared = true;
+            }
+          }
+        } catch (err) {
+          console.warn('调起系统保存面板失败：', err);
+        } finally {
+          try { await fs.deleteFile({ path: tempPath, directory: 'CACHE' }); } catch (e2) {}
+        }
+      }
+
+      hideBackupProgress();
+
+      if (!shared) {
+        // 网页版或系统分享不可用：直接下载，落到浏览器/WebView 的「下载」目录
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+      }
+
+      state.meta.lastExportAt = Date.now();
+      state.meta.lastBackupName = fileName;
+      persistMeta();
+      renderSettings();
+      showToast(noAttachmentsAtAll
+        ? T('当前没有附件，已导出不含附件的备份')
+        : (attachmentsSkipped
+          ? T('当前环境读不到附件，备份只包含日记文字与附件信息')
+          : (shared
+            ? T('备份已生成，请在系统面板里选择保存位置')
+            : T('已备份，文件在手机的“下载”目录里'))));
+    } catch (err) {
+      console.warn('备份打包失败：', err);
+      failBackupProgress(err && err.message ? String(err.message) : '');
+    } finally {
+      backupBusy = false;
+    }
   }
 
   async function handleImportFile(file) {
     if (!file) return;
-    let text = '';
+    // 先看文件头：PK 开头按 zip 解析；其它仍走原来的 JSON 读取（保留旧路径，不做额外兼容）
+    let data = null;
+    let zipFiles = null;
     try {
-      text = await file.text();
+      const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+      if (isZipHead(head)) {
+        const packed = await readZipBackup(file);
+        data = packed.data;
+        zipFiles = packed.files;
+      }
     } catch (err) {
-      showToast(T('读取文件失败'));
+      console.warn('读取 zip 备份失败：', err);
+      showToast(T('导入失败：压缩包损坏或缺少 backup.json'));
       return;
     }
-
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch (err) {
-      showToast(T('导入失败：不是有效的 JSON 文件'));
-      return;
+    if (!data) {
+      let text = '';
+      try {
+        text = await file.text();
+      } catch (err) {
+        showToast(T('读取文件失败'));
+        return;
+      }
+      try {
+        data = JSON.parse(text);
+      } catch (err) {
+        showToast(T('导入失败：不是有效的 JSON 文件'));
+        return;
+      }
     }
 
     const isArrayFile = Array.isArray(data);
@@ -9823,8 +10555,12 @@
     const cleanedCountdowns = rawCountdowns.map(normalizeCountdown).filter(Boolean);
     const rawMoods = !isArrayFile && Array.isArray(data.moods) ? data.moods : [];
     const cleanedMoods = normalizeMoods(rawMoods);
-    const rawDiaryFiles = !isArrayFile && Array.isArray(data.diaryFiles) ? data.diaryFiles : [];
-    const includeAttachments = !isArrayFile && !!(data.manifest && data.manifest.includeAttachments === true);
+    const rawDiaryFiles = zipFiles
+      ? zipFiles
+      : (!isArrayFile && Array.isArray(data.diaryFiles) ? data.diaryFiles : []);
+    const includeAttachments = zipFiles
+      ? zipFiles.length > 0
+      : (!isArrayFile && !!(data.manifest && data.manifest.includeAttachments === true));
 
     const cleaned = [];
     let skipped = 0;
@@ -9939,13 +10675,32 @@
     });
   }
 
-  // 含附件的备份：把 base64 还原成 Blob 写回 diaryFiles；缺一条就跳过，不影响其余数据
+  // zip 备份：附件按原字节还原；缩略图按本机现有逻辑重新生成。
+  // 旧 base64 备份仍走原分支，缺一条就跳过，不影响其余数据。
   async function restoreDiaryFiles(list) {
     if (!Array.isArray(list) || !list.length || storage.status !== 'idb') return 0;
     let restored = 0;
     for (let i = 0; i < list.length; i++) {
       const raw = list[i];
-      if (!raw || typeof raw.id !== 'string' || typeof raw.data !== 'string') continue;
+      if (!raw || typeof raw.id !== 'string') continue;
+      if (raw.blob instanceof Blob) {
+        try {
+          let thumb = null;
+          if (raw.kind === 'image') {
+            const prep = await prepareDiaryImage(raw.blob);
+            thumb = prep.thumb || null;
+          } else if (raw.kind === 'video') {
+            const cover = await videoCoverOf(raw.blob);
+            thumb = cover && cover.thumb ? cover.thumb : null;
+          }
+          await diaryFilePut({ id: raw.id, data: raw.blob, thumb: thumb, date: raw.date || '' });
+          restored += 1;
+        } catch (err) {
+          console.warn('还原附件失败：', err);
+        }
+        continue;
+      }
+      if (typeof raw.data !== 'string') continue;
       try {
         const data = base64ToBlob(raw.data, raw.type);
         const thumb = raw.thumb ? base64ToBlob(raw.thumb, 'image/jpeg') : null;
@@ -11532,6 +12287,10 @@
   // Android 手势导航下，边缘右滑会触发系统返回。接管后：弹层 → 上一级 → 主界面退到后台，
   // 不再让系统直接把 Activity 结束掉。
   function handleBackGesture() {
+    // 打包期间拦下返回，避免写到一半退出应用；结束后允许关掉失败提示
+    if (backupBusy) return true;
+    if (!$('#backupProgress').hidden) { hideBackupProgress(); return true; }
+    if (diaryMonthPopOpen) { closeDiaryMonthPop(); return true; }
     if (yearPicker.open) { closeYearPicker(); return true; }
     if (regionPicker.open) { closeRegionSheet(); return true; }
     if (repDraft.open) { closeRepSheet(); return true; }
@@ -11547,9 +12306,11 @@
     if (!$('#agendaPage').hidden) { closeAgenda(); return true; }
     if (!$('#catPop').hidden) { closeCatPop(); return true; }
     if (!$('#modalCard').hidden) { closeModal(); return true; }
-    // 日记：详情页 → 预览 → 写作页 → 附件/备份选择 → 管理态，逐层退出
-    if (!$('#diaryDetailPage').hidden) { closeDiaryDetail(); return true; }
+    // 日记：预览 → 详情页 → 写作页 → 附件/备份选择 → 管理态，逐层退出。
+    // 预览（图片 / 视频 / 文件 / 分享长图）打开时进入自己的返回层级，
+    // 边缘返回先关预览，不能越过它把下面的详情页或写作页退掉。
     if (!$('#diaryViewer').hidden) { closeDiaryViewer(); return true; }
+    if (!$('#diaryDetailPage').hidden) { closeDiaryDetail(); return true; }
     if (!$('#attachSheet').hidden) { closeAttachSheet(); return true; }
     if (!$('#exportSheet').hidden) { closeExportSheet(); return true; }
     if (state.diaryEditorOpen) { closeDiaryEditor(true); return true; }
@@ -11567,6 +12328,8 @@
       return true;
     }
     // 设置下的二级页：有层级就先回设置页，不能直接退到系统
+    if (!$('#attachDetail').hidden) { closeAttachDetail(); return true; }
+    if (!$('#attachPage').hidden) { closeAttachPage(); return true; }
     if (!$('#cardStylePage').hidden) { closeCardStylePage(); return true; }
     if (!$('#zodiacPage').hidden) { closeZodiacPage(); return true; }
     if (state.settingsOpen) { closeSettings(); return true; }
@@ -11969,6 +12732,8 @@
   // ---------- 日记详情：朋友圈式排版 ----------
   let diaryDetailDate = '';
   let diaryDetailUrls = [];
+  // 分享长图图片列数：1（默认，沿用单列纵向）/ 2 / 3，仅本次运行有效
+  let diaryShareCols = 1;
 
   function diaryMoodLabel(id) {
     if (!id) return '';
@@ -12028,6 +12793,17 @@
       '</button>';
     }).join('');
 
+    const hasImages = entry.attachments.some(function (a) { return a.kind === 'image'; });
+    const colsHtml = hasImages
+      ? '<div class="dd-cols" role="group" aria-label="' + esc(T('图片列数')) + '">' +
+          [1, 2, 3].map(function (n) {
+            const active = diaryShareCols === n;
+            return '<button class="dd-col' + (active ? ' active' : '') + '" type="button" data-share-cols="' + n + '"' +
+              ' aria-pressed="' + active + '">' + esc(T(n + ' 列')) + '</button>';
+          }).join('') +
+        '</div>'
+      : '';
+
     $('#ddBody').innerHTML =
       '<div class="dd-meta">' + bits.join('') + '</div>' +
       (whtml ? '<div class="dd-wx-line">' + whtml + '</div>' : '') +
@@ -12040,7 +12816,9 @@
             return '<span class="dd-tag">' + esc(t) + '</span>';
           }).join('') + '</div>'
         : '') +
-      '<div class="dd-foot"><button class="soft-chip" type="button" data-dd-share="1">分享长图</button></div>';
+      '<div class="dd-foot">' + colsHtml +
+        '<button class="soft-chip" type="button" data-dd-share="1">' + esc(T('分享长图')) + '</button>' +
+      '</div>';
 
     hydrateDiaryDetail();
   }
@@ -12082,27 +12860,22 @@
   const SHARE_EDGE = 22;
   const SHARE_PAD = 44;
   const SHARE_FONT = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif';
-  const SHARE_EMOJI_FONT = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif';
-  // 长图图片区规则：单张最高 520px（按原比例缩宽度，不拉伸）；
-  // 最多排 9 张、图片区总高 4200px，超出用一行提示收尾；
-  // 画布总高超过 12000px 时整体等比缩小，避开安卓 WebView 的 canvas 上限。
+  // 长图图片区规则：单列时单张最高 520px（按原比例缩宽度，不拉伸）；
+  // 多列时单张限高按列宽重算，行内不拉伸、只居中。
+  // 三种列数都最多 18 张（按整行收口），图片区总高上限 9700px；
+  // 实际预算还会按「画布 12000px 上限 − 标题/正文/页脚占位」动态收窄，
+  // 放不下的整行不画，用一行提示收尾；只有正文极长时才整体等比缩小兜底。
   const SHARE_IMG_MAX_H = 520;
-  const SHARE_IMG_GAP = 18;
-  const SHARE_IMG_MAX = 9;
-  const SHARE_IMG_BUDGET = 4200;
+  const SHARE_IMG_ROW_GAP = 18;
+  const SHARE_IMG_GAP_X = 10;
+  const SHARE_IMG_MAX_COUNT = 18;
+  const SHARE_IMG_BUDGET_CAP = 9700;
   const SHARE_MAX_H = 12000;
-
-  const SHARE_MOOD_EMOJI = {
-    happy: '😊', calm: '😌', tired: '😪', sad: '😢', annoyed: '😤', hopeful: '🌱',
-    excited: '🤩', grateful: '🙏', angry: '😠', anxious: '😰', lonely: '🥺',
-    surprised: '😮', shy: '😳', moved: '🥹', speechless: '😑', relieved: '😮‍💨',
-    bored: '😐', longing: '💭', heart: '❤️', star: '⭐', sun: '☀️', moon: '🌙',
-    leaf: '🍃', flame: '🔥', drop: '💧', bolt: '⚡'
-  };
-  const SHARE_WX_EMOJI = {
-    sun: '☀️', partly: '⛅', cloudy: '☁️', fog: '🌫️',
-    drizzle: '🌦️', rain: '🌧️', snow: '🌨️', storm: '⛈️'
-  };
+  // chip 图标统一 22px 纯矢量：canvas 上不依赖 emoji 字体，也不依赖 DOM 样式
+  const SHARE_ICON_SIZE = 22;
+  const SHARE_ICON_GAP = 8;
+  const SHARE_CHIP_PAD_L = 12;
+  const SHARE_CHIP_PAD_R = 16;
   // 皮肤 → 纹理画法：与 styles.css 里 --cs-tex 同源的轻量近似（不解析 CSS 渐变）
   const SHARE_TEX = {
     washi: 'paper', note: 'ruled', vine: 'paper', felt: 'fibre', linen: 'weave',
@@ -12111,20 +12884,14 @@
     starry: 'stars', blackhole: 'stars', moon: 'stars', outline: 'none'
   };
 
-  function shareMoodEmoji(id) {
-    if (SHARE_MOOD_EMOJI[id]) return SHARE_MOOD_EMOJI[id];
-    const list = customMoods();
-    for (let i = 0; i < list.length; i++) {
-      if (list[i].id === id) return SHARE_MOOD_EMOJI[list[i].glyph] || '🙂';
-    }
-    return '🙂';
-  }
-
-  // 天气只在有快照、且快照地点与当前位置一致时出现；否则整块省略
+  // 天气只在有快照、且快照地点与「当前查询地点」一致时出现；否则整块省略。
+  // 地点口径与详情页 diaryWeatherHTML 一致（英文手写地点走 loc.text），
+  // 否则会出现详情页有天气、长图整块消失的情况。
   function shareWeather(entry) {
+    if (isEn() && !(entry && entry.weatherOn)) return null;
     const w = entry && entry.weather;
     if (!w) return null;
-    const q = diaryWeatherQuery(normalizeDiaryLocation(entry.location));
+    const q = diaryWeatherPlace(entry);
     if (!q) return null;
     if (w.place && w.place !== q) return null;
     const W = window.Weather;
@@ -12134,7 +12901,7 @@
     const max = isFinite(Number(w.max)) ? Math.round(Number(w.max)) + '°' : '';
     const min = isFinite(Number(w.min)) ? Math.round(Number(w.min)) + '°' : '';
     const temp = max ? (min ? max + ' / ' + min : max) : min;
-    return { emoji: SHARE_WX_EMOJI[info.key] || '☁️', desc: isEn() ? info.en : info.zh, temp: temp };
+    return { key: info.key, desc: isEn() ? info.en : info.zh, temp: temp };
   }
 
   // 从真实渲染的皮肤变量取色，保证深浅主题与二十套皮肤都能正确套用
@@ -12390,12 +13157,166 @@
     ctx.restore();
   }
 
+  // ===== 长图 chip 图标：纯 canvas 矢量绘制 =====
+  // 之前用 emoji（☀️/⛅/📍 等）配合 SHARE_EMOJI_FONT 画在 canvas 上，
+  // 安卓 WebView 与部分 iOS 上彩色 emoji 字形在 canvas 里会画成空白或豆腐块，
+  // 天气/心情/位置三个 chip 的标识就"整块不见了"。这里改成和详情页同源的
+  // 矢量线条/实心图形，只用主题前景色，深浅皮肤都能看清，中英文都一样。
+
+  // 云：三个圆 + 底部矩形，填充后是连续轮廓（24 × 24 逻辑坐标，底边 y=18.2）
+  function shareCloudShape(ctx, k, cx, cy) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(k, k);
+    ctx.translate(-12, -12.4);
+    ctx.beginPath();
+    ctx.arc(8.2, 14.6, 4.0, 0, Math.PI * 2);
+    ctx.arc(12.2, 11.4, 4.8, 0, Math.PI * 2);
+    ctx.arc(16.4, 14.6, 4.0, 0, Math.PI * 2);
+    ctx.rect(6.5, 14.6, 9.8, 3.6);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function shareWxIcon(ctx, key, ink) {
+    const lw = 1.9;
+    ctx.strokeStyle = ink;
+    ctx.fillStyle = ink;
+    ctx.lineWidth = lw;
+    if (key === 'sun') {
+      ctx.beginPath();
+      ctx.arc(12, 12, 4.4, 0, Math.PI * 2);
+      ctx.fill();
+      for (let i = 0; i < 8; i++) {
+        const a = Math.PI * 2 * i / 8;
+        ctx.beginPath();
+        ctx.moveTo(12 + Math.cos(a) * 6.6, 12 + Math.sin(a) * 6.6);
+        ctx.lineTo(12 + Math.cos(a) * 9.6, 12 + Math.sin(a) * 9.6);
+        ctx.stroke();
+      }
+      return;
+    }
+    if (key === 'partly') {
+      // 左上角小太阳 + 右下角云
+      ctx.beginPath();
+      ctx.arc(8.4, 8.4, 2.9, 0, Math.PI * 2);
+      ctx.fill();
+      [Math.PI * 1.06, Math.PI * 1.5, Math.PI * 1.94].forEach(function (a) {
+        ctx.beginPath();
+        ctx.moveTo(8.4 + Math.cos(a) * 4.2, 8.4 + Math.sin(a) * 4.2);
+        ctx.lineTo(8.4 + Math.cos(a) * 6.6, 8.4 + Math.sin(a) * 6.6);
+        ctx.stroke();
+      });
+      shareCloudShape(ctx, 0.68, 14.2, 15.2);
+      return;
+    }
+    if (key === 'fog') {
+      shareCloudShape(ctx, 0.9, 12, 10.6);
+      ctx.beginPath();
+      ctx.moveTo(4.6, 19.4);
+      ctx.lineTo(19.4, 19.4);
+      ctx.moveTo(6.8, 22.2);
+      ctx.lineTo(17.2, 22.2);
+      ctx.stroke();
+      return;
+    }
+    if (key === 'cloudy') {
+      shareCloudShape(ctx, 1, 12, 12.4);
+      return;
+    }
+    // 其余都在云下面加各自的水滴/雪点/闪电
+    const base = key === 'storm' ? 9.6 : 10.4;
+    shareCloudShape(ctx, 0.86, 12, base);
+    const bottom = base + (18.2 - 12.4) * 0.86;
+    if (key === 'drizzle') {
+      [[8.9, 1.5], [12.2, 1.5], [15.5, 1.5]].forEach(function (p) {
+        ctx.beginPath();
+        ctx.moveTo(p[0], bottom + 0.6);
+        ctx.lineTo(p[0] - 0.4, bottom + 0.6 + p[1] + 0.9);
+        ctx.stroke();
+      });
+    } else if (key === 'rain') {
+      [[8.5, 0], [12.2, 1.2], [15.9, 0]].forEach(function (p) {
+        ctx.beginPath();
+        ctx.moveTo(p[0], bottom + 0.4 + p[1]);
+        ctx.lineTo(p[0] - 0.8, bottom + 4.2 + p[1]);
+        ctx.stroke();
+      });
+    } else if (key === 'snow') {
+      [[8.6, 0.2], [12.2, 1.6], [15.8, 0.2]].forEach(function (p) {
+        ctx.beginPath();
+        ctx.arc(p[0], bottom + 2.2 + p[1], 1.15, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    } else if (key === 'storm') {
+      ctx.beginPath();
+      ctx.moveTo(13.4, bottom - 0.8);
+      ctx.lineTo(9.6, bottom + 4.2);
+      ctx.lineTo(12.2, bottom + 4.2);
+      ctx.lineTo(10.9, bottom + 7.4);
+      ctx.lineTo(15.1, bottom + 1.8);
+      ctx.lineTo(12.5, bottom + 1.8);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // 位置：描边水滴形定位针 + 内圈
+  function sharePinIcon(ctx, ink) {
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 1.9;
+    ctx.beginPath();
+    ctx.moveTo(12, 21.6);
+    ctx.bezierCurveTo(12, 21.6, 5.4, 15.4, 5.4, 10.4);
+    ctx.arc(12, 10.4, 6.6, Math.PI, 0);
+    ctx.bezierCurveTo(18.6, 15.4, 12, 21.6, 12, 21.6);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(12, 10.4, 2.4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  function shareDrawChipIcon(ctx, chip, x, y, size, theme) {
+    const ink = theme.fg || '#1b2433';
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(size / 24, size / 24);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (chip.kind === 'mood') {
+      // 心情没有可靠的表情字形可用：画一个矢量表情（淡心情色填充 + 前景色描边），
+      // 深浅皮肤下都能看清，自定义心情靠填充色区分
+      const c = shareColor(chip.color || theme.accent);
+      ctx.fillStyle = 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',.3)';
+      ctx.beginPath();
+      ctx.arc(12, 12, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1.7;
+      ctx.beginPath();
+      ctx.arc(12, 12, 9, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      ctx.arc(9.2, 10.2, 1.15, 0, Math.PI * 2);
+      ctx.arc(14.8, 10.2, 1.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(12, 13.2, 3.5, Math.PI * 0.2, Math.PI * 0.8);
+      ctx.stroke();
+    } else if (chip.kind === 'loc') {
+      sharePinIcon(ctx, ink);
+    } else {
+      shareWxIcon(ctx, chip.icon, ink);
+    }
+    ctx.restore();
+  }
+
   function shareChipWidth(ctx, chip) {
-    ctx.font = '400 24px ' + SHARE_EMOJI_FONT;
-    const ew = ctx.measureText(chip.emoji).width;
     ctx.font = '400 22px ' + SHARE_FONT;
     const tw = ctx.measureText(chip.text).width;
-    return { w: Math.ceil(12 + ew + 8 + tw + 16), ew: ew };
+    return { w: Math.ceil(SHARE_CHIP_PAD_L + SHARE_ICON_SIZE + SHARE_ICON_GAP + tw + SHARE_CHIP_PAD_R) };
   }
 
   function shareChipRows(ctx, chips, maxW) {
@@ -12405,7 +13326,6 @@
     chips.forEach(function (chip) {
       const size = shareChipWidth(ctx, chip);
       chip.w = size.w;
-      chip.ew = size.ew;
       const need = chip.w + (row.length ? 10 : 0);
       if (row.length && rowW + need > maxW) {
         rows.push(row);
@@ -12432,17 +13352,18 @@
     ctx.lineWidth = 1;
     ctx.strokeStyle = theme.line;
     ctx.stroke();
+    // 图标走矢量绘制（见 shareDrawChipIcon），不再用 emoji 文本
+    shareDrawChipIcon(ctx, chip, x + SHARE_CHIP_PAD_L, y + (h - SHARE_ICON_SIZE) / 2, SHARE_ICON_SIZE, theme);
     ctx.textBaseline = 'middle';
-    ctx.font = '400 24px ' + SHARE_EMOJI_FONT;
-    ctx.fillText(chip.emoji, x + 12, y + h / 2 + 1);
     ctx.font = '400 22px ' + SHARE_FONT;
     ctx.fillStyle = theme.fg;
-    ctx.fillText(chip.text, x + 12 + chip.ew + 8, y + h / 2 + 1);
+    ctx.fillText(chip.text, x + SHARE_CHIP_PAD_L + SHARE_ICON_SIZE + SHARE_ICON_GAP, y + h / 2 + 1);
     ctx.restore();
   }
 
-  // 先量后画：先在测量用的 ctx 上排好版，拿到画布高度再真正建 canvas
-  function shareLayout(ctx, chips, lines, imgHs, imgHint) {
+  // 先量后画：先在测量用的 ctx 上排好版，拿到画布高度再真正建 canvas。
+  // imgRows 是「按行分组」的图片格子（每格 w/h），单列时每行只有一张。
+  function shareLayout(ctx, chips, lines, imgRows, imgHint) {
     const W = SHARE_W;
     const EDGE = SHARE_EDGE;
     const PAD = SHARE_PAD;
@@ -12463,17 +13384,20 @@
     const bodyBase = y + 26;
     y = bodyBase + (lines.length - 1) * 42;
     let imgY = 0;
-    if (imgHs.length) {
+    const rows = [];
+    if (imgRows.length) {
       y += 24;
       imgY = y;
-      for (let i = 0; i < imgHs.length; i++) {
-        y += imgHs[i];
-        if (i < imgHs.length - 1) y += SHARE_IMG_GAP;
-      }
+      imgRows.forEach(function (row, i) {
+        const rowH = row.reduce(function (m, b) { return Math.max(m, b.h); }, 0);
+        rows.push({ y: y, h: rowH });
+        y += rowH;
+        if (i < imgRows.length - 1) y += SHARE_IMG_ROW_GAP;
+      });
     }
     let hintY = 0;
     if (imgHint) {
-      y += imgHs.length ? 14 : 20;
+      y += imgRows.length ? 14 : 20;
       hintY = y + 20;
       y += 24;
     }
@@ -12490,6 +13414,7 @@
       meta: meta,
       bodyBase: bodyBase,
       imgY: imgY,
+      imgRows: rows,
       hintY: hintY,
       footY: footY
     };
@@ -12529,9 +13454,126 @@
     return out === text ? text : out + '…';
   }
 
+  // 长图只画到 676px 宽：解码阶段直接缩到目标尺寸，省掉大图解码与绘制时的缩放
+  async function shareDecodeAt(blob, w, h) {
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const opt = { imageOrientation: 'from-image' };
+        if (w > 0 && h > 0) {
+          opt.resizeWidth = w;
+          opt.resizeHeight = h;
+          opt.resizeQuality = 'high';
+        }
+        const bmp = await createImageBitmap(blob, opt);
+        if (!w || (Math.abs(bmp.width - w) <= 2 && Math.abs(bmp.height - h) <= 2)) return bmp;
+        // 方向标签导致宽高对调时丢弃重来，避免把图拉变形
+        try { bmp.close(); } catch (err) { /* 忽略 */ }
+        return await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      } catch (err) { /* 回退到 <img> */ }
+    }
+    const url = URL.createObjectURL(blob);
+    const img = await loadShareImage(url);
+    try { URL.revokeObjectURL(url); } catch (err) { /* 忽略 */ }
+    return img;
+  }
+
+  // 限并发解码：图片最多 18 张，一次性并发会把解码线程和位图内存打满，
+  // 低端机容易 OOM 或长时间卡住。按 limit 路排队，结果顺序与入参一致。
+  async function shareDecodeLimited(items, limit) {
+    const out = new Array(items.length);
+    let next = 0;
+    async function worker() {
+      while (next < items.length) {
+        const i = next++;
+        const p = items[i];
+        out[i] = await shareDecodeAt(p.rec.data, p.w, p.h).catch(function () { return null; });
+      }
+    }
+    const n = Math.min(limit, items.length);
+    const workers = [];
+    for (let i = 0; i < n; i++) workers.push(worker());
+    await Promise.all(workers);
+    return out;
+  }
+
+  // 同一篇 + 同一皮肤/语言命中缓存就不再重绘；生成期间也不允许重复进入
+  let shareImageBusy = false;
+  let shareImageCache = { key: '', blob: null };
+
+  function shareCacheKey(entry, theme) {
+    const ids = (entry.attachments || []).map(function (a) { return a.id; }).join(',');
+    const wx = entry.weather
+      ? (entry.weather.code || '') + '|' + (entry.weather.max || '') + '|' + (entry.weather.min || '')
+      : '';
+    const raw = [
+      entry.date,
+      entry.title || '',
+      entry.text || '',
+      entry.mood || '',
+      ids,
+      wx,
+      entry.location ? JSON.stringify(entry.location) : '',
+      String(diaryShareCols),
+      theme.skin,
+      theme.dark ? 'd' : 'l',
+      isEn() ? 'en' : 'zh'
+    ].join('\u0001');
+    let h = 5381;
+    for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) | 0;
+    return String(h);
+  }
+
+  function showShareImage(blob) {
+    const url = URL.createObjectURL(blob);
+    const vid = $('#diaryViewerVideo');
+    const img = $('#diaryViewerImg');
+    shareImageBlob = blob;
+    if (vid) { vid.hidden = true; try { vid.pause(); } catch (err) { /* 忽略 */ } vid.removeAttribute('src'); }
+    if (img.dataset.url) { try { URL.revokeObjectURL(img.dataset.url); } catch (err) { /* 忽略 */ } }
+    img.dataset.url = url;
+    img.src = url;
+    img.hidden = false;
+    $('#diaryViewerName').textContent = T('点按「保存图片」或长按图片保存到相册');
+    const saveBtn = $('#diaryViewerSave');
+    if (saveBtn) saveBtn.hidden = false;
+    openDiaryViewerLayer();
+  }
+
+  function canvasToPngBlob(canvas) {
+    return new Promise(function (resolve) {
+      try {
+        canvas.toBlob(function (b) { resolve(b || null); }, 'image/png');
+      } catch (err) {
+        resolve(null);
+      }
+    });
+  }
+
   async function shareDiaryLongImage() {
     const entry = diaryByDate(diaryDetailDate);
     if (!entry) return;
+    if (shareImageBusy) { showToast(T('处理中…'), 1200); return; }
+    const theme = shareTheme();
+    const key = shareCacheKey(entry, theme);
+    if (shareImageCache.blob && shareImageCache.key === key) {
+      showShareImage(shareImageCache.blob);
+      return;
+    }
+    shareImageBusy = true;
+    showToast(T('处理中…'), 1200);
+    try {
+      const blob = await renderShareImage(entry, theme);
+      if (!blob) return;
+      shareImageCache = { key: key, blob: blob };
+      showShareImage(blob);
+    } catch (err) {
+      console.warn('生成分享长图失败：', err);
+    } finally {
+      shareImageBusy = false;
+    }
+  }
+
+  async function renderShareImage(entry, theme) {
     const probe = document.createElement('canvas').getContext('2d');
     const innerW = SHARE_W - (SHARE_EDGE + SHARE_PAD) * 2;
 
@@ -12549,68 +13591,108 @@
       lines[179] = lines[179].replace(/[\s\S]$/, '') + '…';
     }
 
-    // 图片：按附件顺序（正文顺序）依次排进长图；视频、文件不参与。
-    // 单张加载失败就跳过继续，不能让整张长图跟着挂掉。
-    const imgMetas = (entry.attachments || []).filter(function (a) { return a.kind === 'image'; });
-    const imgBlocks = [];
-    const imgUrls = [];
-    let imgTotal = 0;
-    for (let i = 0; i < imgMetas.length; i++) {
-      if (imgBlocks.length >= SHARE_IMG_MAX) break;
-      let url = '';
-      let img = null;
-      try {
-        const rec = await diaryFileGet(imgMetas[i].id);
-        if (rec && rec.data) {
-          url = URL.createObjectURL(rec.data);
-          img = await loadShareImage(url);
-        }
-      } catch (err) {
-        img = null;
-      }
-      if (!img || !img.width || !img.height) {
-        if (url) { try { URL.revokeObjectURL(url); } catch (err) { /* 忽略 */ } }
-        continue;
-      }
-      let w = innerW;
-      let h = Math.round(w * img.height / img.width);
-      if (h > SHARE_IMG_MAX_H) {
-        // 单张限高：按原比例缩窄，居中摆放，不拉伸
-        h = SHARE_IMG_MAX_H;
-        w = Math.max(1, Math.round(h * img.width / img.height));
-      }
-      const add = h + (imgBlocks.length ? SHARE_IMG_GAP : 0);
-      if (imgTotal + add > SHARE_IMG_BUDGET) {
-        try { URL.revokeObjectURL(url); } catch (err) { /* 忽略 */ }
-        break;
-      }
-      imgTotal += add;
-      imgBlocks.push({ img: img, w: w, h: h });
-      imgUrls.push(url);
-    }
-    const imgHidden = imgMetas.length - imgBlocks.length;
-    const imgHint = imgHidden > 0 ? T('还有 {n} 张图片未显示', { n: imgHidden }) : '';
-
-    // 心情（含自定义）→ 天气（仅快照且地点一致）→ 地区；缺失的整块不参与排版
+    // 心情（含自定义）→ 天气（仅快照且地点一致）→ 地区；缺失的整块不参与排版。
+    // chip 图标全部改矢量绘制，不再带 emoji 字符。
     const chips = [];
     if (entry.mood) {
       const mm = moodMeta(entry.mood);
       chips.push({
         kind: 'mood',
-        emoji: shareMoodEmoji(entry.mood),
         text: moodLabel(entry.mood),
         color: mm && mm.color ? mm.color : null
       });
     }
     const wx = shareWeather(entry);
     if (wx) {
-      chips.push({ kind: 'wx', emoji: wx.emoji, text: wx.desc + (wx.temp ? '  ' + wx.temp : '') });
+      chips.push({ kind: 'wx', icon: wx.key, text: wx.desc + (wx.temp ? '  ' + wx.temp : '') });
     }
     const loc = diaryLocationBrief(entry);
-    if (loc) chips.push({ kind: 'loc', emoji: '📍', text: loc });
+    if (loc) chips.push({ kind: 'loc', icon: '', text: loc });
 
-    const theme = shareTheme();
-    const layout = shareLayout(probe, chips, lines, imgBlocks.map(function (b) { return b.h; }), !!imgHint);
+    // 图片：按附件顺序（正文顺序）排进长图；视频、文件不参与。
+    // 列数 1 / 2 / 3 由详情页选择，默认单列；多列时列宽变窄，
+    // 单张限高、总高预算、最多张数与提示都按新列宽重算。
+    const imgMetas = (entry.attachments || []).filter(function (a) { return a.kind === 'image'; });
+    const cols = Math.min(3, Math.max(1, diaryShareCols | 0));
+    const gapX = cols > 1 ? SHARE_IMG_GAP_X : 0;
+    const colW = cols === 1 ? innerW : Math.floor((innerW - gapX * (cols - 1)) / cols);
+    // 单张限高：单列沿用 520；两列约 462、三列约 302（按列宽 1.6 倍封顶）
+    const maxH = cols === 1 ? SHARE_IMG_MAX_H : Math.min(SHARE_IMG_MAX_H, Math.round(colW * 1.6));
+    // 三种列数都最多 18 张，按整行收口（单列 18 行、两列 9 行、三列 6 行）
+    const maxCount = SHARE_IMG_MAX_COUNT;
+
+    // 图片区预算不是死值：先按「无图」量一遍版，算出画布 12000px 上限里
+    // 还剩多少给图片（扣掉图片上间距 24、提示行 38 与 60px 安全余量），
+    // 再和 9700px 的硬上限取小。这样 18 张在常见比例下都能画进去，
+    // 正文极长时才按整行截断（提示「还有 n 张图片未显示」），不会触发整体缩放。
+    const baseLayout = shareLayout(probe, chips, lines, [], false);
+    const room = Math.min(SHARE_IMG_BUDGET_CAP, SHARE_MAX_H - baseLayout.H - 24 - 38 - 60);
+
+    const focus = imgMetas.slice(0, maxCount + cols);
+    const recs = await Promise.all(focus.map(function (m) {
+      return diaryFileGet(m.id).catch(function () { return null; });
+    }));
+
+    // 先用记录里的尺寸算格子；老记录没存尺寸时按目标尺寸解码一次拿比例
+    const cells = [];
+    for (let i = 0; i < recs.length && cells.length < maxCount + cols; i++) {
+      const rec = recs[i];
+      const meta = focus[i];
+      if (!rec || !rec.data) continue;
+      let ratio = 0;
+      if (meta.w > 0 && meta.h > 0) {
+        ratio = meta.h / meta.w;
+      } else {
+        const probeBmp = await shareDecodeAt(rec.data, 0, 0);
+        if (probeBmp && probeBmp.width > 0) {
+          ratio = probeBmp.height / probeBmp.width;
+          try { probeBmp.close(); } catch (err) { /* 忽略 */ }
+        }
+      }
+      let w = colW;
+      let h = ratio ? Math.round(w * ratio) : colW;
+      if (h > maxH) {
+        // 单张限高：按原比例缩窄，居中摆放，不拉伸
+        h = maxH;
+        w = ratio ? Math.max(1, Math.round(h / ratio)) : colW;
+      }
+      cells.push({ rec: rec, w: w, h: h });
+    }
+
+    // 按整行判断预算：一行放得下才收，避免最后一行只露半行
+    const rows = [];
+    let imgTotal = 0;
+    for (let i = 0; i < cells.length; i += cols) {
+      if ((rows.length + 1) * cols > maxCount) break;
+      const row = cells.slice(i, i + cols);
+      const rowH = row.reduce(function (m, c) { return Math.max(m, c.h); }, 0);
+      const add = rowH + (rows.length ? SHARE_IMG_ROW_GAP : 0);
+      if (imgTotal + add > room) break;
+      imgTotal += add;
+      rows.push(row);
+    }
+    const plan = rows.reduce(function (acc, row) { return acc.concat(row); }, []);
+    // 18 张一次性解码会同时占住解码线程与位图内存，低端机会崩或卡死；
+    // 限制 3 路并发，其余排队，解码目标已经是最终显示尺寸
+    const decoded = await shareDecodeLimited(plan, 3);
+
+    // 解码失败的格子跳过；行高按实际存活的图片重算
+    const liveRows = [];
+    let di = 0;
+    rows.forEach(function (row) {
+      const live = [];
+      row.forEach(function (p) {
+        const bmp = decoded[di++];
+        if (!bmp || !bmp.width || !bmp.height) return;
+        live.push({ img: bmp, w: p.w, h: p.h });
+      });
+      if (live.length) liveRows.push(live);
+    });
+    const imgCount = liveRows.reduce(function (n, row) { return n + row.length; }, 0);
+    const imgHidden = imgMetas.length - imgCount;
+    const imgHint = imgHidden > 0 ? T('还有 {n} 张图片未显示', { n: imgHidden }) : '';
+
+    const layout = shareLayout(probe, chips, lines, liveRows, !!imgHint);
     const W = layout.W;
     const H = layout.H;
     const card = { x: SHARE_EDGE, y: SHARE_EDGE, w: W - SHARE_EDGE * 2, h: H - SHARE_EDGE * 2 };
@@ -12688,16 +13770,26 @@
       ctx.fillText(line, layout.innerX, layout.bodyBase + i * 42);
     });
 
-    let imgDrawY = layout.imgY;
-    imgBlocks.forEach(function (b) {
-      // 限高后宽度变窄的图居中摆放，保持原始比例
-      const ix = layout.innerX + Math.round((layout.innerW - b.w) / 2);
-      ctx.save();
-      shareRoundRect(ctx, ix, imgDrawY, b.w, b.h, Math.min(18, theme.radius));
-      ctx.clip();
-      ctx.drawImage(b.img, ix, imgDrawY, b.w, b.h);
-      ctx.restore();
-      imgDrawY += b.h + SHARE_IMG_GAP;
+    // 按行绘制：每格在自己的列里居中，行内高度不拉伸；单列时与旧版一致
+    layout.imgRows.forEach(function (row, ri) {
+      const spec = liveRows[ri];
+      if (!spec) return;
+      spec.forEach(function (b, ci) {
+        const ix = layout.innerX + ci * (colW + gapX) + Math.round((colW - b.w) / 2);
+        const iy = row.y + Math.round((row.h - b.h) / 2);
+        ctx.save();
+        shareRoundRect(ctx, ix, iy, b.w, b.h, Math.min(18, theme.radius));
+        ctx.clip();
+        ctx.drawImage(b.img, ix, iy, b.w, b.h);
+        ctx.restore();
+      });
+    });
+
+    // 用完立刻释放位图：18 张长边 588/289/189 的位图同时驻留很吃内存
+    decoded.forEach(function (bmp) {
+      if (bmp && typeof bmp.close === 'function') {
+        try { bmp.close(); } catch (err) { /* 忽略 */ }
+      }
     });
 
     if (imgHint) {
@@ -12717,30 +13809,7 @@
     ctx.font = '400 17px ' + SHARE_FONT;
     ctx.fillText('AeroPlan · ' + diaryDateTitle(entry.date), layout.innerX, layout.footY);
 
-    canvas.toBlob(function (blob) {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const viewer = $('#diaryViewer');
-      const vid = $('#diaryViewerVideo');
-      const img = $('#diaryViewerImg');
-      shareImageBlob = blob;
-      if (vid) { vid.hidden = true; try { vid.pause(); } catch (err) { /* 忽略 */ } vid.removeAttribute('src'); }
-      if (img.dataset.url) { try { URL.revokeObjectURL(img.dataset.url); } catch (err) { /* 忽略 */ } }
-      img.dataset.url = url;
-      img.src = url;
-      img.hidden = false;
-      $('#diaryViewerName').textContent = T('点按「保存图片」或长按图片保存到相册');
-      const saveBtn = $('#diaryViewerSave');
-      if (saveBtn) saveBtn.hidden = false;
-      viewer.scrollTop = 0;
-      viewer.hidden = false;
-      requestAnimationFrame(function () { viewer.classList.add('open'); });
-    }, 'image/png');
-    if (imgUrls.length) {
-      window.setTimeout(function () {
-        imgUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (err) { /* 忽略 */ } });
-      }, 4000);
-    }
+    return await canvasToPngBlob(canvas);
   }
 
   function shareImageName() {
@@ -12798,6 +13867,8 @@
     if (storage.status !== 'idb') return;
     $$('[data-diary-cover]').forEach(function (img) {
       const id = img.dataset.diaryCover;
+      const cached = diaryUrls.get('c:' + id);
+      if (cached) { img.src = cached; return; }
       diaryFileGet(id).then(function (rec) {
         if (!rec) { img.classList.add('missing'); return; }
         const url = diaryObjectUrl('c:' + id, rec.thumb || rec.data);
@@ -12806,6 +13877,9 @@
     });
     $$('[data-attach-thumb]').forEach(function (img) {
       const id = img.dataset.attachThumb;
+      // 已经生成过 objectURL 的直接用，避免每次重绘都回 IndexedDB 读整条记录
+      const cached = diaryUrls.get('t:' + id);
+      if (cached) { img.src = cached; return; }
       diaryFileGet(id).then(function (rec) {
         if (!rec) {
           const tile = img.closest('.de-file');
@@ -12818,9 +13892,63 @@
     });
   }
 
+  // 「全部月份」选择器：用固定定位的列表代替原生 select，
+  // 才能控制 6 行限高与滚动，并且不被横向滚动的筛选栏裁掉。
+  let diaryMonthPopOpen = false;
+
+  function diaryMonthLabel(m) {
+    if (!m) return T('全部月份');
+    const y = m.slice(0, 4);
+    const mo = Number(m.slice(5, 7));
+    return isEn() ? MONTH_EN[mo - 1] + ' ' + y : y + '年' + mo + '月';
+  }
+
+  function closeDiaryMonthPop() {
+    const pop = $('#diaryMonthPop');
+    const btn = $('#diaryMonthBtn');
+    if (pop) pop.hidden = true;
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    diaryMonthPopOpen = false;
+  }
+
+  function openDiaryMonthPop() {
+    const pop = $('#diaryMonthPop');
+    const btn = $('#diaryMonthBtn');
+    if (!pop || !btn) return;
+    const months = {};
+    state.diary.forEach(function (entry) { months[entry.date.slice(0, 7)] = true; });
+    const keys = Object.keys(months).sort().reverse();
+    if (state.diaryMonth && keys.indexOf(state.diaryMonth) === -1) keys.unshift(state.diaryMonth);
+    const items = [''].concat(keys);
+    pop.innerHTML = items.map(function (m) {
+      const active = m === state.diaryMonth;
+      return '<button class="dm-option' + (active ? ' active' : '') + '" type="button" role="option"' +
+        ' aria-selected="' + active + '" data-month="' + esc(m) + '">' +
+        '<span>' + esc(diaryMonthLabel(m)) + '</span>' +
+        '<svg class="dm-check" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.4 4.8 9 10 3.2"/></svg>' +
+      '</button>';
+    }).join('');
+    pop.hidden = false;
+    // 先定宽再量高：超过 6 行由 CSS 限高，这里只决定向上还是向下展开
+    const rect = btn.getBoundingClientRect();
+    const width = Math.max(rect.width, 132);
+    pop.style.width = Math.round(width) + 'px';
+    const height = Math.min(pop.scrollHeight, 6 * 32 + 8);
+    let left = rect.right - width;
+    left = Math.max(8, Math.min(window.innerWidth - width - 8, left));
+    let top = rect.bottom + 6;
+    if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - 6 - height);
+    pop.style.left = Math.round(left) + 'px';
+    pop.style.top = Math.round(top) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    diaryMonthPopOpen = true;
+  }
+
   function renderDiaryChips() {
     const box = $('#diaryChips');
     if (!box) return;
+    const expanded = diaryMonthPopOpen ? 'true' : 'false';
+    closeDiaryMonthPop();
     const months = {};
     state.diary.forEach(function (entry) { months[entry.date.slice(0, 7)] = true; });
     const keys = Object.keys(months).sort().reverse();
@@ -12831,17 +13959,12 @@
         ' data-diary-filter="' + pair[0] + '" aria-pressed="' + active + '">' + esc(T(pair[1])) + '</button>';
     });
     if (keys.length || state.diaryMonth) {
-      html += '<span class="diary-month-wrap"><select id="diaryMonthSelect" class="diary-month" aria-label="' +
-        esc(T('按年月筛选')) + '">' +
-        '<option value="">' + esc(T('全部月份')) + '</option>' +
-        keys.map(function (m) {
-          const y = m.slice(0, 4);
-          const mo = Number(m.slice(5, 7));
-          const label = isEn() ? MONTH_EN[mo - 1] + ' ' + y : y + '年' + mo + '月';
-          return '<option value="' + m + '"' + (state.diaryMonth === m ? ' selected' : '') + '>' +
-            esc(label) + '</option>';
-        }).join('') +
-      '</select></span>';
+      html += '<span class="diary-month-wrap">' +
+        '<button class="diary-month" id="diaryMonthBtn" type="button" aria-haspopup="listbox"' +
+        ' aria-expanded="' + expanded + '" aria-label="' + esc(T('按年月筛选')) + '">' +
+          '<span class="dm-text">' + esc(diaryMonthLabel(state.diaryMonth)) + '</span>' +
+          '<svg class="dm-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>' +
+        '</button></span>';
     }
     box.innerHTML = html;
   }
@@ -13002,9 +14125,19 @@
     }
   }
 
-  function closeDiaryEditor(save) {
+  function closeDiaryEditor(save, opts) {
     if (!state.diaryEditorOpen) return;
+    const draft = state.diaryDraft;
+    // 「写完」：至少落下了正文或标题；空草稿关闭不算
+    const wroteSomething = !!draft &&
+      (!!String(draft.text || '').trim() || !!String(draft.title || '').trim());
     if (save !== false) saveDiaryDraft(true);
+    // 写完后直接回到日记界面才提醒（切去其它标签不算）；
+    // 只在 20:00 之后置位，避免下午写的日记拖到晚上才弹
+    if (save !== false && wroteSomething && (!opts || opts.backToDiary !== false) &&
+        new Date().getHours() >= 20) {
+      diaryTipPending = true;
+    }
     state.diaryEditorOpen = false;
     state.diaryEditingDate = '';
     state.diaryDraft = null;
@@ -13567,13 +14700,10 @@
     if (input) input.focus();
   }
 
-  function diaryUsedBytesForDraft() {
+  // 当前这篇草稿的附件合计（原文件 + 缩略图），用于单篇 80MB 的判断与展示
+  function diaryDraftBytes() {
     const draft = state.diaryDraft;
     let total = 0;
-    state.diary.forEach(function (entry) {
-      if (draft && entry.date === draft.date) return;
-      (entry.attachments || []).forEach(function (a) { total += a.size || 0; });
-    });
     if (draft) draft.attachments.forEach(function (a) { total += a.size || 0; });
     return total;
   }
@@ -13622,15 +14752,28 @@
         '</span>' + del + '</div>';
     }).join('');
 
-    hint.textContent = draft.attachments.length
-      ? T('{n} / {max} 个 · 已用 {size}，上限 {limit}', {
-          n: draft.attachments.length,
-          max: DIARY_MAX_FILES,
-          size: formatBytes(diaryUsedBytesForDraft()),
-          limit: formatBytes(DIARY_STORE_LIMIT)
-        })
-      : T('图片会先压缩再存进本机，不上传、不写入相册');
+    if (state.diaryAttachBusy && state.diaryAttachProgress) {
+      hint.textContent = T('正在处理 {done} / {total} 个…', {
+        done: state.diaryAttachProgress.done,
+        total: state.diaryAttachProgress.total
+      });
+    } else {
+      hint.textContent = T('已用 {size} / {limit} · {n} / {max} 个', {
+        size: formatBytes(diaryDraftBytes()),
+        limit: DIARY_ENTRY_LIMIT_MB + 'MB',
+        n: draft.attachments.length,
+        max: DIARY_MAX_FILES
+      });
+    }
     hydrateDiaryThumbs();
+  }
+
+  // 处理期间只改这一行提示，不重绘整个网格，避免大图列表反复重建
+  function renderDiaryProgress() {
+    const hint = $('#diaryAttachHint');
+    const p = state.diaryAttachProgress;
+    if (!hint || !p) return;
+    hint.textContent = T('正在处理 {done} / {total} 个…', { done: p.done, total: p.total });
   }
 
   function canvasToBlob(canvas, quality) {
@@ -13643,60 +14786,91 @@
     });
   }
 
-  function decodeDiaryImage(file) {
-    return new Promise(function (resolve, reject) {
-      function viaElement() {
-        const url = URL.createObjectURL(file);
-        const img = new Image();
-        img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
-        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('decode failed')); };
-        img.src = url;
-      }
-      if (typeof createImageBitmap === 'function') {
-        createImageBitmap(file, { imageOrientation: 'from-image' })
-          .then(function (bitmap) { resolve(bitmap); })
-          .catch(viaElement);
-      } else {
-        viaElement();
-      }
+  // 只读尺寸：<img> 的 onload 只需文件头就能拿到宽高，不触发整像素解码
+  function diaryImageSize(file) {
+    return new Promise(function (resolve) {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = function () {
+        const w = img.naturalWidth || img.width || 0;
+        const h = img.naturalHeight || img.height || 0;
+        URL.revokeObjectURL(url);
+        resolve(w && h ? { w: w, h: h } : null);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
     });
   }
 
-  // 图片入库前压缩：长边 ≤1600、JPEG 0.82；同时生成约 320px 的缩略图（质量 0.72）
-  async function compressDiaryImage(file) {
-    const src = await decodeDiaryImage(file);
-    const sw = src.width || src.naturalWidth || 0;
-    const sh = src.height || src.naturalHeight || 0;
-    if (!sw || !sh) throw new Error('empty image');
-    const scale = Math.min(1, DIARY_IMG_MAX / Math.max(sw, sh));
-    const w = Math.max(1, Math.round(sw * scale));
-    const h = Math.max(1, Math.round(sh * scale));
+  // 按目标尺寸解码：createImageBitmap 在解码阶段直接缩放，不必先解出原图再缩。
+  // w / h 传 0 表示不指定缩放（用于尺寸未知的兜底）。
+  async function decodeDiaryImage(file, w, h) {
+    if (typeof createImageBitmap === 'function') {
+      if (w > 0 && h > 0) {
+        try {
+          const bmp = await createImageBitmap(file, {
+            imageOrientation: 'from-image',
+            resizeWidth: w,
+            resizeHeight: h,
+            resizeQuality: 'high'
+          });
+          // 个别实现会先缩放再套 EXIF 方向，宽高被对调：丢弃并回退，避免拉变形
+          if (Math.abs(bmp.width - w) <= 2 && Math.abs(bmp.height - h) <= 2) return bmp;
+          try { bmp.close(); } catch (err) { /* 忽略 */ }
+        } catch (err) { /* 回退到整图解码 */ }
+      }
+      try {
+        return await createImageBitmap(file, { imageOrientation: 'from-image' });
+      } catch (err) { /* 回退到 <img> */ }
+    }
+    return new Promise(function (resolve, reject) {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('decode failed')); };
+      img.src = url;
+    });
+  }
 
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    // JPEG 没有透明通道：先铺白底，避免 PNG 的透明区域变黑
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(src, 0, 0, w, h);
-
-    const tScale = Math.min(1, DIARY_THUMB_MAX / Math.max(w, h));
-    const tw = Math.max(1, Math.round(w * tScale));
-    const th = Math.max(1, Math.round(h * tScale));
-    const thumbCanvas = document.createElement('canvas');
-    thumbCanvas.width = tw;
-    thumbCanvas.height = th;
-    const tctx = thumbCanvas.getContext('2d');
-    tctx.fillStyle = '#fff';
-    tctx.fillRect(0, 0, tw, th);
-    tctx.drawImage(canvas, 0, 0, tw, th);
-
-    const data = await canvasToBlob(canvas, DIARY_IMG_QUALITY);
-    const thumb = await canvasToBlob(thumbCanvas, DIARY_THUMB_QUALITY);
-    if (src.close) { try { src.close(); } catch (err) { /* 忽略 */ } }
-    if (!data) throw new Error('encode failed');
-    return { data: data, thumb: thumb, w: w, h: h };
+  // 附件原样入库；图片只额外生成一张 320px 缩略图，供列表/网格显示。
+  // 缩略图只写进同一条附件记录，删除附件（或整篇日记）时随记录一起清掉。
+  async function prepareDiaryImage(file) {
+    let meta = await diaryImageSize(file);
+    let thumb = null;
+    let src = null;
+    try {
+      if (meta && meta.w && meta.h) {
+        const scale = Math.min(1, DIARY_THUMB_MAX / Math.max(meta.w, meta.h));
+        src = await decodeDiaryImage(file,
+          Math.max(1, Math.round(meta.w * scale)),
+          Math.max(1, Math.round(meta.h * scale)));
+      } else {
+        src = await decodeDiaryImage(file, 0, 0);
+      }
+      const sw = src.width || src.naturalWidth || 0;
+      const sh = src.height || src.naturalHeight || 0;
+      if (sw && sh) {
+        if (!meta || !meta.w || !meta.h) meta = { w: sw, h: sh };
+        const canvas = document.createElement('canvas');
+        canvas.width = sw;
+        canvas.height = sh;
+        const ctx = canvas.getContext('2d');
+        // 缩略图统一转 JPEG：先铺白底，避免 PNG 的透明区域变黑
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, sw, sh);
+        ctx.drawImage(src, 0, 0, sw, sh);
+        thumb = await canvasToBlob(canvas, DIARY_THUMB_QUALITY);
+      }
+    } catch (err) {
+      thumb = null;
+    }
+    if (src && src.close) { try { src.close(); } catch (err) { /* 忽略 */ } }
+    return {
+      data: file,
+      thumb: thumb,
+      w: meta && meta.w ? meta.w : 0,
+      h: meta && meta.h ? meta.h : 0
+    };
   }
 
   // 视频不转码：读元数据 → 跳到 0.1s → 画到 ≤320px 的 canvas 生成封面。
@@ -13769,16 +14943,20 @@
     if (room <= 0) { showToast(T('单篇最多 {n} 个附件', { n: DIARY_MAX_FILES })); return; }
 
     state.diaryAttachBusy = true;
+    state.diaryAttachProgress = { done: 0, total: files.length };
     renderDiaryAttachments();
 
     let added = 0;
     let tooBig = 0;
+    let entryFull = 0;
     let overflow = 0;
     let failed = 0;
-    let overQuota = false;
+    let quotaFull = false;
     let videoNoted = false;
 
     for (let i = 0; i < files.length; i++) {
+      state.diaryAttachProgress.done = i;
+      renderDiaryProgress();
       if (added >= room) { overflow += 1; continue; }
       const file = files[i];
       const isVideo = /^video\//.test(file.type || '');
@@ -13790,14 +14968,18 @@
           continue;
         }
         if (file.size > DIARY_VIDEO_MAX_BYTES) {
-          if (!videoNoted) { showToast(T('视频超过 50MB，无法添加')); videoNoted = true; }
+          if (!videoNoted) { showToast(T('视频超过 80MB，无法添加')); videoNoted = true; }
           continue;
         }
       } else if (file.size > DIARY_MAX_FILE_BYTES) {
         tooBig += 1;
         continue;
       }
-      if (diaryUsedBytesForDraft() + file.size > DIARY_STORE_LIMIT) { overQuota = true; break; }
+      // 单篇合计上限：这篇已有的加上这个文件超了就跳过它，后面的小文件仍可继续尝试
+      if (diaryDraftBytes() + file.size > DIARY_ENTRY_LIMIT) {
+        entryFull += 1;
+        continue;
+      }
       const isImage = /^image\//.test(file.type || '');
       const id = uid();
       try {
@@ -13807,7 +14989,7 @@
         let h = 0;
         let duration = 0;
         if (isImage) {
-          const out = await compressDiaryImage(file);
+          const out = await prepareDiaryImage(file);
           data = out.data;
           thumb = out.thumb;
           w = out.w;
@@ -13820,9 +15002,10 @@
           h = out.h;
           duration = out.duration;
         }
-        if (diaryUsedBytesForDraft() + data.size + (thumb ? thumb.size : 0) > DIARY_STORE_LIMIT) {
-          overQuota = true;
-          break;
+        // 加上缩略图后的真实占用再核一次单篇合计上限
+        if (diaryDraftBytes() + data.size + (thumb ? thumb.size : 0) > DIARY_ENTRY_LIMIT) {
+          entryFull += 1;
+          continue;
         }
         await diaryFilePut({
           id: id,
@@ -13832,11 +15015,14 @@
           name: file.name,
           type: data.type || file.type || ''
         });
+        // 缩略图刚生成过，直接登记 objectURL，重绘网格时不用再回 IndexedDB 读
+        if (thumb) diaryObjectUrl('t:' + id, thumb);
         draft.attachments.push({
           id: id,
           name: file.name || (isImage ? 'image.jpg' : (isVideo ? 'video.mp4' : 'file')),
           type: data.type || file.type || '',
-          size: data.size,
+          // 用量按真实占用算：原文件 + 缩略图
+          size: data.size + (thumb ? thumb.size : 0),
           kind: isImage ? 'image' : (isVideo ? 'video' : 'file'),
           w: w,
           h: h,
@@ -13851,21 +15037,28 @@
           state.diaryAttachBlocked = diaryAttachBlockedReason();
           break;
         }
+        // 总量不设限，写满系统给应用的存储配额后写入会失败：中断本轮并给出可读提示
+        if (err && (err.name === 'QuotaExceededError' || err.code === 22)) {
+          quotaFull = true;
+          break;
+        }
       }
     }
 
     state.diaryAttachBusy = false;
+    state.diaryAttachProgress = null;
     if (added) {
       saveDiaryDraft(true);
       haptic(12);
     }
     renderDiaryAttachments();
     const notes = [];
-    if (tooBig) notes.push(T('有 {n} 个文件超过 20MB，已跳过', { n: tooBig }));
+    if (tooBig) notes.push(T('有 {n} 个附件超过 80MB，已跳过', { n: tooBig }));
+    if (entryFull) notes.push(T('这篇日记附件已达 80MB，有 {n} 个已跳过', { n: entryFull }));
     if (overflow) notes.push(T('单篇最多 {n} 个附件，多出的已跳过', { n: DIARY_MAX_FILES }));
-    if (overQuota) notes.push(T('附件已占用 {size}，接近上限，请先清理', { size: formatBytes(diaryUsedBytesForDraft()) }));
+    if (quotaFull) notes.push(T('本机存储空间不足，附件没能保存，可以先删掉一些旧附件再试'));
     else if (!added && failed) notes.push(T('附件没能保存，请重试'));
-    if (notes.length) showToast(notes.join('；'), 2600);
+    if (notes.length) showToast(notes.join('；'), 3200);
   }
 
   async function removeDiaryAttachment(id) {
@@ -13905,7 +15098,6 @@
       return;
     }
     if (meta.kind === 'video') {
-      const viewer = $('#diaryViewer');
       const vid = $('#diaryViewerVideo');
       const img = $('#diaryViewerImg');
       shareImageBlob = null;
@@ -13920,13 +15112,10 @@
       vid.src = url;
       vid.hidden = false;
       $('#diaryViewerName').textContent = meta.name;
-      viewer.scrollTop = 0;
-      viewer.hidden = false;
-      requestAnimationFrame(function () { viewer.classList.add('open'); });
+      openDiaryViewerLayer();
       return;
     }
     if (meta.kind === 'image') {
-      const viewer = $('#diaryViewer');
       const img = $('#diaryViewerImg');
       const vid = $('#diaryViewerVideo');
       shareImageBlob = null;
@@ -13940,9 +15129,7 @@
       img.dataset.url = url;
       img.src = url;
       $('#diaryViewerName').textContent = meta.name;
-      viewer.scrollTop = 0;
-      viewer.hidden = false;
-      requestAnimationFrame(function () { viewer.classList.add('open'); });
+      openDiaryViewerLayer();
       return;
     }
     openModal({
@@ -13957,9 +15144,21 @@
     });
   }
 
+  // 预览层：打开时抬到日记详情页 / 写作页之上，并作为独立返回层级；
+  // 关闭时把层级还原，返回手势交还给下面的页面。
+  function openDiaryViewerLayer() {
+    const viewer = $('#diaryViewer');
+    if (!viewer) return;
+    viewer.classList.add('above-page');
+    viewer.scrollTop = 0;
+    viewer.hidden = false;
+    requestAnimationFrame(function () { viewer.classList.add('open'); });
+  }
+
   function closeDiaryViewer() {
     const viewer = $('#diaryViewer');
     if (!viewer || viewer.hidden) return;
+    viewer.classList.remove('above-page');
     shareImageBlob = null;
     const saveBtn = $('#diaryViewerSave');
     if (saveBtn) saveBtn.hidden = true;
@@ -14004,6 +15203,261 @@
     back.classList.remove('open');
     sheet.hidden = true;
     back.hidden = true;
+  }
+
+  // ==================== 附件目录（更多 → 数据与备份） ====================
+  // 只读汇总：把全部日记的附件摊平，按「所属日记日期倒序 + 同日附件添加顺序倒序」排。
+  // 附件本身没有独立的时间戳，所以同一天内用附件数组下标倒序，
+  // 数组顺序就是写作页里的添加顺序（最新追加的在末尾）。
+  let attachDirItems = [];
+  let attachDetailItem = null;
+  let attachDetailUrls = [];
+  const attachDirUrls = new Map();
+
+  function attachKindLabel(kind) {
+    if (kind === 'image') return T('图片');
+    if (kind === 'video') return T('视频');
+    return T('文件');
+  }
+
+  const ATTACH_DOC_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path d="M7 3.8h6.5L18 8.3v11.9H7z"/><path d="M13.5 3.8v4.5H18"/></svg>';
+
+  function buildAttachIndex() {
+    const list = [];
+    state.diary.forEach(function (entry) {
+      const atts = entry.attachments || [];
+      for (let i = 0; i < atts.length; i++) {
+        if (!atts[i] || !atts[i].id) continue;
+        list.push({ id: atts[i].id, meta: atts[i], entry: entry, seq: i });
+      }
+    });
+    // 'YYYY-MM-DD' 直接按字符串比较即可
+    list.sort(function (a, b) {
+      if (a.entry.date !== b.entry.date) return a.entry.date < b.entry.date ? 1 : -1;
+      return b.seq - a.seq;
+    });
+    return list;
+  }
+
+  function renderAttachPage() {
+    const grid = $('#attachGrid');
+    const empty = $('#attachEmpty');
+    const sum = $('#attachSummary');
+    if (!grid || !empty || !sum) return;
+    attachReleaseDirUrls();
+    attachDirItems = buildAttachIndex();
+    const used = diaryUsedBytes();
+    sum.innerHTML =
+      '<span class="as-main">' + esc(T('共 {n} 个附件', { n: attachDirItems.length })) + '</span>' +
+      '<span>' + esc(T('已用 {size}', { size: formatBytes(used) })) + '</span>';
+
+    empty.hidden = attachDirItems.length > 0;
+    grid.innerHTML = attachDirItems.map(function (it) {
+      const a = it.meta;
+      const badge = '<span class="ai-badge">' + esc(attachKindLabel(a.kind)) + '</span>';
+      let thumb;
+      if (a.kind === 'image') {
+        thumb = '<span class="ai-thumb"><img alt="" data-attach-thumb="' + esc(a.id) + '">' + badge + '</span>';
+      } else if (a.kind === 'video') {
+        thumb = '<span class="ai-thumb"><img alt="" data-attach-thumb="' + esc(a.id) + '">' +
+          '<span class="ai-play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>' +
+          badge +
+          (a.duration ? '<span class="ai-badge ai-badge-right">' + esc(diaryDurationText(a.duration)) + '</span>' : '') +
+          '</span>';
+      } else {
+        thumb = '<span class="ai-thumb ai-doc"><span class="ai-doc-ico">' + ATTACH_DOC_ICON + '</span>' + badge + '</span>';
+      }
+      return '<button class="attach-item" type="button" data-attach-open="' + esc(a.id) + '">' +
+        thumb +
+        '<span class="ai-meta">' +
+          '<span class="ai-date">' + esc(diaryCardDate(it.entry.date)) + '</span>' +
+          '<span class="ai-size">' + esc(formatBytes(a.size)) + '</span>' +
+        '</span>' +
+      '</button>';
+    }).join('');
+
+    hydrateAttachDirThumbs();
+  }
+
+  // 缩略图逐条读：只取 320px 缩略图，读不到原图也不碰。
+  // 4 路并发，避免几百条记录同时开 IndexedDB 事务。
+  async function hydrateAttachDirThumbs() {
+    const tiles = $$('#attachGrid .attach-item');
+    let next = 0;
+    async function worker() {
+      while (next < tiles.length) {
+        const tile = tiles[next++];
+        const id = tile.dataset.attachOpen;
+        const img = tile.querySelector('[data-attach-thumb]');
+        let rec = null;
+        try { rec = await diaryFileGet(id); } catch (err) { rec = null; }
+        if (!tile.isConnected) continue; // 目录已关：不再生成 objectURL
+        const hasBody = !!(rec && rec.data);
+        if (!hasBody) {
+          // 旧备份可能只带了附件信息、没有本体：标记缺失，点击时给出说明
+          tile.classList.add('missing');
+          if (img) img.remove();
+          const th = tile.querySelector('.ai-thumb');
+          const badge = tile.querySelector('.ai-badge');
+          if (badge) badge.textContent = T('缺失');
+          if (th) {
+            const miss = document.createElement('span');
+            miss.className = 'ai-missing';
+            miss.textContent = T('缺失');
+            th.appendChild(miss);
+          }
+          continue;
+        }
+        if (!img) continue;
+        const cached = attachDirUrls.get(id);
+        if (cached) { img.src = cached; continue; }
+        // 图片用缩略图；视频用封面帧；都没有就不画图（保留播放角标）
+        const blob = rec.thumb || (/^image\//.test((rec.data && rec.data.type) || '') ? rec.data : null);
+        if (!blob) { img.remove(); continue; }
+        const url = URL.createObjectURL(blob);
+        attachDirUrls.set(id, url);
+        img.src = url;
+      }
+    }
+    const workers = [];
+    for (let i = 0; i < Math.min(4, tiles.length); i++) workers.push(worker());
+    await Promise.all(workers);
+  }
+
+  function attachReleaseDirUrls() {
+    attachDirUrls.forEach(function (url) {
+      try { URL.revokeObjectURL(url); } catch (err) { /* 忽略 */ }
+    });
+    attachDirUrls.clear();
+  }
+
+  function openAttachPage() {
+    const page = $('#attachPage');
+    if (!page) return;
+    renderAttachPage();
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+    const body = page.querySelector('.settings-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  function closeAttachPage(instant) {
+    const page = $('#attachPage');
+    if (!page || page.hidden) return;
+    closeAttachDetail(true);
+    page.classList.remove('open');
+    if (instant) {
+      page.hidden = true;
+      attachReleaseDirUrls();
+      $('#attachGrid').innerHTML = '';
+      return;
+    }
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+      attachReleaseDirUrls();
+      $('#attachGrid').innerHTML = '';
+    }, 240);
+  }
+
+  function attachDetailRow(key, value) {
+    if (!value) return '';
+    return '<div class="ad-row"><span class="ad-k">' + esc(key) + '</span>' +
+      '<span class="ad-v">' + esc(value) + '</span></div>';
+  }
+
+  function attachReleaseDetailUrls() {
+    attachDetailUrls.forEach(function (u) {
+      try { URL.revokeObjectURL(u); } catch (err) { /* 忽略 */ }
+    });
+    attachDetailUrls = [];
+  }
+
+  function closeAttachDetail(instant) {
+    const sheet = $('#attachDetail');
+    const back = $('#attachDetailBackdrop');
+    if (!sheet || sheet.hidden) return;
+    const vid = sheet.querySelector('video');
+    if (vid) { try { vid.pause(); } catch (err) { /* 忽略 */ } }
+    attachReleaseDetailUrls();
+    sheet.classList.remove('open');
+    if (back) back.classList.remove('open');
+    if (instant) {
+      sheet.hidden = true;
+      if (back) back.hidden = true;
+      return;
+    }
+    window.setTimeout(function () {
+      if (sheet.classList.contains('open')) return;
+      sheet.hidden = true;
+      if (back) back.hidden = true;
+      $('#attachDetailPreview').innerHTML = '';
+      $('#attachDetailFields').innerHTML = '';
+      attachDetailItem = null;
+    }, 200);
+  }
+
+  async function openAttachDetail(id) {
+    const item = attachDirItems.find(function (x) { return x.id === id; });
+    if (!item) return;
+    const a = item.meta;
+    const entry = item.entry;
+    attachDetailItem = item;
+    attachReleaseDetailUrls();
+
+    const sheet = $('#attachDetail');
+    const back = $('#attachDetailBackdrop');
+    if (!sheet || !back) return;
+    $('#attachDetailTitle').textContent = a.name || T('附件');
+
+    const preview = $('#attachDetailPreview');
+    const fields = $('#attachDetailFields');
+    preview.className = 'ad-preview';
+    preview.innerHTML = '';
+    // 先按元信息出字段，本体异步补（缺失时补说明，不阻塞打开）
+    let rows = attachDetailRow(T('类型'), attachKindLabel(a.kind));
+    rows += attachDetailRow(T('体积'), a.size ? formatBytes(a.size) : '');
+    if (a.kind !== 'file' && a.w > 0 && a.h > 0) {
+      rows += attachDetailRow(T('尺寸'), a.w + ' × ' + a.h);
+    }
+    if (a.kind === 'video' && a.duration > 0) {
+      rows += attachDetailRow(T('时长'), diaryDurationText(a.duration));
+    }
+    if (entry) {
+      const when = diaryCardDate(entry.date) + (entry.title ? ' · ' + entry.title : '');
+      rows += attachDetailRow(T('所属日记'), when);
+    }
+    fields.innerHTML = rows;
+
+    back.hidden = false;
+    sheet.hidden = false;
+    requestAnimationFrame(function () {
+      back.classList.add('open');
+      sheet.classList.add('open');
+    });
+
+    let rec = null;
+    try { rec = await diaryFileGet(id); } catch (err) { rec = null; }
+    // 期间可能已被关掉或换成了别的附件，别把旧结果画到新详情上
+    if (!sheet.classList.contains('open') || attachDetailItem !== item) return;
+    if (!rec || !rec.data) {
+      preview.className = 'ad-preview ad-doc';
+      preview.innerHTML = '<span class="ai-doc-ico">' + ATTACH_DOC_ICON + '</span>' +
+        '<p class="ad-missing">' + esc(T('这个附件不在本机。它可能来自一份不含附件的备份，或在旧设备上。')) + '</p>';
+      return;
+    }
+    const url = URL.createObjectURL(rec.data);
+    attachDetailUrls.push(url);
+    if (a.kind === 'image') {
+      preview.innerHTML = '<img alt="" data-attach-full="' + esc(a.id) + '" src="' + esc(url) + '">';
+    } else if (a.kind === 'video') {
+      preview.innerHTML = '<video controls playsinline preload="metadata" src="' + esc(url) + '"></video>';
+    } else {
+      preview.className = 'ad-preview ad-doc';
+      preview.innerHTML = '<span class="ai-doc-ico">' + ATTACH_DOC_ICON + '</span>' +
+        '<p class="ad-doc-name">' + esc(a.name) + '</p>';
+    }
   }
 
   // ---------- 自动保存 ----------
@@ -14154,8 +15608,9 @@
   // ---------- 备份：是否包含附件 ----------
 
   function diaryBackupEstimate() {
-    // 缩略图按原图约 1 成估，base64 比原始字节大约多 37%；视频原样入库，同样计入
-    return Math.round(diaryUsedBytes() * 1.1 * 1.37);
+    // zip 里附件按原字节 store（不含缩略图、也不再 base64 膨胀），
+    // 只需再加上压缩后的文字数据；这里按本机附件总量的 97% 估。
+    return Math.round(diaryUsedBytes() * 0.97);
   }
 
   function diaryHasVideo() {
@@ -14168,12 +15623,12 @@
     const est = diaryBackupEstimate();
     const hasVideo = diaryHasVideo();
     $('#exportSizeHint').textContent = est
-      ? T('图片、视频与文件合计约 {size}', { size: formatBytes(est) }) +
+      ? T('备份约 {size}', { size: formatBytes(est) }) +
         (hasVideo ? ' · ' + T('含视频，备份可能达到数百 MB') : '')
       : T('当前没有附件，文件不会变大');
     $('#exportSheetNote').textContent = hasVideo
-      ? T('导出的是未加密的 JSON 文件，请存到可信位置；视频会让备份达到数百 MB，请确认存储空间充足。')
-      : T('导出的是未加密的 JSON 文件，请存到可信位置；含附件时体积很大。');
+      ? T('zip 只是去掉 base64 膨胀并压缩文字，照片和视频本身不会变小；文件未加密，请存到可信位置。')
+      : T('zip 只是去掉 base64 膨胀并压缩文字，照片本身不会变小；文件未加密，请存到可信位置。');
     const sheet = $('#exportSheet');
     const back = $('#exportSheetBackdrop');
     back.hidden = false;
@@ -14202,7 +15657,7 @@
     openModal({
       kind: 'export-with-files',
       title: T('导出包含附件的备份？'),
-      text: T('文件约 {size}，比不含附件大很多；导出的是未加密文件，请存到可信位置。', { size: size }),
+      text: T('文件约 {size}，附件按原文件原样打包进 zip，体积接近原始大小；导出的是未加密文件，请存到可信位置。', { size: size }),
       confirmText: T('继续导出'),
       onConfirm: function () { exportJSON(true); }
     });
@@ -14234,17 +15689,42 @@
     });
 
     $('#diaryChips').addEventListener('click', function (e) {
+      const mbtn = e.target.closest('#diaryMonthBtn');
+      if (mbtn) {
+        e.stopPropagation();
+        if (diaryMonthPopOpen) closeDiaryMonthPop();
+        else openDiaryMonthPop();
+        return;
+      }
       const btn = e.target.closest('[data-diary-filter]');
       if (!btn) return;
       state.diaryFilter = btn.dataset.diaryFilter;
       renderDiary();
     });
 
-    $('#diaryChips').addEventListener('change', function (e) {
-      if (e.target && e.target.id === 'diaryMonthSelect') {
-        state.diaryMonth = e.target.value;
-        renderDiary();
-      }
+    $('#diaryMonthPop').addEventListener('click', function (e) {
+      const opt = e.target.closest('[data-month]');
+      if (!opt) return;
+      state.diaryMonth = opt.dataset.month || '';
+      closeDiaryMonthPop();
+      renderDiary();
+    });
+
+    // 点空白或滚动页面时收起月份列表，避免它悬在内容上方
+    document.addEventListener('pointerdown', function (e) {
+      if (!diaryMonthPopOpen) return;
+      const t = e.target;
+      if (t && t.closest && (t.closest('#diaryMonthPop') || t.closest('#diaryMonthBtn'))) return;
+      closeDiaryMonthPop();
+    });
+    window.addEventListener('scroll', function (e) {
+      if (!diaryMonthPopOpen) return;
+      // 列表自身的滚动不算「页面滚动」，否则一滚就收起
+      if (e.target && e.target.closest && e.target.closest('#diaryMonthPop')) return;
+      closeDiaryMonthPop();
+    }, true);
+    window.addEventListener('resize', function () {
+      if (diaryMonthPopOpen) closeDiaryMonthPop();
     });
 
     $('#diaryWriteBtn').addEventListener('click', function () { openDiaryEditor(todayKey()); });
@@ -14387,6 +15867,22 @@
     $('#diaryAttachBtn').addEventListener('click', openAttachSheet);
     $('#attachCancel').addEventListener('click', closeAttachSheet);
     $('#attachSheetBackdrop').addEventListener('click', closeAttachSheet);
+
+    // 附件目录：设置入口 → 目录页 → 详情层
+    $('#attachEntryBtn').addEventListener('click', openAttachPage);
+    $('#attachBack').addEventListener('click', function () { closeAttachPage(); });
+    $('#attachDetailClose').addEventListener('click', function () { closeAttachDetail(); });
+    $('#attachDetailBackdrop').addEventListener('click', function () { closeAttachDetail(); });
+    $('#attachGrid').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-attach-open]');
+      if (btn) openAttachDetail(btn.dataset.attachOpen);
+    });
+    // 详情里的图片点一下进全屏预览（复用已有预览层，返回时先关预览）
+    $('#attachDetailPreview').addEventListener('click', function (e) {
+      const img = e.target.closest('[data-attach-full]');
+      if (!img || !attachDetailItem) return;
+      openDiaryAttachment(attachDetailItem.id, [attachDetailItem.meta]);
+    });
     $('#attachPickImage').addEventListener('click', function () {
       closeAttachSheet();
       $('#diaryImageInput').click();
@@ -14448,6 +15944,19 @@
       openDiaryEditor(date);
     });
     $('#ddBody').addEventListener('click', function (e) {
+      const colBtn = e.target.closest('[data-share-cols]');
+      if (colBtn) {
+        const n = Number(colBtn.dataset.shareCols) || 1;
+        if (n === diaryShareCols) return;
+        diaryShareCols = n;
+        haptic(6);
+        $$('#ddBody .dd-col').forEach(function (btn) {
+          const active = Number(btn.dataset.shareCols) === diaryShareCols;
+          btn.classList.toggle('active', active);
+          btn.setAttribute('aria-pressed', String(active));
+        });
+        return;
+      }
       const shared = e.target.closest('[data-dd-share]');
       if (shared) { shareDiaryLongImage(); return; }
       const media = e.target.closest('[data-dd-media]');
@@ -14592,6 +16101,7 @@
     $('#exportWithFiles').addEventListener('click', chooseExportWithFiles);
     $('#exportCancel').addEventListener('click', closeExportSheet);
     $('#exportSheetBackdrop').addEventListener('click', closeExportSheet);
+    $('#backupProgressClose').addEventListener('click', hideBackupProgress);
 
     // 切到后台 / 失焦时立即落盘，避免系统回收进程导致丢字
     document.addEventListener('visibilitychange', function () {

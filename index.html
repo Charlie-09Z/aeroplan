@@ -7,10 +7,10 @@
 
   <meta name="description" content="氢计划（AeroPlan）：日历、日程、待办、行程表与周月年计划，数据只存在本机，无需账号。">
   <title>氢计划</title>
-  <link rel="manifest" href="./manifest.webmanifest?v=1.39">
-  <link rel="icon" href="./icons/icon-192.png?v=1.39">
-  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png?v=1.39">
-  <link rel="stylesheet" href="./styles.css?v=1.39">
+  <link rel="manifest" href="./manifest.webmanifest?v=1.50">
+  <link rel="icon" href="./icons/icon-192.png?v=1.50">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png?v=1.50">
+  <link rel="stylesheet" href="./styles.css?v=1.50">
 </head>
 <body>
   <div class="phone">
@@ -171,7 +171,7 @@
             </button>
           </section>
 
-          <p class="profile-version" id="profileVersion">V1.2.19</p>
+          <p class="profile-version" id="profileVersion">V1.5.0</p>
         </section>
 
         <section class="view" id="viewPlan" hidden>
@@ -695,7 +695,7 @@
       <div class="modal-backdrop" id="exportSheetBackdrop" hidden></div>
       <div class="modal export-sheet" id="exportSheet" hidden role="dialog" aria-modal="true" aria-labelledby="exportSheetTitle">
         <h3 class="modal-title" id="exportSheetTitle">备份数据</h3>
-        <p class="export-sheet-desc" id="exportSheetDesc">默认只导出日记文字与附件信息，不包含图片和文件本体。</p>
+        <p class="export-sheet-desc" id="exportSheetDesc">备份会打包成一个 .zip：文字数据压缩，附件按原始文件原样放入，不重新压缩图片或视频。</p>
         <button class="export-option is-default" id="exportNoFiles" type="button">
           <span class="eo-main">不含附件（推荐，文件小）</span>
           <span class="eo-sub">只含日记文字与附件信息，恢复后附件列表仍在、文件不在</span>
@@ -708,12 +708,33 @@
         <button class="text-btn" id="exportCancel" type="button">取消</button>
       </div>
 
+      <!-- 备份打包进度 -->
+      <div class="backup-progress" id="backupProgress" hidden role="dialog" aria-modal="true" aria-labelledby="backupProgressTitle">
+        <div class="bp-card">
+          <h3 class="bp-title" id="backupProgressTitle">正在打包备份</h3>
+          <div class="bp-bar"><span id="backupProgressBar"></span></div>
+          <p class="bp-count" id="backupProgressCount"></p>
+          <p class="bp-note" id="backupProgressNote">请勿关闭或退出应用</p>
+          <p class="bp-error" id="backupProgressError" hidden></p>
+          <button class="text-btn" id="backupProgressClose" type="button" hidden>关闭</button>
+        </div>
+      </div>
+
+      <!-- 附件详情（目录页的二级层） -->
+      <div class="modal-backdrop" id="attachDetailBackdrop" hidden></div>
+      <div class="modal attach-detail" id="attachDetail" hidden role="dialog" aria-modal="true" aria-labelledby="attachDetailTitle">
+        <h3 class="modal-title" id="attachDetailTitle">附件</h3>
+        <div class="ad-preview" id="attachDetailPreview"></div>
+        <div class="ad-fields" id="attachDetailFields"></div>
+        <button class="text-btn" id="attachDetailClose" type="button">关闭</button>
+      </div>
+
       <!-- 附件来源选择 -->
       <div class="modal-backdrop" id="attachSheetBackdrop" hidden></div>
       <div class="modal attach-sheet" id="attachSheet" hidden>
         <h3 class="modal-title" id="attachSheetTitle">添加附件</h3>
         <button class="row-btn" id="attachPickImage" type="button"><span>添加图片</span><span class="row-arrow">›</span></button>
-        <button class="row-btn" id="attachPickVideo" type="button"><span>添加视频（单个 50MB）</span><span class="row-arrow">›</span></button>
+        <button class="row-btn" id="attachPickVideo" type="button"><span>添加视频（单个 80MB）</span><span class="row-arrow">›</span></button>
         <button class="row-btn" id="attachPickFile" type="button"><span>添加文件</span><span class="row-arrow">›</span></button>
         <button class="text-btn" id="attachCancel" type="button">取消</button>
       </div>
@@ -806,7 +827,7 @@
               <span>恢复数据</span>
               <span class="row-arrow">↑</span>
             </button>
-            <input id="importFile" type="file" accept="application/json,.json" hidden>
+            <input id="importFile" type="file" accept="application/zip,.zip,application/json,.json" hidden>
             <div class="import-preview" id="importPreview" hidden>
               <div class="import-summary" id="importSummary"></div>
               <div class="import-actions">
@@ -815,6 +836,13 @@
                 <button class="text-btn" id="cancelImportBtn" type="button">取消</button>
               </div>
             </div>
+            <button class="row-btn" id="attachEntryBtn" type="button">
+              <span class="row-stack">
+                <span>附件目录</span>
+                <span class="row-sub" id="attachEntrySub"></span>
+              </span>
+              <span class="row-arrow">›</span>
+            </button>
           </section>
 
           <section class="setting-group">
@@ -837,7 +865,7 @@
           </section>
 
           <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
-          <div class="settings-version" id="settingsVersion">氢计划 · 版本 V1.2.19</div>
+          <div class="settings-version" id="settingsVersion">氢计划 · 版本 V1.5.0</div>
         </div>
       </div>
 
@@ -862,7 +890,7 @@
             <p>条目、计划、分类、日记、偏好与同意记录只保存在本机：优先 IndexedDB，不可用时退回 localStorage。没有服务器副本。</p>
             <p>日记里的图片与文件只存进本应用自己的 IndexedDB，不写入相册、不申请存储权限、不联网、不做云端同步。IndexedDB 不可用时，日记文字仍可保存，附件功能会提示「当前环境不支持附件」。</p>
             <p>卸载应用会删除全部本地内容；换机前请先导出备份。</p>
-            <p>可从设置导出 JSON 备份，并随时导入恢复；备份文件不会上传。</p>
+            <p>可从设置导出 .zip 备份，并随时导入恢复；备份文件不会上传。</p>
           </section>
 
           <section class="about-group">
@@ -879,9 +907,9 @@
 
           <section class="about-group">
             <h3>备份文件</h3>
-            <p>备份是未加密的 JSON，含条目、计划、分类、日记、偏好与同意记录。</p>
-            <p>默认备份不含附件本体，只有文件名、大小与类型；需要连图片一起带走时，在「备份数据」弹窗里选择「包含附件」，体积可能很大，导出前会估算并再次确认。</p>
-            <p>备份文件中的日记为明文，含附件时体积很大，请妥善保管。</p>
+            <p>备份是一个未加密的 zip：backup.json 存条目、计划、分类、日记、偏好与同意记录，附件按原文件原样放在 attachments/ 里。</p>
+            <p>默认备份不含附件本体，只有文件名、大小与类型；需要连图片一起带走时，在「备份数据」弹窗里选择「包含附件」，打包时会显示逐个附件的进度。</p>
+            <p>zip 只是去掉 base64 膨胀并压缩文字，照片和视频本身不会变小；文件未加密，请妥善保管。</p>
             <p>生成后交给系统保存或分享面板，应用内不留副本，临时文件用完即删；文件可能被他人看到，请存放在可信位置。</p>
           </section>
 
@@ -926,7 +954,7 @@
             <p>请通过你获取本应用的渠道联系我们：应用商店页面、发布页面或仓库 Issue。</p>
           </section>
 
-          <p class="about-version" id="aboutVersion">V1.2.19</p>
+          <p class="about-version" id="aboutVersion">V1.5.0</p>
         </div>
 
         <div class="agreement-actions" id="agreementActions" hidden>
@@ -1009,6 +1037,20 @@
         </div>
       </div>
 
+      <div class="settings-page" id="attachPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="attachBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title">附件目录</h2>
+        </header>
+        <div class="settings-body attach-body">
+          <div class="attach-summary" id="attachSummary"></div>
+          <div class="attach-grid" id="attachGrid"></div>
+          <p class="attach-empty" id="attachEmpty" hidden>还没有附件</p>
+        </div>
+      </div>
+
       <div class="settings-page" id="countdownPage" hidden>
         <header class="settings-topbar">
           <button class="icon-btn" id="countdownBack" type="button" aria-label="返回">
@@ -1082,6 +1124,8 @@
         <button type="button" data-diary-pop="edit">编辑</button>
         <button type="button" class="danger" data-diary-pop="del">删除</button>
       </div>
+
+      <div class="diary-month-pop" id="diaryMonthPop" role="listbox" aria-label="按年月筛选" hidden></div>
 
       <div class="cat-pop" id="moodPop" hidden>
         <button type="button" data-mood-pop="edit">编辑</button>
@@ -1200,10 +1244,10 @@
 
     </div>
   </div>
-  <script src="./i18n.js?v=1.39"></script>
-  <script src="./regions.js?v=1.39"></script>
-  <script src="./districts.js?v=1.39"></script>
-  <script src="./weather.js?v=1.39"></script>
-  <script src="./app.js?v=1.39"></script>
+  <script src="./i18n.js?v=1.50"></script>
+  <script src="./regions.js?v=1.50"></script>
+  <script src="./districts.js?v=1.50"></script>
+  <script src="./weather.js?v=1.50"></script>
+  <script src="./app.js?v=1.50"></script>
 </body>
 </html>

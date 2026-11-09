@@ -1043,8 +1043,15 @@ html.dark .smart-banner {
 .smart-banner-icon.wx-rain { color: #6F8FB0; }
 .smart-banner-icon.wx-snow { color: #8FA6BF; }
 .smart-banner-icon.wx-storm { color: var(--amber); }
+.smart-banner-icon.love { color: #E0708A; }
+.smart-banner-icon.festival { color: var(--amber); }
+.smart-banner-icon.rest { color: #8B9BD0; }
+.smart-banner-icon.night { color: #7189B5; }
+.smart-banner-icon.diary { color: #68A98F; }
+.smart-banner-icon.overdue { color: #C08A7A; }
 html.dark .smart-banner-icon.wx-rain { color: #8EAECB; }
 html.dark .smart-banner-icon.wx-snow { color: #A9BDD3; }
+html.dark .smart-banner-icon.love { color: #EC8FA6; }
 
 /* 最多两行；标题再长也在框内省略，不会撑破横幅 */
 .smart-banner-text {
@@ -5984,21 +5991,99 @@ html.dark .wx-snow { color: #A9BDD3; }
 
 .diary-month-wrap { flex: 0 0 auto; }
 
+/* 与同一行的心情/附件筛选气泡同材质、同高、同圆角：26px / 13px */
 .diary-month {
-  /* 与同一栏的搜索框等高，胶囊圆角，文字居中 */
-  height: 34px;
-  padding: 0 13px;
-  border-radius: 17px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px 0 10px;
+  border-radius: 13px;
   border: 1px solid var(--line);
   background: var(--card);
-  color: var(--text-2);
-  font-size: 12px;
-  text-align: center;
-  text-align-last: center;
-  appearance: none;
-  -webkit-appearance: none;
-  cursor: pointer;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+  max-width: 132px;
 }
+
+.diary-month .dm-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diary-month .dm-caret {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .8;
+}
+
+.diary-month[aria-expanded="true"] {
+  border-color: transparent;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+/* 月份下拉：固定定位避免被横向滚动的筛选栏裁掉；
+   6 行封顶、内部滚动、overscroll 不带动外层页面 */
+.diary-month-pop {
+  position: fixed;
+  z-index: 56;
+  max-height: calc(6 * 32px + 8px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  padding: 4px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  box-shadow: 0 14px 36px rgba(20, 24, 34, .18), 0 2px 6px rgba(20, 24, 34, .08);
+}
+
+.diary-month-pop .dm-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.diary-month-pop .dm-option.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.diary-month-pop .dm-check {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+
+.diary-month-pop .dm-option.active .dm-check { opacity: 1; }
 
 .diary-actions {
   display: flex;
@@ -7112,6 +7197,10 @@ html[lang="en"] .de-loc-hint {
 }
 
 .diary-viewer.open { opacity: 1; }
+
+/* 预览打开时进入自己的返回层级：盖住日记详情页(50)与写作页(53)，
+   仍在 modal 遮罩(60)/卡片(61)之下；关闭时移除类，层级还原。 */
+.diary-viewer.above-page { z-index: calc(var(--z-diary-viewer) + 1); }
 
 /* 内容舞台：短图居中、长图从顶部开始自然撑高，滚动区不会把顶部裁掉 */
 .dv-stage {
@@ -8734,9 +8823,112 @@ body,
 
 .dd-foot {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
   padding-bottom: 12px;
 }
+
+/* 长图图片列数：1 / 2 / 3，只在有图片时出现 */
+.dd-cols {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.dd-col {
+  height: 24px;
+  min-width: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.dd-col.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* ---------- 备份打包进度 ---------- */
+.backup-progress {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(16, 20, 28, .42);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+.backup-progress[hidden] { display: none; }
+
+.bp-card {
+  width: min(320px, 100%);
+  padding: 22px 22px 18px;
+  border-radius: 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px rgba(12, 16, 24, .32);
+  text-align: center;
+}
+
+.bp-title {
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.bp-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.bp-bar span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width .18s ease;
+}
+
+.bp-count {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.bp-note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.bp-error {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger, #E5484D);
+  word-break: break-word;
+}
+
+.bp-card .text-btn { margin-top: 12px; }
 
 /* ---------- 顶栏深浅色切换 ---------- */
 .theme-btn .theme-moon { display: none; }
@@ -8910,6 +9102,13 @@ html.dark .theme-btn .theme-moon { display: block; }
 
 .skin-cell:active { transform: scale(.98); }
 
+/* 主题不适配的皮肤（如浅色下的「仅深色」）：保留预览，但不能选 */
+.skin-cell:disabled {
+  opacity: .55;
+  cursor: default;
+}
+.skin-cell:disabled:active { transform: none; }
+
 .skin-cell.active {
   border-color: var(--primary);
   box-shadow: inset 0 0 0 1px var(--primary);
@@ -8934,7 +9133,7 @@ html.dark .theme-btn .theme-moon { display: block; }
   color: var(--text);
 }
 
-/* 「仅浅色 / 仅深色」：保持淡，不做灰掉、不挡点击 */
+/* 「仅浅色 / 仅深色」：保持淡，作为禁用状态的说明标签 */
 .skin-cell-mode {
   flex: 0 0 auto;
   padding: 1px 5px;
@@ -12429,15 +12628,38 @@ html [data-skin] .diary-mode.active {
   color: var(--cs-accent);
   box-shadow: none;
 }
-html [data-skin] .diary-chip {
+html [data-skin] .diary-chip,
+html [data-skin] .diary-month {
   background: var(--cs-bg);
   border: 1px solid var(--cs-line);
   border-radius: var(--cs-radius, 13px);
   color: var(--cs-fg-2);
+  background-image: var(--cs-tex, none);
+  background-size: var(--cs-tex-size, auto);
+  background-repeat: var(--cs-tex-repeat, repeat);
 }
 html [data-skin] .diary-chip.active {
   background: var(--cs-accent-soft);
   border-color: var(--cs-accent);
+  color: var(--cs-accent);
+}
+html [data-skin] .diary-month[aria-expanded="true"] {
+  background: var(--cs-accent-soft);
+  border-color: var(--cs-accent);
+  color: var(--cs-accent);
+}
+html [data-skin] .diary-month-pop {
+  background: var(--cs-bg);
+  border: 1px solid var(--cs-line);
+  border-radius: var(--cs-radius, 14px);
+  background-image: var(--cs-tex, none);
+  background-size: var(--cs-tex-size, auto);
+  background-repeat: var(--cs-tex-repeat, repeat);
+  box-shadow: 0 16px 38px rgba(12, 16, 24, .28);
+}
+html [data-skin] .diary-month-pop .dm-option { color: var(--cs-fg-2); }
+html [data-skin] .diary-month-pop .dm-option.active {
+  background: var(--cs-accent-soft);
   color: var(--cs-accent);
 }
 html [data-skin] .diary-write {
@@ -12457,3 +12679,232 @@ html [data-skin] :is(.plan-seg, .diary-search, .diary-modes, .diary-manage) {
   background-size: var(--cs-tex-size, auto);
   background-repeat: var(--cs-tex-repeat, repeat);
 }
+
+/* ==================== 附件目录 ==================== */
+/* 设置页里两行文字的行按钮：上行标题、下行「n 个 · 已用 x MB」 */
+.row-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+/* 覆盖 .row-btn > span:first-child 的 flex: 0 0 auto，副标题超长时能收窄省略 */
+.setting-group .row-btn > .row-stack { flex: 1 1 auto; }
+.row-sub {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.attach-body { padding-bottom: 24px; }
+
+.attach-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 2px 2px 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.attach-summary .as-main { color: var(--text); font-weight: 600; }
+
+.attach-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 8px;
+}
+.attach-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0;
+  text-align: left;
+  border: 0;
+  background: none;
+  color: inherit;
+  transition: opacity .16s, transform .16s;
+}
+.attach-item:active { opacity: .7; transform: scale(.97); }
+
+.ai-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card-soft);
+}
+.ai-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ai-badge {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 15px;
+  background: rgba(12, 16, 24, .55);
+  color: #fff;
+}
+.ai-badge-right { left: auto; right: 5px; }
+.ai-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ai-play svg {
+  width: 22px;
+  height: 22px;
+  fill: #fff;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .55));
+}
+.ai-thumb.ai-doc {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ai-doc-ico svg {
+  width: 26px;
+  height: 26px;
+  fill: none;
+  stroke: var(--text-2);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ai-missing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--card-soft);
+}
+.attach-item.missing .ai-thumb img { opacity: .35; }
+
+.ai-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.ai-date {
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-size { font-size: 10.5px; color: var(--text-2); }
+
+.attach-empty {
+  margin: 40px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* 附件详情：z-index 压到 59，预览层（.above-page）为 60，
+   保证边缘返回先关预览、再关详情、最后回目录 */
+#attachDetailBackdrop { z-index: 59; }
+#attachDetail {
+  z-index: 59;
+  width: calc(100% - 40px);
+  max-width: 360px;
+  max-height: 82vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ad-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 4px 0 12px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--card-soft);
+}
+.ad-preview img,
+.ad-preview video {
+  width: 100%;
+  max-height: 42vh;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+.ad-preview.ad-doc {
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px 12px;
+}
+.ad-doc-name {
+  font-size: 12px;
+  color: var(--text-2);
+  word-break: break-all;
+  text-align: center;
+}
+.ad-fields { margin-bottom: 4px; }
+.ad-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.ad-row:last-child { border-bottom: 0; }
+.ad-k { flex: 0 0 auto; color: var(--text-2); }
+.ad-v {
+  color: var(--text);
+  text-align: right;
+  word-break: break-all;
+}
+.ad-missing {
+  padding: 14px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  text-align: center;
+}
+
+html [data-skin] .row-sub { color: var(--cs-fg-2); }
+html [data-skin] .attach-summary { color: var(--cs-fg-2); }
+html [data-skin] .attach-summary .as-main { color: var(--cs-fg); }
+html [data-skin] .ai-thumb,
+html [data-skin] .ai-missing { background: var(--cs-accent-soft, var(--card-soft)); }
+html [data-skin] .ai-badge { background: var(--cs-fg-2); color: var(--cs-bg); }
+html [data-skin] .ai-doc-ico svg { stroke: var(--cs-fg-2); }
+html [data-skin] .ai-date { color: var(--cs-fg); }
+html [data-skin] .ai-size,
+html [data-skin] .attach-empty { color: var(--cs-fg-2); }
+html [data-skin] .attach-detail {
+  color: var(--cs-fg);
+  background-color: var(--cs-bg);
+  background-image: var(--cs-tex, none);
+  border: 1px solid var(--cs-line);
+  border-radius: var(--cs-radius, 18px);
+}
+html [data-skin] .ad-preview { background: var(--cs-accent-soft, var(--card-soft)); }
+html [data-skin] .ad-doc-name { color: var(--cs-fg-2); }
+html [data-skin] .ad-row { border-color: var(--cs-line); }
+html [data-skin] .ad-k,
+html [data-skin] .ad-missing { color: var(--cs-fg-2); }
+html [data-skin] .ad-v { color: var(--cs-fg); }
