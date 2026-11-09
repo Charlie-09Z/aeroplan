@@ -6,7 +6,8 @@
 //   5. 应用图标与浅色启动图（用 sharp 从 icons 生成）
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import https from 'node:https';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const androidDir = path.join(root, 'android');
@@ -375,6 +376,121 @@ if (mainActivityPath) {
 } else {
   console.log('没有找到 MainActivity.java，跳过 WebView 调试开关');
 }
+
+// ---------- 4. Gradle 发行包：绕开 services.gradle.org 的 GitHub 跳转 ----------
+// Capacitor 模板生成的 gradle-wrapper.properties 指向 services.gradle.org，
+// 该域名 302 到 GitHub Releases（downloads.gradle.org 现在也 307 过去），CI 上反复 504。
+// 这里改成国内镜像的 -bin 包（项目用不到 -all 里的源码与文档），并尽量预下载：
+// 预下载成功且 zip 完整时写成 file: 地址，Gradle 构建时完全不联网；
+// 两个镜像都失败时退回镜像 https 直链，仍然不会回到 GitHub。
+const GRADLE_MIRRORS = [
+  'https://mirrors.cloud.tencent.com/gradle/',
+  'https://mirrors.huaweicloud.com/gradle/'
+];
+const wrapperPath = path.join(androidDir, 'gradle', 'wrapper', 'gradle-wrapper.properties');
+
+function downloadOnce(url, dest, redirectsLeft) {
+  return new Promise(function (resolve, reject) {
+    const req = https.get(url, { timeout: 60000 }, function (res) {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
+        res.resume();
+        resolve(downloadOnce(new URL(res.headers.location, url).href, dest, redirectsLeft - 1));
+        return;
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        reject(new Error('HTTP ' + res.statusCode));
+        return;
+      }
+      const expected = Number(res.headers['content-length'] || 0);
+      let received = 0;
+      const out = fs.createWriteStream(dest);
+      res.on('data', function (chunk) { received += chunk.length; });
+      res.on('error', function (err) { out.destroy(); reject(err); });
+      out.on('error', reject);
+      out.on('finish', function () {
+        if (expected && received !== expected) {
+          reject(new Error('下载不完整：' + received + '/' + expected));
+        } else {
+          resolve();
+        }
+      });
+      res.pipe(out);
+    });
+    req.on('timeout', function () { req.destroy(new Error('连接超时')); });
+    req.on('error', reject);
+  });
+}
+
+// 只看文件头（PK\3\4）和末尾中央目录签名（PK\5\6）：被截断或返回错误页时一定过不了
+function zipLooksComplete(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (size < 1024) return false;
+    const head = Buffer.alloc(4);
+    fs.readSync(fd, head, 0, 4, 0);
+    if (head[0] !== 0x50 || head[1] !== 0x4b || head[2] !== 0x03 || head[3] !== 0x04) return false;
+    const tailLen = Math.min(size, 66000);
+    const tail = Buffer.alloc(tailLen);
+    fs.readSync(fd, tail, 0, tailLen, size - tailLen);
+    return tail.includes(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function ensureGradleDistribution() {
+  if (!fs.existsSync(wrapperPath)) {
+    console.log('没有找到 gradle-wrapper.properties，跳过 Gradle 发行包改写');
+    return;
+  }
+  const props = fs.readFileSync(wrapperPath, 'utf8');
+  const found = props.match(/gradle-(\d+(?:\.\d+)+)-(?:all|bin)\.zip/);
+  if (!found) {
+    console.log('警告：gradle-wrapper.properties 里没有识别到 gradle-x.y.z-(all|bin).zip，跳过改写');
+    return;
+  }
+  const fileName = 'gradle-' + found[1] + '-bin.zip';
+  const localZip = path.join(path.dirname(wrapperPath), fileName);
+
+  let downloaded = false;
+  if (fs.existsSync(localZip) && zipLooksComplete(localZip)) {
+    downloaded = true;
+  } else {
+    for (const mirror of GRADLE_MIRRORS) {
+      for (let attempt = 1; attempt <= 3 && !downloaded; attempt++) {
+        try {
+          console.log('下载 Gradle 发行包（' + mirror + fileName + '，第 ' + attempt + ' 次）');
+          await downloadOnce(mirror + fileName, localZip, 5);
+          if (!zipLooksComplete(localZip)) throw new Error('zip 不完整');
+          downloaded = true;
+        } catch (err) {
+          fs.rmSync(localZip, { force: true });
+          console.log('这版没下成：' + err.message);
+          if (attempt < 3) await new Promise(function (r) { setTimeout(r, 3000); });
+        }
+      }
+      if (downloaded) break;
+    }
+  }
+
+  const distributionUrl = downloaded
+    ? pathToFileURL(localZip).href
+    : GRADLE_MIRRORS[0] + fileName;
+  let next = props.replace(/distributionUrl=.*/, 'distributionUrl=' + distributionUrl.replace(':', '\\:'));
+  // 指向本地文件时关掉 URL 校验：wrapper 的校验是发 HEAD 请求（按 HttpURLConnection 处理），
+  // 对 file: 地址没有意义；文件本身在上面已经按 PK 头尾签名校验过。
+  if (downloaded) {
+    next = next.replace(/validateDistributionUrl=.*/, 'validateDistributionUrl=false');
+  }
+  if (next !== props) fs.writeFileSync(wrapperPath, next);
+  console.log(downloaded
+    ? 'Gradle 发行包已预下载并校验：' + fileName + '（wrapper 指向本地文件，构建时不联网）'
+    : 'Gradle 发行包预下载失败，wrapper 改用镜像直链：' + distributionUrl);
+}
+
+await ensureGradleDistribution();
 
 // ---------- 5. 生成图标与启动图 ----------
 async function makeIcons() {
