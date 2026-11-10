@@ -7,10 +7,10 @@
 
   <meta name="description" content="氢计划（AeroPlan）：日历、日程、待办、行程表与周月年计划，数据只存在本机，无需账号。">
   <title>氢计划</title>
-  <link rel="manifest" href="./manifest.webmanifest?v=1.50">
-  <link rel="icon" href="./icons/icon-192.png?v=1.50">
-  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png?v=1.50">
-  <link rel="stylesheet" href="./styles.css?v=1.50">
+  <link rel="manifest" href="./manifest.webmanifest?v=1.54">
+  <link rel="icon" href="./icons/icon-192.png?v=1.54">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png?v=1.54">
+  <link rel="stylesheet" href="./styles.css?v=1.54">
 </head>
 <body>
   <div class="phone">
@@ -145,6 +145,10 @@
               <input type="checkbox" id="smartTipToggle">
               <span class="toggle" aria-hidden="true"></span>
             </label>
+            <button class="row-btn" id="profileCapsulesBtn" type="button">
+              <span>历史胶囊</span>
+              <span class="row-arrow">›</span>
+            </button>
           </section>
 
           <section class="setting-group">
@@ -171,7 +175,7 @@
             </button>
           </section>
 
-          <p class="profile-version" id="profileVersion">V1.5.0</p>
+          <p class="profile-version" id="profileVersion">V1.5.4</p>
         </section>
 
         <section class="view" id="viewPlan" hidden>
@@ -213,6 +217,9 @@
           <section class="cd-strip diary-cd" id="countdownStrip" hidden>
             <div class="cd-cards" id="countdownCards"></div>
           </section>
+
+          <!-- 时间胶囊：到点提示（查看后从日记页移除） -->
+          <div class="capsule-due" id="diaryCapsuleDue" hidden></div>
 
           <div class="batch-bar diary-batch-bar" id="diaryManageBar" hidden>
             <span class="batch-count" id="diaryManageCount">已选 0 篇</span>
@@ -313,7 +320,7 @@
           <div class="chip-flow">
             <button class="soft-chip" id="dateChip" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12h3.9"/></svg>
-              <span class="chip-label">今天 09:00</span>
+              <span class="chip-label">今天</span>
             </button>
             <button class="soft-chip" id="repeatChip" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.2 8.9H8.4a3 3 0 0 0-3 3v.6"/><path d="m14.8 6.5 2.4 2.4-2.4 2.4"/><path d="M6.8 15.1h8.8a3 3 0 0 0 3-3v-.6"/><path d="m9.2 17.5-2.4-2.4 2.4-2.4"/></svg>
@@ -326,6 +333,17 @@
             <button class="soft-chip" id="addressChip" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s6.5-5.4 6.5-10.2A6.5 6.5 0 0 0 5.5 10.8C5.5 15.6 12 21 12 21Z"/><circle cx="12" cy="10.7" r="2.3"/></svg>
               <span class="addr-chip-text">添加地址</span>
+            </button>
+          </div>
+
+          <div class="chip-flow time-pills" id="timePills">
+            <button class="soft-chip time-pill" id="startTimePill" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12h3.9"/></svg>
+              <span class="chip-label" id="startTimeLabel">开始时间</span>
+            </button>
+            <button class="soft-chip time-pill" id="endTimePill" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M8.4 12h7.2"/></svg>
+              <span class="chip-label" id="endTimeLabel">结束时间</span>
             </button>
           </div>
 
@@ -675,6 +693,54 @@
         <input id="diaryFileInput" type="file" multiple hidden>
       </div>
 
+      <!-- 时间胶囊：书写页（只保留写字与附件） -->
+      <div class="diary-editor capsule-editor" id="capsuleEditor" role="dialog" aria-modal="true" aria-label="时间胶囊" hidden>
+        <div class="de-head">
+          <div class="de-head-main">
+            <h2><button class="de-date-btn" id="ceBack" type="button" aria-label="返回">
+              <svg class="ce-back-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+              <span>时间胶囊</span>
+            </button></h2>
+            <p class="de-sub" id="ceSub">封存后到期开启</p>
+          </div>
+          <div class="de-head-actions">
+            <span class="de-saved" id="ceSaved" hidden>草稿已保存</span>
+            <button class="de-done" id="ceSealBtn" type="button">完成</button>
+          </div>
+        </div>
+        <div class="de-scroll">
+          <input class="de-title" id="ceTitleInput" type="text" maxlength="60" autocomplete="off" placeholder="写给未来的自己">
+          <textarea class="de-text" id="ceText" placeholder="想对未来的自己说些什么…" spellcheck="false"></textarea>
+          <div class="ce-open">
+            <div class="ce-open-head">
+              <span class="ce-open-title">打开时间</span>
+              <span class="ce-open-hint">到时会在日记界面出现</span>
+            </div>
+            <div class="ce-open-row">
+              <button class="ce-open-pill" id="ceOpenDatePill" type="button">
+                <span class="ce-open-label">日期</span>
+                <span class="ce-open-value" id="ceOpenDateText"></span>
+              </button>
+              <button class="ce-open-pill" id="ceOpenTimePill" type="button">
+                <span class="ce-open-label">时间</span>
+                <span class="ce-open-value" id="ceOpenTimeText"></span>
+              </button>
+            </div>
+          </div>
+          <div class="de-attach">
+            <div class="de-attach-head">
+              <span class="de-attach-title">附件</span>
+              <button class="de-attach-add" id="ceAttachBtn" type="button">添加</button>
+            </div>
+            <div class="de-attach-grid" id="ceAttachGrid"></div>
+            <p class="de-attach-hint" id="ceAttachHint"></p>
+          </div>
+        </div>
+        <input id="ceImageInput" type="file" accept="image/*" multiple hidden>
+        <input id="ceVideoInput" type="file" accept="video/*" hidden>
+        <input id="ceFileInput" type="file" multiple hidden>
+      </div>
+
       <!-- 日记：图片 / 视频全屏预览 -->
       <div class="diary-viewer" id="diaryViewer" hidden>
         <button class="dv-close" id="diaryViewerClose" type="button" aria-label="关闭">
@@ -865,7 +931,7 @@
           </section>
 
           <button class="danger-pill" id="clearAllBtn" type="button">删除所有数据</button>
-          <div class="settings-version" id="settingsVersion">氢计划 · 版本 V1.5.0</div>
+          <div class="settings-version" id="settingsVersion">氢计划 · 版本 V1.5.4</div>
         </div>
       </div>
 
@@ -954,7 +1020,7 @@
             <p>请通过你获取本应用的渠道联系我们：应用商店页面、发布页面或仓库 Issue。</p>
           </section>
 
-          <p class="about-version" id="aboutVersion">V1.5.0</p>
+          <p class="about-version" id="aboutVersion">V1.5.4</p>
         </div>
 
         <div class="agreement-actions" id="agreementActions" hidden>
@@ -1120,6 +1186,31 @@
         <div class="settings-body dd-body" id="ddBody"></div>
       </div>
 
+      <!-- 时间胶囊：只读阅读页（到点查看 / 历史重读共用） -->
+      <div class="settings-page diary-detail-page capsule-detail-page" id="capsuleDetailPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="cdBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title" id="cdTitle">时间胶囊</h2>
+        </header>
+        <div class="settings-body dd-body" id="cdBody"></div>
+      </div>
+
+      <!-- 更多 → 个性化：历史胶囊 -->
+      <div class="settings-page" id="capsuleHistoryPage" hidden>
+        <header class="settings-topbar">
+          <button class="icon-btn" id="capsuleHistoryBack" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <h2 class="settings-title">历史胶囊</h2>
+        </header>
+        <div class="settings-body">
+          <div class="capsule-history-list" id="capsuleHistoryList"></div>
+          <p class="attach-empty" id="capsuleHistoryEmpty" hidden>还没有开启过的时间胶囊</p>
+        </div>
+      </div>
+
       <div class="cat-pop" id="diaryPop" hidden>
         <button type="button" data-diary-pop="edit">编辑</button>
         <button type="button" class="danger" data-diary-pop="del">删除</button>
@@ -1244,10 +1335,10 @@
 
     </div>
   </div>
-  <script src="./i18n.js?v=1.50"></script>
-  <script src="./regions.js?v=1.50"></script>
-  <script src="./districts.js?v=1.50"></script>
-  <script src="./weather.js?v=1.50"></script>
-  <script src="./app.js?v=1.50"></script>
+  <script src="./i18n.js?v=1.54"></script>
+  <script src="./regions.js?v=1.54"></script>
+  <script src="./districts.js?v=1.54"></script>
+  <script src="./weather.js?v=1.54"></script>
+  <script src="./app.js?v=1.54"></script>
 </body>
 </html>

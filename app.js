@@ -29,9 +29,15 @@
   const LS_DIARY_KEY = 'aeroplan.diary';
   const LS_CD_KEY = 'aeroplan.countdowns';
   const IDB_NAME = 'aeroplan-db';
+  const IDB_VERSION = 3;
   const IDB_STORE = 'kv';
   // 日记附件单独一个对象仓库，按 id 索引，避免把 Blob 塞进 kv 的大对象里
   const DIARY_FILE_STORE = 'diaryFiles';
+  // 时间胶囊独立仓库：不与日记数组混存，封存/开启状态各自独立
+  const CAPSULE_STORE = 'capsules';
+  const CAPSULE_MAX_YEARS = 10;
+  const CAPSULE_TITLE_MAX = 60;
+  const CAPSULE_TEXT_MAX = 50000;
 
   // 旧代号（light-schedule）的库与键里可能存着用户全部数据，只能迁移、不能直接改名。
   // 迁移成功后旧库/旧键保留不删，失败时继续读旧库，绝不出现「打开就空了」。
@@ -45,7 +51,7 @@
     lang: 'light-schedule.lang'
   };
 
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.5.4';
   const POLICY_VERSION = 'privacy-1.2';
   // 生成新 keystore 后，把证书 SHA-256 指纹填在这里（README 有步骤）
   const OFFICIAL_CERT_SHA256 = '';
@@ -192,6 +198,8 @@
     editCategoryId: '',
     openDoneGroups: new Set(),
     expandedGroups: new Set(),
+    // 今天默认展开：只有用户手动收起过才记在这里，其它日期仍走 expandedGroups
+    collapsedGroups: new Set(),
     // 批量选择：batchSel 存「id|date」形式的实例键，删除时按 id 去重
     batchMode: false,
     batchSel: new Set(),
@@ -238,7 +246,15 @@
     diarySel: new Set(),
     // 附件不支持时的原因（IndexedDB 不可用），空串表示可用
     diaryAttachBlocked: '',
-    diaryAttachBusy: false
+    diaryAttachBusy: false,
+    // ===== 时间胶囊 =====
+    capsules: [],
+    // 未封存的草稿：与日记草稿分开，互不影响
+    capsuleDraft: null,
+    capsuleEditorOpen: false,
+    capsuleAttachBusy: false,
+    capsuleAttachBlocked: '',
+    capsuleAttachProgress: null
   };
 
   const storage = {
@@ -249,12 +265,14 @@
     memoryCountdowns: [],
     memoryMeta: {},
     memoryCats: [],
-    memoryDiary: []
+    memoryDiary: [],
+    memoryCapsules: []
   };
 
   let toastTimer = null;
   let pendingImport = null;
   let sheetCloseTimer = null;
+  let capsuleEmptyWarned = false;
 
   // ==================== 日期与文本工具 ====================
 
@@ -362,6 +380,63 @@
     const bp = b.priority === 'high' ? 0 : 1;
     if (ap !== bp) return ap - bp;
     return (a.createdAt || 0) - (b.createdAt || 0);
+  }
+
+  // ==================== 条目时间区间 ====================
+  // 结束时间可选；没有结束时间的旧条目仍按「开始 + 60 分钟」兜底，
+  // 和以前「开始后 60 分钟内算进行中」的口径一致。
+  const ITEM_DEFAULT_SPAN_MIN = 60;
+
+  function clockMinutes(value) {
+    const m = /^(\d{2}):(\d{2})$/.exec(String(value || ''));
+    if (!m) return NaN;
+    return Math.min(23, Number(m[1])) * 60 + Math.min(59, Number(m[2]));
+  }
+
+  function nowClockMinutes() {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  }
+
+  // 返回 { start, end }（分钟）；全天条目返回 null
+  function itemTimeSpan(item) {
+    const start = clockMinutes(item && item.time);
+    if (!isFinite(start)) return null;
+    const rawEnd = clockMinutes(item && item.endTime);
+    const end = isFinite(rawEnd) && rawEnd > start ? rawEnd : start + ITEM_DEFAULT_SPAN_MIN;
+    return { start: start, end: end };
+  }
+
+  function itemIsOngoing(item, nowMinutes) {
+    if (!item || item.done) return false;
+    const span = itemTimeSpan(item);
+    if (!span) return false;
+    const n = nowMinutes === undefined ? nowClockMinutes() : nowMinutes;
+    return n >= span.start && n <= span.end;
+  }
+
+  // 列表展示用：有结束时间就显示区间，没有就只显示开始时间
+  function itemTimeLabel(item) {
+    if (!item || !item.time) return '';
+    return item.endTime ? item.time + '–' + item.endTime : item.time;
+  }
+
+  // 今天的卡片顺序：进行中 > 未开始（开始时间由近到远）> 已结束 / 已完成；
+  // 同一档内沿用 compareAgenda，Array#sort 稳定，同开始时间保持原顺序。
+  function compareAgendaToday(a, b) {
+    const n = nowClockMinutes();
+    function rank(item) {
+      if (item.done) return 3;
+      const span = itemTimeSpan(item);
+      if (!span) return 1;
+      if (n > span.end) return 2;
+      if (n >= span.start) return 0;
+      return 1;
+    }
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    return compareAgenda(a, b);
   }
 
   function compareOverdue(a, b) {
@@ -944,6 +1019,9 @@
     // 旧版本的「提醒」类型已取消，统一按待办展示
     const type = raw.type === 'reminder' ? 'todo' : (TYPE_META[raw.type] ? raw.type : 'todo');
     const time = /^\d{2}:\d{2}$/.test(String(raw.time || '')) ? String(raw.time) : null;
+    // 结束时间可选：必须晚于开始时间（不支持跨午夜），不合法就当作没填
+    const endRaw = /^\d{2}:\d{2}$/.test(String(raw.endTime || '')) ? String(raw.endTime) : null;
+    const endTime = time && endRaw && endRaw > time ? endRaw : null;
     const recurrence = normalizeRecurrence(raw.recurrence);
     const completions = normalizeCompletions(raw.completions);
     return {
@@ -952,6 +1030,7 @@
       title: title,
       date: date,
       time: time,
+      endTime: endTime,
       priority: raw.priority === 'high' ? 'high' : 'normal',
       done: recurrence ? false : raw.done === true,
       doneAt: recurrence ? null : (typeof raw.doneAt === 'number' ? raw.doneAt : (raw.done === true ? Date.now() : null)),
@@ -1622,12 +1701,17 @@
     state.diary.forEach(function (entry) {
       (entry.attachments || []).forEach(function (a) { total += a.size || 0; });
     });
+    // 时间胶囊附件也占用本机空间，一并统计
+    state.capsules.forEach(function (c) {
+      (c.attachments || []).forEach(function (a) { total += a.size || 0; });
+    });
     return total;
   }
 
   function diaryAttachmentCount() {
     let n = 0;
     state.diary.forEach(function (entry) { n += (entry.attachments || []).length; });
+    state.capsules.forEach(function (c) { n += (c.attachments || []).length; });
     return n;
   }
 
@@ -1737,7 +1821,8 @@
       let req;
       try {
         // v2：新增 diaryFiles，用来按 id 存日记附件的原图/文件与缩略图
-        req = indexedDB.open(IDB_NAME, 2);
+        // v3：新增 capsules，时间胶囊独立存储
+        req = indexedDB.open(IDB_NAME, IDB_VERSION);
       } catch (err) {
         reject(err);
         return;
@@ -1749,6 +1834,9 @@
         }
         if (!db.objectStoreNames.contains(DIARY_FILE_STORE)) {
           db.createObjectStore(DIARY_FILE_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(CAPSULE_STORE)) {
+          db.createObjectStore(CAPSULE_STORE, { keyPath: 'id' });
         }
       };
       req.onsuccess = function () { resolve(req.result); };
@@ -1999,6 +2087,329 @@
     });
   }
 
+  // ===== 时间胶囊（capsules 仓库，keyPath = id）=====
+  // 记录：{ id, createdAt, updatedAt, sealedAt, openAt, title, text, attachments, sealed, openedAt }
+  // 「写于」取封存时刻（sealedAt），草稿阶段用 createdAt；updatedAt 只落盘不上屏。
+  // 对外只暴露 capsulePut（未封存可写、已封存直接拒绝）；
+  // 封存走 capsuleSeal，标记已开启走仅改 openedAt 的内部通道 capsuleWriteRaw。
+  // 打开时间精确到分钟：秒与毫秒归零
+  function capsuleMinuteStart(ms) {
+    const d = new Date(Number(ms));
+    if (isNaN(d.getTime())) return Date.now();
+    d.setSeconds(0, 0);
+    return d.getTime();
+  }
+
+  // 兼容多种落盘形态：数字时间戳、ISO 字符串、YYYY-MM-DD HH:mm、YYYY-MM-DDTHH:mm
+  function capsuleParseTime(value) {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'number') return isFinite(value) ? value : null;
+    if (value instanceof Date) {
+      const t = value.getTime();
+      return isFinite(t) ? t : null;
+    }
+    if (typeof value === 'string') {
+      const s = value.trim();
+      if (!s) return null;
+      if (/^\d+$/.test(s)) {
+        const n = Number(s);
+        return isFinite(n) ? n : null;
+      }
+      const iso = s.replace(' ', 'T');
+      let t = Date.parse(iso);
+      if (!isFinite(t)) t = Date.parse(s);
+      return isFinite(t) ? t : null;
+    }
+    return null;
+  }
+
+  function capsuleDefaultOpenAt() {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 1);
+    d.setSeconds(0, 0);
+    return d.getTime();
+  }
+
+  function capsuleMaxOpenAt() {
+    const d = new Date(capsuleMinuteStart(Date.now()));
+    d.setFullYear(d.getFullYear() + CAPSULE_MAX_YEARS);
+    return d.getTime();
+  }
+
+  // 打开时间只能落在「当前这一分钟 ~ 当前 + 10 年」之间
+  function capsuleClampOpenAt(ms) {
+    const n = Number(ms);
+    if (!isFinite(n)) return capsuleDefaultOpenAt();
+    const lo = capsuleMinuteStart(Date.now());
+    const hi = capsuleMaxOpenAt();
+    return Math.max(lo, Math.min(hi, capsuleMinuteStart(n)));
+  }
+
+  const CAPSULE_EN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // 可读格式：中文「2026年12月25日 09:30」，英文「Dec 25, 2026 09:30」
+  function capsuleOpenAtText(ms) {
+    const d = new Date(Number(ms));
+    if (isNaN(d.getTime())) return '';
+    const time = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    if (isEn()) {
+      return CAPSULE_EN_MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' +
+        d.getFullYear() + ' ' + time;
+    }
+    return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + time;
+  }
+
+  // 「写于」：封存后以封存时刻为准，草稿阶段退回创建时间
+  function capsuleWrittenText(c) {
+    if (!c) return '';
+    return capsuleOpenAtText(c.sealedAt || c.createdAt);
+  }
+
+  function normalizeCapsule(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+    if (!id) return null;
+    const createdAtRaw = capsuleParseTime(raw.createdAt);
+    const openAtRaw = capsuleParseTime(raw.openAt);
+    if (openAtRaw === null) {
+      console.warn('[胶囊] openAt 无法解析，已跳过：', id, raw.openAt);
+      return null;
+    }
+    const createdAt = createdAtRaw === null ? openAtRaw : createdAtRaw;
+    const attachments = Array.isArray(raw.attachments)
+      ? raw.attachments.map(normalizeDiaryAttachment).filter(Boolean).slice(0, DIARY_MAX_FILES)
+      : [];
+    const title = typeof raw.title === 'string' ? raw.title.trim().slice(0, CAPSULE_TITLE_MAX) : '';
+    const text = typeof raw.text === 'string' ? raw.text.slice(0, CAPSULE_TEXT_MAX) : '';
+    const openedAt = capsuleParseTime(raw.openedAt);
+    const updatedAt = capsuleParseTime(raw.updatedAt);
+    const sealedAt = capsuleParseTime(raw.sealedAt);
+    // 只有明确 sealed === false 才算未封存；缺字段的旧记录按已封存处理
+    const sealed = raw.sealed !== false;
+    // 未封存的空草稿不保留；已封存的即使只有标题也保留
+    if (!sealed && !text.trim() && !title && !attachments.length) return null;
+    return {
+      id: id,
+      createdAt: createdAt,
+      updatedAt: isFinite(updatedAt) && updatedAt > 0 ? updatedAt : createdAt,
+      sealedAt: isFinite(sealedAt) && sealedAt > 0 ? sealedAt : null,
+      openAt: capsuleMinuteStart(openAtRaw),
+      title: title,
+      text: text,
+      attachments: attachments,
+      sealed: sealed,
+      openedAt: isFinite(openedAt) && openedAt > 0 ? openedAt : null
+    };
+  }
+
+  function capsuleStoreAll() {
+    if (storage.status !== 'idb' || !storage.db) {
+      console.warn('[胶囊] 当前存储不是 IndexedDB（status=' + storage.status + '），只读内存：',
+        CAPSULE_STORE, 'DB v' + IDB_VERSION);
+      return Promise.resolve(storage.memoryCapsules.map(function (c) { return Object.assign({}, c); }));
+    }
+    return new Promise(function (resolve) {
+      let tx;
+      try {
+        tx = storage.db.transaction(CAPSULE_STORE, 'readonly');
+      } catch (err) {
+        console.warn('[胶囊] 打不开 store：', CAPSULE_STORE, 'DB v' + IDB_VERSION, err);
+        resolve([]);
+        return;
+      }
+      const req = tx.objectStore(CAPSULE_STORE).getAll();
+      req.onsuccess = function () {
+        const rows = req.result || [];
+        if (!rows.length && !capsuleEmptyWarned) {
+          capsuleEmptyWarned = true;
+          console.warn('[胶囊] store 为空：', CAPSULE_STORE, 'DB v' + IDB_VERSION);
+        }
+        resolve(rows);
+      };
+      req.onerror = function () {
+        console.warn('[胶囊] 读取失败：', CAPSULE_STORE, 'DB v' + IDB_VERSION, req.error);
+        resolve([]);
+      };
+    });
+  }
+
+  function capsuleStoreGet(id) {
+    if (storage.status !== 'idb' || !storage.db) {
+      const hit = storage.memoryCapsules.find(function (c) { return c.id === id; });
+      return Promise.resolve(hit ? Object.assign({}, hit) : null);
+    }
+    return new Promise(function (resolve) {
+      let tx;
+      try {
+        tx = storage.db.transaction(CAPSULE_STORE, 'readonly');
+      } catch (err) { resolve(null); return; }
+      const req = tx.objectStore(CAPSULE_STORE).get(id);
+      req.onsuccess = function () { resolve(req.result || null); };
+      req.onerror = function () { resolve(null); };
+    });
+  }
+
+  // 内部写通道：只有 capsulePut / capsuleSeal / capsuleMarkOpened / 备份导入使用
+  async function capsuleWriteRaw(rec) {
+    const clean = normalizeCapsule(rec);
+    if (!clean) return { ok: false, reason: 'invalid' };
+    if (storage.status === 'idb' && storage.db) {
+      await new Promise(function (resolve, reject) {
+        let tx;
+        try {
+          tx = storage.db.transaction(CAPSULE_STORE, 'readwrite');
+        } catch (err) { reject(err); return; }
+        tx.objectStore(CAPSULE_STORE).put(clean);
+        tx.oncomplete = function () { resolve(true); };
+        tx.onerror = function () { reject(tx.error || new Error('胶囊写入失败')); };
+        tx.onabort = function () { reject(tx.error || new Error('胶囊写入被中断')); };
+      });
+    } else {
+      storage.memoryCapsules = storage.memoryCapsules.filter(function (c) { return c.id !== clean.id; });
+      storage.memoryCapsules.push(clean);
+    }
+    const idx = state.capsules.findIndex(function (c) { return c.id === clean.id; });
+    if (idx === -1) state.capsules.push(clean);
+    else state.capsules[idx] = clean;
+    return { ok: true, capsule: clean };
+  }
+
+  // 唯一对外的写入入口：已封存的记录任何写操作都直接拒绝，不读只靠前端隐藏按钮
+  async function capsulePut(rec) {
+    if (!rec || typeof rec.id !== 'string' || !rec.id) return { ok: false, reason: 'invalid' };
+    const prev = await capsuleStoreGet(rec.id);
+    if (prev && prev.sealed === true) return { ok: false, reason: 'sealed' };
+    try {
+      return await capsuleWriteRaw(rec);
+    } catch (err) {
+      console.warn('胶囊写入失败：', err);
+      return { ok: false, reason: 'error' };
+    }
+  }
+
+  async function capsuleSeal(id) {
+    const rec = await capsuleStoreGet(id);
+    if (!rec) return { ok: false, reason: 'missing' };
+    if (rec.sealed === true) return { ok: false, reason: 'sealed' };
+    try {
+      const now = Date.now();
+      return await capsuleWriteRaw(Object.assign({}, rec, {
+        sealed: true,
+        // 封存那一刻作为「写于」的准，草稿阶段改过多少次都以它为准
+        sealedAt: now,
+        updatedAt: now,
+        openAt: capsuleClampOpenAt(rec.openAt),
+        openedAt: null
+      }));
+    } catch (err) {
+      console.warn('胶囊封存失败：', err);
+      return { ok: false, reason: 'error' };
+    }
+  }
+
+  // 到点查看后写入 openedAt；这是唯一允许改已封存记录的地方，且只改 openedAt
+  async function capsuleMarkOpened(id) {
+    const rec = await capsuleStoreGet(id);
+    if (!rec || rec.sealed !== true || rec.openedAt) return false;
+    if (rec.openAt > Date.now()) return false;
+    try {
+      await capsuleWriteRaw(Object.assign({}, rec, { openedAt: Date.now() }));
+      return true;
+    } catch (err) {
+      console.warn('记录胶囊开启时间失败：', err);
+      return false;
+    }
+  }
+
+  async function capsuleDelete(ids) {
+    const list = (ids || []).slice();
+    if (!list.length) return;
+    if (storage.status === 'idb' && storage.db) {
+      await new Promise(function (resolve, reject) {
+        let tx;
+        try {
+          tx = storage.db.transaction(CAPSULE_STORE, 'readwrite');
+        } catch (err) { reject(err); return; }
+        const store = tx.objectStore(CAPSULE_STORE);
+        list.forEach(function (id) { store.delete(id); });
+        tx.oncomplete = function () { resolve(true); };
+        tx.onerror = function () { reject(tx.error || new Error('胶囊删除失败')); };
+        tx.onabort = function () { reject(tx.error || new Error('胶囊删除被中断')); };
+      });
+    } else {
+      storage.memoryCapsules = storage.memoryCapsules.filter(function (c) {
+        return list.indexOf(c.id) === -1;
+      });
+    }
+    state.capsules = state.capsules.filter(function (c) { return list.indexOf(c.id) === -1; });
+  }
+
+  function capsuleClearAll() {
+    storage.memoryCapsules = [];
+    state.capsules = [];
+    if (storage.status !== 'idb' || !storage.db) return Promise.resolve(true);
+    return new Promise(function (resolve) {
+      let tx;
+      try {
+        tx = storage.db.transaction(CAPSULE_STORE, 'readwrite');
+      } catch (err) { resolve(false); return; }
+      tx.objectStore(CAPSULE_STORE).clear();
+      tx.oncomplete = function () { resolve(true); };
+      tx.onerror = function () { resolve(false); };
+    });
+  }
+
+  function capsuleById(id) {
+    for (let i = 0; i < state.capsules.length; i++) {
+      if (state.capsules[i].id === id) return state.capsules[i];
+    }
+    return null;
+  }
+
+  // 待查看：未开启（openedAt 为空）且 openAt 已到；只有明确 sealed === false 才排除
+  function capsuleDue(c) {
+    if (!c) return false;
+    if (c.sealed === false) return false;
+    if (c.openedAt) return false;
+    const t = capsuleParseTime(c.openAt);
+    if (t === null) {
+      console.warn('[胶囊] openAt 无法解析，按未到点处理：', c.id, c.openAt);
+      return false;
+    }
+    return t <= Date.now();
+  }
+
+  function capsuleDueList() {
+    return state.capsules.filter(capsuleDue).sort(function (a, b) { return a.openAt - b.openAt; });
+  }
+
+  let capsuleSyncToken = 0;
+
+  function capsuleListSignature(list) {
+    return list.map(function (c) {
+      return c.id + '|' + c.openAt + '|' + (c.openedAt || 0);
+    }).join(',');
+  }
+
+  // 渲染前从 IndexedDB 复核一次：state.capsules 只是内存快照，别让它挡住真实数据
+  async function capsuleSyncFromStore() {
+    if (storage.status !== 'idb' || !storage.db) return;
+    const token = ++capsuleSyncToken;
+    const rows = await capsuleStoreAll();
+    if (token !== capsuleSyncToken) return;
+    const fresh = rows.map(normalizeCapsule).filter(Boolean);
+    if (capsuleListSignature(fresh) === capsuleListSignature(state.capsules)) return;
+    state.capsules = fresh;
+    if (state.view === 'diary') renderCapsuleDue();
+  }
+
+  function capsuleOpenedList() {
+    return state.capsules.filter(function (c) {
+      return c.sealed === true && !!c.openedAt;
+    }).sort(function (a, b) { return b.openAt - a.openAt; });
+  }
+
   function localStorageWorks() {
     try {
       const probe = 'aeroplan.probe';
@@ -2086,6 +2497,12 @@
     state.diary = Object.keys(diaryByDate).map(function (k) { return diaryByDate[k]; });
     sortDiary();
     state.meta = normalizeMeta(meta);
+
+    // 时间胶囊独立仓库：读不出来也不阻断启动
+    let capsules = [];
+    try { capsules = await capsuleStoreAll(); } catch (err) { capsules = []; }
+    if (!Array.isArray(capsules)) capsules = [];
+    state.capsules = capsules.map(normalizeCapsule).filter(Boolean);
 
     // 旧数据的条目没有 categoryId，这里只在内存里视为未分类，不写回存储
     const ids = new Set(state.categories.map(function (cat) { return cat.id; }));
@@ -2305,17 +2722,17 @@
 
     // 口径：今天、还没完成的两类才算——
     // 1）待办（todo）只要没勾选完成就计数；
-    // 2）日程（event）只算今天且开始时间还没到的，今天已经过去的、其它日期的都不算；
-    // 已完成的、逾期的（其它日期）一律排除。
+    // 2）日程（event）按真实区间判断：结束时间还没过就算在内（进行中 + 未开始），
+    //    没有结束时间的旧条目按开始 + 60 分钟兜底；全天日程算在内。
+    // 已完成的、其它日期的一律排除。
     const pending = todayItems.filter(function (i) {
       if (i.done) return false;
       if (i.type === 'todo') return true;
       if (i.type !== 'event') return false;
-      // 全天日程没有具体开始时刻，谈不上「已过去」，按今天待办处理
-      if (!i.time) return true;
-      const parts = String(i.time).split(':');
-      const startMinutes = (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
-      return startMinutes > nowMinutes;
+      const span = itemTimeSpan(i);
+      // 全天日程没有具体时刻，谈不上「已过去」，按今天待办处理
+      if (!span) return true;
+      return span.end >= nowMinutes;
     });
 
     if (!pending.length) {
@@ -3100,6 +3517,7 @@
 
     const meta = dayMeta(key);
     const d = keyToDate(key);
+    const t = todayKey();
     const items = expandOccurrences(state.items, key, key).sort(compareAgenda);
     const total = items.length;
 
@@ -3119,27 +3537,53 @@
         : (hol.type === 'workday' ? '调休 · 上班' : hol.name + '假期 · 放假'));
     }
 
+    // 今天不按类型分组：统一按「进行中 → 未开始 → 已结束 → 已完成」排；
+    // 先按类型分组会把待办整体压到日程下面，和今天的时间顺序要求冲突。
+    const isToday = key === t;
     const order = ['event', 'todo'];
     const groups = [];
-    order.forEach(function (type) {
-      const list = items.filter(function (i) { return i.type === type; });
-      if (list.length) groups.push({ type: type, items: list });
-    });
+    if (isToday) {
+      groups.push({ type: '', items: items.slice().sort(compareAgendaToday), flat: true });
+    } else {
+      order.forEach(function (type) {
+        const list = items.filter(function (i) { return i.type === type; });
+        if (list.length) groups.push({ type: type, items: list });
+      });
+    }
 
     let listHTML = '';
     groups.forEach(function (g) {
       const stackKey = 'd:' + key + ':' + g.type;
-      const stacked = g.items.length > STACK_LIMIT;
+      const stacked = !g.flat && g.items.length > STACK_LIMIT;
       const expanded = stacked && state.expandedGroups.has(stackKey);
       const headItems = stacked ? g.items.slice(0, STACK_LIMIT) : g.items;
       const extraItems = stacked ? g.items.slice(STACK_LIMIT) : [];
 
+      // 今天不分组，但收起时和其它日期同形态：组头 + 一张代表卡 + 展开 n 条。
+      // g.items 已按 compareAgendaToday 排好，首张即「进行中 → 最近未开始 → 已结束 → 已完成」的首选。
+      const flatKey = 'dt:' + key;
+      const flatStacked = g.flat && g.items.length > 1;
+      const flatCollapsed = flatStacked && state.collapsedGroups.has(flatKey);
+
       let rows = '';
-      headItems.forEach(function (item, i) {
-        // 第一张承载堆叠视觉与锁定；其余可见卡片也带组标识，供「全选本组」完整选中
-        rows += swipeRowHTML(item, undefined,
-          stacked ? (i === 0 ? { key: stackKey, hidden: expanded, locked: !expanded, count: g.items.length } : { key: stackKey, groupOnly: true }) : null);
-      });
+      if (g.flat) {
+        const visible = flatCollapsed ? g.items.slice(0, 1) : g.items;
+        visible.forEach(function (item, i) {
+          // 与其它日期一致：首张带堆叠层，收起时露出；其它卡片只带组标识
+          const stackOpt = flatStacked
+            ? (i === 0
+              ? { key: flatKey, hidden: !flatCollapsed, locked: flatCollapsed && !state.batchMode, count: g.items.length }
+              : { key: flatKey, groupOnly: true })
+            : null;
+          rows += swipeRowHTML(item, undefined, stackOpt);
+        });
+      } else {
+        headItems.forEach(function (item, i) {
+          // 第一张承载堆叠视觉与锁定；其余可见卡片也带组标识，供「全选本组」完整选中
+          rows += swipeRowHTML(item, undefined,
+            stacked ? (i === 0 ? { key: stackKey, hidden: expanded, locked: !expanded, count: g.items.length } : { key: stackKey, groupOnly: true }) : null);
+        });
+      }
 
       let extraHTML = '';
       if (extraItems.length) {
@@ -3153,7 +3597,10 @@
         ? '<button class="stack-toggle" type="button" data-stack-toggle="' + stackKey +
           '" aria-expanded="' + (expanded ? 'true' : 'false') + '">' +
           (expanded ? esc(T('收起')) : esc(T('展开 {n} 条', { n: extraItems.length }))) + '</button>'
-        : '';
+        : (flatStacked
+          ? '<button class="stack-toggle" type="button" aria-expanded="' + (!flatCollapsed ? 'true' : 'false') + '">' +
+            (flatCollapsed ? esc(T('展开 {n} 条', { n: g.items.length - 1 })) : esc(T('收起'))) + '</button>'
+          : '');
 
       // 批量模式下，折叠/堆叠的整组在组头提供独立的「全选本组」入口
       const countHTML = stacked && state.batchMode
@@ -3161,9 +3608,17 @@
             esc(T('全选本组 · 共 {n} 项', { n: g.items.length })) + '</button>'
         : '<span>' + g.items.length + '</span>';
 
-      listHTML += '<div class="dd-group">' +
-        '<div class="dd-group-head"><i style="background:' + TYPE_META[g.type].color + '"></i>' +
-        TYPE_META[g.type].label + countHTML + toggle + '</div>' +
+      // 今天只有日期级组头：不带类型分组，但保留整组的收起/展开
+      const headHTML = g.flat
+        ? '<div class="dd-group-head dd-group-head-today" role="button" tabindex="0" data-group-toggle="' + flatKey +
+          '" aria-expanded="' + (!flatCollapsed ? 'true' : 'false') + '">' +
+          '<i style="background:var(--primary)"></i>' +
+          esc(relativeDayLabel(key)) + countHTML + toggle + '</div>'
+        : '<div class="dd-group-head"><i style="background:' + TYPE_META[g.type].color + '"></i>' +
+          TYPE_META[g.type].label + countHTML + toggle + '</div>';
+
+      listHTML += '<div class="dd-group' + (g.flat ? ' dd-group-today' : '') + '">' +
+        headHTML +
         '<div class="timeline">' + rows + '</div>' + extraHTML +
       '</div>';
     });
@@ -3460,9 +3915,30 @@
     return grouped ? (grouped.dataset.stackGroup || '') : '';
   }
 
+  // 折叠组是否展开：今天（日程页 'g:<today>'）默认展开，仅当用户手动收起过才折叠；
+  // 其它日期与日历详情分组沿用原来的 expandedGroups。
+  function stackGroupExpanded(key) {
+    if (!key) return false;
+    if (key === 'g:' + todayKey()) return !state.collapsedGroups.has(key);
+    return state.expandedGroups.has(key);
+  }
+
+  // 今天这一组的日期级收起 / 展开：折叠后整组只留组头一行，状态只在本次会话内保持
+  function toggleFlatGroup(key) {
+    if (!key) return;
+    if (state.collapsedGroups.has(key)) state.collapsedGroups.delete(key);
+    else state.collapsedGroups.add(key);
+    renderDayDetail();
+    if (state.batchMode) {
+      applyBatchGroupLabels();
+      syncBatchDom();
+      renderBatchBar();
+    }
+  }
+
   // 折叠组当前是否展开：展开后每张卡片独立勾选，收起时整组算一张卡
   function batchGroupExpanded(groupKey) {
-    return !!groupKey && state.expandedGroups.has(groupKey);
+    return stackGroupExpanded(groupKey);
   }
 
   // 折叠组里所有实例卡片（含 stack-extra 里的隐藏项）。
@@ -3655,6 +4131,12 @@
     const chip = e.target.closest('[data-batch-group]');
     if (chip) {
       toggleBatchGroup(chip.dataset.batchGroup);
+      return true;
+    }
+
+    const groupToggle = e.target.closest('[data-group-toggle]');
+    if (groupToggle) {
+      toggleFlatGroup(groupToggle.dataset.groupToggle);
       return true;
     }
 
@@ -3892,7 +4374,11 @@
     if (layers) layers.classList.toggle('is-open', open);
     const head = document.querySelector('[data-stack-head="' + key + '"]');
     if (head) head.classList.toggle('swipe-locked', !open);
-    if (open) state.expandedGroups.add(key);
+    if (key === 'g:' + todayKey()) {
+      // 今天的默认态是展开，手动切换记在 collapsedGroups
+      if (open) state.collapsedGroups.delete(key);
+      else state.collapsedGroups.add(key);
+    } else if (open) state.expandedGroups.add(key);
     else state.expandedGroups.delete(key);
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
@@ -3937,17 +4423,21 @@
       (item.type === 'todo' && !item.recurrence && !item.done && item.date < t);
     const meta = TYPE_META[item.type];
     const cat = getCategory(item.categoryId);
+    // 今天已经结束且未完成的条目（结束时间已过；无结束时间按开始 + 60 分钟）
+    const span = itemTimeSpan(item);
+    const past = !item.done && item.date === t && !!span && nowClockMinutes() > span.end;
     // 圆点只表达「类型」：日程蓝、待办绿，和左下角图注一致；
     // 分类颜色只出现在标签 chip 上，逾期/完成另有文字与卡片状态，不占用这个点。
     const railColor = meta.color;
     const classes = [
       'row',
       overdue ? 'overdue' : '',
+      past ? 'past' : '',
       item.done ? 'done' : '',
       item.priority === 'high' ? 'high' : ''
     ].filter(Boolean).join(' ');
 
-    let timeLabel = item.time ? esc(item.time) : esc(T('全天'));
+    let timeLabel = item.time ? esc(itemTimeLabel(item)) : esc(T('全天'));
     let datePart = '';
     if (options.showDate) {
       datePart = '<span class="rt-date">' + esc(shortDate(item.date)) + '</span>';
@@ -4002,7 +4492,10 @@
     const all = dayItems.slice();
     // 「全部安排」要直接列出该日全部卡片：过期的未完成项也留在当天分组里，
     // 不再用一句「可在上方逾期里查看」把内容藏起来。
-    const undone = all.filter(function (i) { return !i.done; }).sort(compareAgenda);
+    // 今天这一组额外用 compareAgendaToday：进行中排最前，其次未开始，已结束/已完成靠后；
+    // 其它日期仍按开始时间排，避免打乱既有分组与折叠规则。
+    const undone = all.filter(function (i) { return !i.done; })
+      .sort(isToday ? compareAgendaToday : compareAgenda);
     const done = all.filter(function (i) { return i.done; }).sort(function (a, b) {
       return (b.doneAt || 0) - (a.doneAt || 0);
     });
@@ -4012,7 +4505,7 @@
 
     let rows = '';
     const stackKey = 'g:' + key;
-    const stackExpanded = state.expandedGroups.has(stackKey);
+    const stackExpanded = stackGroupExpanded(stackKey);
     const stacked = undone.length > STACK_LIMIT;
     if (stacked) {
       undone.slice(0, STACK_LIMIT).forEach(function (item, i) {
@@ -4241,15 +4734,16 @@
     const hasEarlier = !!agendaNearestDate('back');
     const hasLater = !!agendaNearestDate('fwd');
 
-    // 从汇总条进入时，今天已开始的日程不铺进时间线，保证列表条目数与「今天还有 n 项」一致
+    // 从汇总条进入时，今天已经结束的日程不铺进时间线（进行中仍算在内），
+    // 保证列表条目数与「今天还有 n 项」一致
     const clock = new Date();
     const nowMinutes = clock.getHours() * 60 + clock.getMinutes();
     const byDate = {};
     expandOccurrences(visibleItems, start, end).forEach(function (item) {
+      // 只看还没结束的日程：进行中也算「待处理」，结束时间过了才收起
       if (agendaPendingOnly && item.date === t && item.type === 'event' && item.time) {
-        const parts = String(item.time).split(':');
-        const startMinutes = (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
-        if (startMinutes <= nowMinutes) return;
+        const span = itemTimeSpan(item);
+        if (span && span.end < nowMinutes) return;
       }
       if (!byDate[item.date]) byDate[item.date] = [];
       byDate[item.date].push(item);
@@ -4373,7 +4867,7 @@
       overdue ? 'overdue' : '',
       item.priority === 'high' ? 'high' : ''
     ].filter(Boolean).join(' ');
-    const aria = item.title + ' · ' + (item.time || T('全天')) + (item.done ? ' · ' + T('已完成') : '');
+    const aria = item.title + ' · ' + (item.time ? itemTimeLabel(item) : T('全天')) + (item.done ? ' · ' + T('已完成') : '');
     // 列很窄，只放色块 + 标题前两个字；完整标题留给点击后的详情
     const mark = Array.from(String(item.title).trim()).slice(0, 2).join('');
     return '<button class="' + cls + '" type="button" data-id="' + item.id +
@@ -6982,6 +7476,7 @@
     type: 'event',
     date: '',
     time: '09:00',
+    endTime: '',
     categoryId: null,
     recurrence: null,
     note: '',
@@ -7036,6 +7531,8 @@
   }
 
   function syncDateChip() {
+    // 胶囊打开时间与日记日期无关，面板只在确定时写回胶囊
+    if (dateSheet.target === 'capsule') return;
     if (dateSheet.target === 'countdown') {
       $('#cdDate').value = activeDateDraft().date;
       syncCdDateChip();
@@ -7053,8 +7550,10 @@
     if (!el) return;
     const key = draft.date || todayKey();
     const label = relativeDayLabel(key);
-    setChipText(el, draft.time ? label + ' ' + draft.time : label + ' · ' + T('全天'));
+    // 日期胶囊只说日期，时间交给旁边两颗时间胶囊，避免两个时间入口
+    setChipText(el, draft.time ? label : label + ' · ' + T('全天'));
     el.classList.add('active');
+    syncTimePills();
   }
 
   function renderRepTypeChips() {
@@ -7320,7 +7819,7 @@
       ? (categoryGlyphHTML(cat) + '<span style="color:' + cat.color + '">' + esc(cat.name) + '</span>')
       : esc(T('未分类'));
     const rows = [
-      ['日期时间', monthDay(inst.date) + ' · ' + weekdayOf(inst.date) + ' · ' + (inst.time || T('全天'))],
+      ['日期时间', monthDay(inst.date) + ' · ' + weekdayOf(inst.date) + ' · ' + (inst.time ? itemTimeLabel(inst) : T('全天'))],
       ['分类', catCell, 'html']
     ];
     const foldRows = [
@@ -7751,11 +8250,15 @@
     month: 0,
     lastTime: '09:00',
     syncing: false,
-    target: 'item'   // 'item' 条目 / 'plan' 计划
+    target: 'item',   // 'item' 条目 / 'plan' 计划
+    which: 'date',    // 条目下：'date' 只选日期 / 'start' 开始时间 / 'end' 结束时间
+    endDraft: ''      // 结束时间面板的临时值，点「完成」才写回
   };
 
   let dateCloseTimer = null;
   let cdDateDraft = null;
+  // 胶囊打开时间在面板里的临时草稿：点「确定」才写回胶囊
+  let capsuleDateDraft = null;
   const DP_ITEM_H = 40;
 
   // 日期面板既服务条目，也服务计划与倒数日；对外只暴露当前正在编辑的对象
@@ -7763,6 +8266,11 @@
     if (dateSheet.target === 'countdown') {
       if (!cdDateDraft) cdDateDraft = { date: todayKey(), time: '' };
       return cdDateDraft;
+    }
+    // 胶囊打开时间复用同一面板：只借它的日期与时间，不碰日记/行程草稿
+    if (dateSheet.target === 'capsule') {
+      if (!capsuleDateDraft) capsuleDateDraft = { date: todayKey(), time: '' };
+      return capsuleDateDraft;
     }
     return dateSheet.target === 'plan' ? planDraft : draft;
   }
@@ -7778,6 +8286,9 @@
     if (!grid) return;
     const t = todayKey();
     const selected = activeDateDraft().date || t;
+    const capsule = dateSheet.target === 'capsule';
+    const minKey = capsule ? dateKey(new Date(capsuleMinuteStart(Date.now()))) : '';
+    const maxKey = capsule ? dateKey(new Date(capsuleMaxOpenAt())) : '';
     let html = '';
     buildMonthGrid(dateSheet.year, dateSheet.month).forEach(function (key) {
       const d = keyToDate(key);
@@ -7785,8 +8296,11 @@
       if (d.getMonth() !== dateSheet.month) cls.push('other');
       if (key === t) cls.push('today');
       if (key === selected) cls.push('selected');
-      html += '<button class="' + cls.join(' ') + '" type="button" data-dp-key="' + key + '">' +
-        d.getDate() + '</button>';
+      // 胶囊：最早当前这一天，最晚当前 + 10 年，越界日期直接点不动
+      const disabled = capsule && (key < minKey || key > maxKey);
+      if (disabled) cls.push('disabled');
+      html += '<button class="' + cls.join(' ') + '" type="button" data-dp-key="' + key + '"' +
+        (disabled ? ' disabled' : '') + '>' + d.getDate() + '</button>';
     });
     grid.innerHTML = html;
   }
@@ -7872,12 +8386,54 @@
   }
 
   function syncDpNoTime() {
-    const off = !activeDateDraft().time;
+    const endMode = dateSheet.target === 'item' && dateSheet.which === 'end';
+    const off = dateSheet.target !== 'capsule' && !endMode && !activeDateDraft().time;
     const wheels = $('#dpWheels');
     const btn = $('#dpNoTime');
     if (wheels) wheels.classList.toggle('off', off);
-    if (btn) btn.textContent = off ? T('设置时间') : T('不设时间');
+    if (btn) {
+      if (endMode) btn.textContent = T('清除结束时间');
+      else if (off) btn.textContent = T('设置时间');
+      else btn.textContent = T(dateSheet.target === 'item' ? '设为全天' : '不设时间');
+    }
     if (off) $$('.wheel-item').forEach(function (item) { item.classList.remove('active'); });
+  }
+
+  // 编辑器里的两颗时间胶囊：全天条目（没有开始时间）整行隐藏
+  function syncTimePills() {
+    const wrap = $('#timePills');
+    if (!wrap) return;
+    const hasTime = !!draft.time;
+    wrap.hidden = !hasTime;
+    if (!hasTime) return;
+    const startPill = $('#startTimePill');
+    const endPill = $('#endTimePill');
+    setChipText(startPill, draft.time);
+    setChipText(endPill, draft.endTime || T('结束时间'));
+    if (endPill) endPill.classList.toggle('empty', !draft.endTime);
+    if (startPill) startPill.setAttribute('aria-label', T('开始时间') + ' ' + draft.time);
+    if (endPill) endPill.setAttribute('aria-label', T('结束时间') + ' ' + (draft.endTime || ''));
+  }
+
+  // 开始时间被改到结束时间之后：自动清掉结束时间，退回「不定长」
+  function guardDpEndTime() {
+    const subject = activeDateDraft();
+    if (dateSheet.target !== 'item' || !subject.endTime) return;
+    if (!subject.time || subject.endTime <= subject.time) {
+      subject.endTime = '';
+      if (!dateSheet.endWarned) {
+        dateSheet.endWarned = true;
+        showToast(T('结束时间不能早于开始时间，已清除'));
+      }
+    }
+  }
+
+  // 结束时间的建议值：开始时间 + 1 小时，最晚 23:59
+  function suggestEndTime(start) {
+    const parsed = parseDpTime(start);
+    if (!parsed) return '';
+    const total = Math.min(23 * 60 + 59, parsed.h * 60 + parsed.m + 60);
+    return pad2(Math.floor(total / 60)) + ':' + pad2(total % 60);
   }
 
   function applyDpWheelTime() {
@@ -7885,47 +8441,111 @@
     const hourEl = $('#wheelHour');
     const minuteEl = $('#wheelMinute');
     if (!hourEl || !minuteEl) return;
-    activeDateDraft().time = pad2(dpWheelIndex(hourEl)) + ':' + pad2(dpWheelIndex(minuteEl));
+    const value = pad2(dpWheelIndex(hourEl)) + ':' + pad2(dpWheelIndex(minuteEl));
     markDpWheel(hourEl);
     markDpWheel(minuteEl);
+    if (dateSheet.target === 'item' && dateSheet.which === 'end') {
+      // 结束时间先落在草稿里，点「完成」才写回条目，取消不会留下半截区间
+      dateSheet.endDraft = value;
+      return;
+    }
+    activeDateDraft().time = value;
+    if (dateSheet.target === 'capsule') {
+      // 胶囊只关心日期 + 时间，滚轮停止即更新面板内的临时值
+      return;
+    }
+    guardDpEndTime();
     syncDpNoTime();
+    syncTimePills();
     syncDateChip();
   }
 
-  function openDateSheet(target) {
-    dateSheet.target = target === 'plan' ? 'plan' : (target === 'countdown' ? 'countdown' : 'item');
+  // 日期面板在条目下分三种形态：只选日期 / 只选开始时间 / 只选结束时间
+  function setDpMode(mode) {
+    const sheet = $('#dateSheet');
+    const timeWrap = sheet ? sheet.querySelector('.dp-time') : null;
+    const title = $('#dateSheetTitle');
+    const timeTitle = sheet ? sheet.querySelector('.dp-time-title') : null;
+    const noTime = $('#dpNoTime');
+    const capsule = mode === 'capsule';
+    const timeOnly = mode === 'start' || mode === 'end';
+    if (sheet) sheet.classList.toggle('time-only', timeOnly);
+    // 选日期时藏起时间滚轮（时间交给胶囊）；胶囊必须同时选日期 + 时间
+    if (timeWrap) {
+      timeWrap.hidden = mode === 'countdown' || (mode === 'date' && !!activeDateDraft().time);
+    }
+    // 胶囊没有「不设时间」这种形态，隐藏入口但保留时间标题
+    if (noTime) noTime.hidden = capsule;
+    if (title) {
+      title.textContent = T(capsule ? '打开时间'
+        : (mode === 'start' ? '开始时间' : (mode === 'end' ? '结束时间' : '选择日期')));
+    }
+    if (timeTitle) {
+      timeTitle.textContent = T(capsule ? '时间'
+        : (mode === 'start' ? '开始时间' : (mode === 'end' ? '结束时间' : '时间')));
+    }
+    if (noTime && !capsule) {
+      noTime.textContent = mode === 'end' ? T('清除结束时间')
+        : (mode === 'start' ? T('设为全天') : T('不设时间'));
+    }
+  }
+
+  function openDateSheet(target, mode) {
+    dateSheet.target = target === 'plan' ? 'plan'
+      : (target === 'countdown' ? 'countdown' : (target === 'capsule' ? 'capsule' : 'item'));
+    dateSheet.which = dateSheet.target === 'item' ? (mode === 'start' || mode === 'end' ? mode : 'date') : 'date';
     if (dateSheet.target === 'countdown') {
       cdDateDraft = { date: $('#cdDate').value || addDays(todayKey(), 30), time: '' };
     }
+    if (dateSheet.target === 'capsule') {
+      const ms = state.capsuleDraft ? capsuleClampOpenAt(state.capsuleDraft.openAt) : capsuleDefaultOpenAt();
+      const cd = new Date(ms);
+      capsuleDateDraft = {
+        date: dateKey(cd),
+        time: pad2(cd.getHours()) + ':' + pad2(cd.getMinutes())
+      };
+    }
     const subject = activeDateDraft();
+    // 结束时间必须有开始时间；23:59 之后当天再没有可用的时刻
+    if (dateSheet.which === 'end') {
+      if (!subject.time) return;
+      if (subject.time === '23:59') {
+        showToast(T('开始时间是 23:59，无法设置结束时间'));
+        return;
+      }
+      dateSheet.endDraft = subject.endTime && subject.endTime > subject.time
+        ? subject.endTime
+        : suggestEndTime(subject.time);
+    }
     const key = subject.date || todayKey();
     const d = keyToDate(key);
     dateSheet.year = d.getFullYear();
     dateSheet.month = d.getMonth();
-    // 倒数日只关心日期，隐藏时间分组，避免出现「不设时间」
-    const timeWrap = $('#dateSheet').querySelector('.dp-time');
-    if (timeWrap) timeWrap.hidden = dateSheet.target === 'countdown';
+    setDpMode(dateSheet.target === 'item' ? dateSheet.which : dateSheet.target);
     renderDatePanel();
 
     buildDpWheel('#wheelHour', 24);
     buildDpWheel('#wheelMinute', 60);
     // 没有已设时间时，滚轮默认停在当前设备时间（而不是 00:00 / 09:00），并居中高亮
     const now = new Date();
-    const parsed = parseDpTime(subject.time) || parseDpTime(dateSheet.lastTime) ||
+    const source = dateSheet.which === 'end' ? dateSheet.endDraft : subject.time;
+    const parsed = parseDpTime(source) || parseDpTime(dateSheet.lastTime) ||
       { h: now.getHours(), m: now.getMinutes() };
-    if (subject.time) dateSheet.lastTime = subject.time;
+    if (dateSheet.which !== 'end' && subject.time) dateSheet.lastTime = subject.time;
 
     clearTimeout(dateCloseTimer);
     $('#dateBackdrop').hidden = false;
     $('#dateSheet').hidden = false;
     dateSheet.open = true;
     dateSheet.syncing = true;
+    dateSheet.endWarned = false;
     requestAnimationFrame(function () {
       $('#dateSheet').classList.add('open');
       $('#dateBackdrop').classList.add('open');
       setDpWheel($('#wheelHour'), parsed.h);
       setDpWheel($('#wheelMinute'), parsed.m);
       syncDpNoTime();
+      syncTimePills();
       setTimeout(function () { dateSheet.syncing = false; }, 260);
     });
   }
@@ -7945,18 +8565,51 @@
 
   function commitDateSheet() {
     const subject = activeDateDraft();
+    // 胶囊：日期 + 时分一起写回打开时间，越界夹取到可用范围
+    if (dateSheet.target === 'capsule') {
+      const picked = capsulePickedOpenAt(subject.date, subject.time);
+      if (picked === null) { closeDateSheet(); return; }
+      applyCapsuleOpenAt(picked);
+      closeDateSheet();
+      return;
+    }
+    if (dateSheet.target === 'item' && dateSheet.which === 'end') {
+      const value = dateSheet.endDraft;
+      // 仍然不允许早于 / 等于开始时间，也不接受跨午夜（HH:MM 同日比较天然排除）
+      if (!value || !subject.time || value <= subject.time) {
+        showToast(T('结束时间要晚于开始时间'));
+        return;
+      }
+      subject.endTime = value;
+      syncTimePills();
+      closeDateSheet();
+      return;
+    }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(subject.date)) subject.date = todayKey();
+    if (dateSheet.target === 'item') guardDpEndTime();
+    syncTimePills();
     syncDateChip();
     closeDateSheet();
   }
 
   function toggleDpNoTime() {
+    // 胶囊必须带时间，没有「不设时间」的开关
+    if (dateSheet.target === 'capsule') return;
     const subject = activeDateDraft();
+    // 结束时间面板里的按钮是「清除结束时间」，清完直接收起
+    if (dateSheet.target === 'item' && dateSheet.which === 'end') {
+      subject.endTime = '';
+      syncTimePills();
+      closeDateSheet();
+      return;
+    }
     if (subject.time) {
       dateSheet.lastTime = subject.time;
       subject.time = '';
+      subject.endTime = '';
     } else {
-      const restored = parseDpTime(dateSheet.lastTime) || { h: 9, m: 0 };
+      const now = new Date();
+      const restored = parseDpTime(dateSheet.lastTime) || { h: now.getHours(), m: now.getMinutes() };
       subject.time = pad2(restored.h) + ':' + pad2(restored.m);
       dateSheet.syncing = true;
       setDpWheel($('#wheelHour'), restored.h);
@@ -7964,6 +8617,7 @@
       setTimeout(function () { dateSheet.syncing = false; }, 200);
     }
     syncDpNoTime();
+    syncTimePills();
     syncDateChip();
   }
 
@@ -8001,6 +8655,7 @@
     // 新建条目默认用当前设备时间，与时间滚轮的默认位置一致
     const nowClock = new Date();
     draft.time = pad2(nowClock.getHours()) + ':' + pad2(nowClock.getMinutes());
+    draft.endTime = '';
 
     // 只筛了一个分类时，新条目默认归到它，省一步
     draft.categoryId = agendaPageOpen() && state.agendaFilters.length === 1 &&
@@ -8018,6 +8673,7 @@
     const body = $('#sheetBody');
     if (body) body.scrollTop = 0;
     dateSheet.target = 'item';
+    dateSheet.which = 'date';
     syncTypeChips();
     syncDateChip();
     syncRepeatChip();
@@ -8045,6 +8701,7 @@
     draft.type = base.type;
     draft.date = base.date;
     draft.time = (base.recurrence && base.recurrence.time) || base.time || '';
+    draft.endTime = base.endTime || '';
     draft.categoryId = getCategory(base.categoryId) ? base.categoryId : null;
     draft.recurrence = base.recurrence ? JSON.parse(JSON.stringify(base.recurrence)) : null;
     draft.note = base.note || '';
@@ -8061,6 +8718,7 @@
     const body = $('#sheetBody');
     if (body) body.scrollTop = 0;
     dateSheet.target = 'item';
+    dateSheet.which = 'date';
     syncTypeChips();
     syncDateChip();
     syncRepeatChip();
@@ -8116,6 +8774,7 @@
       title: title,
       date: date,
       time: draft.time || null,
+      endTime: draft.time ? (draft.endTime || null) : null,
       priority: draft.priority ? 'high' : 'normal',
       done: base ? !!base.done : false,
       doneAt: base ? (base.doneAt || null) : null,
@@ -8644,6 +9303,7 @@
   // 行程 / 计划 / 爱心各一份确认指纹；天气改为「上次确认时间戳 + 3 小时冷却」
   const SMART_TIP_ACK_FIELD = {
     trip: 'smartTipAckTrip',
+    overlap: 'smartTipAckOverlap',
     plan: 'smartTipAckPlan',
     love: 'smartTipAckLove',
     festival: 'smartTipAckFestival',
@@ -8653,11 +9313,13 @@
     overdue: 'smartTipAckOverdue'
   };
   const SMART_TIP_WEATHER_COOLDOWN_MS = 3 * 60 * 60 * 1000;
-  // 爱心横幅：今天日程条数达到这个数就提醒注意休息（条目没有结束时间，只能按条数算）
+  // 爱心横幅：今天日程条数达到这个数就提醒注意休息（按条数算，不看时长）
   const SMART_TIP_LOVE_MIN_EVENTS = 5;
   const SMART_TIP_OVERDUE_MIN = 3;
   const SMART_TIP_ICON_TRIP = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2"/>' +
     '<path d="M12 7.6V12h3.9"/></svg>';
+  const SMART_TIP_ICON_OVERLAP = '<svg viewBox="0 0 24 24"><circle cx="9.4" cy="12" r="5"/>' +
+    '<circle cx="14.6" cy="12" r="5"/></svg>';
   const SMART_TIP_ICON_PLAN = '<svg viewBox="0 0 24 24"><path d="M6 4.8h12v14.4H6z"/>' +
     '<path d="M9 9h6M9 12.6h4"/></svg>';
   const SMART_TIP_ICON_LOVE = '<svg viewBox="0 0 24 24"><path d="M12 20.1S4.9 15.6 4.9 10.7A4.2 4.2 0 0 1 12 7.7a4.2 4.2 0 0 1 7.1 3c0 4.9-7.1 9.4-7.1 9.4z"/></svg>';
@@ -8678,7 +9340,7 @@
     rain: [
       '可能下雨，出门记得带伞',
       '有降雨的可能，带把伞更稳妥',
-      '今天可能下雨，路上慢一点',
+      '可能下雨，路上慢一点',
       '雨水可能在路上，出门备好雨具'
     ],
     snow: [
@@ -8696,37 +9358,37 @@
     hot: [
       '气温较高，注意补充水分',
       '天气偏热，记得多喝水',
-      '今天有点热，别在太阳下待太久',
+      '有点热，别在太阳下待太久',
       '气温不低，注意防暑降温'
     ],
     cold: [
       '气温偏低，出门注意保暖',
       '天气偏冷，记得多穿一件',
-      '今天有点冷，注意别着凉',
+      '有点冷，注意别着凉',
       '气温不高，出门把自己裹暖些'
     ],
     wind: [
       '风比较大，出门留意防风',
-      '今天风不小，注意别被吹乱行程',
+      '风不小，注意别被吹乱行程',
       '风力偏大，出门带件防风外套',
       '风有点大，走路骑车都慢一些'
     ],
     sunny: [
       '天气不错，适合出门走走',
-      '今天放晴，安排点户外活动吧',
+      '放晴了，安排点户外活动吧',
       '阳光正好，别辜负好天气',
       '天晴了，出门透透气'
     ],
     cloudy: [
       '云层较厚，出门也留意天色',
-      '今天多云，随身看一眼天气更安心',
+      '多云，随身看一眼天气更安心',
       '天色偏阴，出门记得留意变化',
       '云有点多，带把伞也不碍事'
     ],
     fallback: [
       '出门前看一眼天气，安排会更从容',
       '天气可能有变化，出门前再确认一下',
-      '今天天色不太确定，备好再出门',
+      '天色不太确定，备好再出门',
       '出门前扫一眼天气，心里更有底'
     ]
   };
@@ -8744,6 +9406,11 @@
       '行程 · {n} 分钟后是 {title}，可以准备出发了'
     ]
   };
+  const SMART_TIP_OVERLAP_VARIANTS = [
+    '时间重叠 · {a} 与 {b} 的时间有冲突',
+    '时间重叠 · {a} 和 {b} 撞在一起了，看看怎么安排',
+    '时间重叠 · {a} 与 {b} 有重合，要不要错开一下'
+  ];
   const SMART_TIP_PLAN_VARIANTS = [
     '{title} 快到期限了',
     '{title} 记得安排时间收尾',
@@ -8840,8 +9507,12 @@
   }
 
   // 判定优先级：降水 > 紫外线 > 高温 > 低温 > 大风 > 晴/云兜底
-  // 阈值：降水概率 ≥ 50%；UV ≥ 6（10:00–16:00 正午时段放宽到 ≥ 3）；
-  //       高温 ≥ 33°；低温 ≤ 4°；大风 ≥ 30 km/h
+  // 阈值：降水概率 ≥ 50%；UV ≥ 6（10:00–16:00 放宽到 ≥ 3）；高温 ≥ 33°；
+  //       低温 ≤ 4°；大风 ≥ 30 km/h
+  // 时间口径：天气数据里的 UV 是当天峰值、高温是当天最高温，只有白天才有意义。
+  //   UV 仅在 09:00–17:00 参与判定（窗口外日落后不再提示防晒）；
+  //   高温在 18:00 之后不再提示防暑；低温不分时段，夜里降温提醒仍有效。
+  //   21:00 起用明日天气时，UV / 高温都对应明天白天，不受当前时刻限制。
   function smartTipWeatherKind(day) {
     const code = Number(day.code);
     // 老缓存可能没有新字段：null / undefined 一律按 NaN 处理，避免误判成 0°
@@ -8852,13 +9523,16 @@
     const min = num(day.min);
     const wind = num(day.wind);
     const hour = new Date().getHours();
+    const tomorrow = !!day.tomorrow;
+    const uvWindow = tomorrow || (hour >= 9 && hour < 17);
     const noon = hour >= 10 && hour < 16;
+    const hotWindow = tomorrow || hour < 18;
     const snow = (code >= 71 && code <= 77) || code === 85 || code === 86;
     const wet = code >= 51 || (isFinite(pop) && pop >= 50);
 
     if (wet) return snow ? 'snow' : 'rain';
-    if (isFinite(uv) && (uv >= 6 || (noon && uv >= 3))) return 'uv';
-    if (isFinite(max) && max >= 33) return 'hot';
+    if (uvWindow && isFinite(uv) && (uv >= 6 || (noon && uv >= 3))) return 'uv';
+    if (hotWindow && isFinite(max) && max >= 33) return 'hot';
     if (isFinite(min) && min <= 4) return 'cold';
     if (isFinite(wind) && wind >= 30) return 'wind';
     if (code === 0 || code === 1) return 'sunny';
@@ -8888,24 +9562,27 @@
     };
   }
 
-  // 行程：只看今天带时间的未完成条目。开始前 60 分钟到开始后 60 分钟内提示；
-  // 「进行中」按开始后 60 分钟内算（条目没有结束时间，统一按一小时时段处理）。
+  // 行程：只看今天带时间的未完成条目。开始前 60 分钟内提示；
+  // 「进行中」按真实区间判断（开始 ≤ 现在 ≤ 结束），没有结束时间的条目按开始 + 60 分钟兜底。
   const SMART_TIP_TRIP_WINDOW = 60;
   function smartTipTripCandidate(now) {
     const key = todayKey();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
     let best = null;
     expandOccurrences(state.items, key, key).forEach(function (item) {
       if (!item.time || item.done) return;
-      const parts = item.time.split(':');
-      const start = keyToDate(key);
-      start.setHours(Number(parts[0]) || 0, Number(parts[1]) || 0, 0, 0);
-      const mins = Math.round((start.getTime() - now.getTime()) / 60000);
-      if (mins > SMART_TIP_TRIP_WINDOW || mins < -SMART_TIP_TRIP_WINDOW) return;
-      const urgency = Math.max(0, mins);
+      const span = itemTimeSpan(item);
+      if (!span) return;
+      const mins = span.start - nowMin;
+      if (mins > SMART_TIP_TRIP_WINDOW) return;
+      const ongoing = itemIsOngoing(item, nowMin);
+      // 结束时间已经过去（或兜底时段已过）就不再提示
+      if (!ongoing && nowMin > span.end) return;
+      const urgency = ongoing ? 0 : Math.max(0, mins);
       if (best && best.urgency <= urgency) return;
-      const sig = 'trip|' + item.id + '|' + key + '|' + item.time + '|' + item.title;
-      const variants = mins <= 0 ? SMART_TIP_TRIP_VARIANTS.now : SMART_TIP_TRIP_VARIANTS.soon;
-      const params = mins <= 0 ? { title: item.title } : { title: item.title, n: mins };
+      const sig = 'trip|' + item.id + '|' + key + '|' + item.time + '|' + (item.endTime || '') + '|' + item.title;
+      const variants = ongoing ? SMART_TIP_TRIP_VARIANTS.now : SMART_TIP_TRIP_VARIANTS.soon;
+      const params = ongoing ? { title: item.title } : { title: item.title, n: mins };
       best = {
         type: 'trip',
         // 换行程（不同条目 / 日期 / 时间 / 标题）就是新指纹
@@ -8917,6 +9594,48 @@
       };
     });
     return best;
+  }
+
+  // 时间重叠：今天、未完成、有具体时间的条目两两比对区间，有交集就算冲突。
+  // 没有结束时间的条目按「开始 + 60 分钟」兜底（与进行中判定同一口径）。
+  // 多条冲突只报开始最早的那一对；指纹含两条 id、日期和各自时间，
+  // 任一条被改动（时间变了）或完成后会换指纹 / 不再进入候选，可以重新提醒。
+  function smartTipOverlapCandidate() {
+    const key = todayKey();
+    const list = expandOccurrences(state.items, key, key)
+      .filter(function (item) { return item.time && !item.done; })
+      .map(function (item) {
+        const span = itemTimeSpan(item);
+        return { item: item, start: span.start, end: span.end };
+      })
+      .sort(function (a, b) {
+        if (a.start !== b.start) return a.start - b.start;
+        return (a.item.createdAt || 0) - (b.item.createdAt || 0);
+      });
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        // 按开始时间升序：后面的开始已经不在 i 的区间内，再往后更不可能重叠
+        if (list[j].start >= list[i].end) break;
+        const a = list[i];
+        const b = list[j];
+        if (!(a.start < b.end && b.start < a.end)) continue;
+        const sig = 'overlap|' + key +
+          '|' + a.item.id + '|' + a.item.time + '|' + (a.item.endTime || '') +
+          '|' + b.item.id + '|' + b.item.time + '|' + (b.item.endTime || '');
+        return {
+          type: 'overlap',
+          sig: sig,
+          text: smartTipVariantText('overlap|' + sig, SMART_TIP_OVERLAP_VARIANTS, {
+            a: a.item.title,
+            b: b.item.title
+          }),
+          urgency: 0,
+          tone: 'overlap',
+          icon: SMART_TIP_ICON_OVERLAP
+        };
+      }
+    }
+    return null;
   }
 
   // 计划：只看未完成的计划，且周期结束日落在今天或明天（即「最后两天」）。
@@ -9065,11 +9784,11 @@
     return smartTipAcked(candidate) || !!smartTipDismissed[candidate.sig];
   }
 
-  // 优先级：节日（最高）> 行程 / 计划（按紧迫度）> 最后行程完成 > 深夜 > 日记收尾
+  // 优先级：节日（最高）> 时间重叠 > 行程 / 计划（按紧迫度）> 最后行程完成 > 深夜 > 日记收尾
   //        > 爱心 > 周计划过期 > 天气。
-  // 理由：节日一年一次，先问候；行程 / 计划有时效性；三条「刚发生」的提醒
-  // （收尾、深夜、写完日记）拖久了就失去意义，所以排在持续状态类前面；
-  // 爱心和过期计划是持续状态，可以等；天气几乎总有候选，放最后。
+  // 理由：节日一年一次，先问候；时间重叠说明安排本身有问题，比单条行程更要紧；
+  // 行程 / 计划有时效性；三条「刚发生」的提醒（收尾、深夜、写完日记）拖久了就失去意义，
+  // 所以排在持续状态类前面；爱心和过期计划是持续状态，可以等；天气几乎总有候选，放最后。
   function smartTipPick() {
     if (!smartTipEnabled()) return null;
     const urgent = [];
@@ -9078,7 +9797,7 @@
     if (trip) urgent.push(trip);
     if (plan) urgent.push(plan);
     urgent.sort(function (a, b) { return a.urgency - b.urgency; });
-    const ordered = [smartTipFestivalCandidate()].filter(Boolean).concat(
+    const ordered = [smartTipFestivalCandidate(), smartTipOverlapCandidate()].filter(Boolean).concat(
       urgent,
       [smartTipRestCandidate()].filter(Boolean),
       [smartTipNightCandidate()].filter(Boolean),
@@ -10347,6 +11066,10 @@
       state.diary.forEach(function (entry) {
         (entry.attachments || []).forEach(function (meta) { metaList.push(meta); });
       });
+      // 时间胶囊的附件一并打包，attachments/ 目录对所有附件一视同仁
+      state.capsules.forEach(function (c) {
+        (c.attachments || []).forEach(function (meta) { metaList.push(meta); });
+      });
       const withFiles = !!includeFiles && storage.status === 'idb' && metaList.length > 0;
       const attachmentsSkipped = !!includeFiles && !withFiles;
       const noAttachmentsAtAll = !!includeFiles && storage.status === 'idb' && metaList.length === 0;
@@ -10358,7 +11081,7 @@
         schema: 'aeroplan-backup',
         manifest: {
           formatVersion: 2,
-          schemaVersion: 10,
+          schemaVersion: 11,
           appVersion: APP_VERSION,
           createdAt: new Date().toISOString(),
           includeAttachments: withFiles,
@@ -10369,6 +11092,7 @@
             countdowns: state.countdowns.length,
             categories: state.categories.length,
             diary: state.diary.length,
+            capsules: state.capsules.length,
             moods: customMoods().length
           },
           encrypted: false
@@ -10386,6 +11110,8 @@
         countdowns: state.countdowns,
         moods: customMoods(),
         diary: state.diary,
+        // 时间胶囊连同 sealed / openAt / openedAt 原样写入，导入后开关状态不变
+        capsules: state.capsules,
         consent: state.meta.consent || null
       };
 
@@ -10551,6 +11277,8 @@
     const rawPlans = !isArrayFile && data && Array.isArray(data.plans) ? data.plans : [];
     const cleanedPlans = rawPlans.map(normalizePlan).filter(Boolean);
     const cleanedDiary = rawDiary.map(normalizeDiary).filter(Boolean);
+    const rawCapsules = !isArrayFile && Array.isArray(data.capsules) ? data.capsules : [];
+    const cleanedCapsules = rawCapsules.map(normalizeCapsule).filter(Boolean);
     const rawCountdowns = !isArrayFile && Array.isArray(data.countdowns) ? data.countdowns : [];
     const cleanedCountdowns = rawCountdowns.map(normalizeCountdown).filter(Boolean);
     const rawMoods = !isArrayFile && Array.isArray(data.moods) ? data.moods : [];
@@ -10571,7 +11299,8 @@
     });
 
     // 倒数日也算有效内容，避免「只有倒数日」的备份被判成空文件
-    const hasAnyContent = cleaned.length || cleanedPlans.length || cleanedDiary.length || cleanedCountdowns.length;
+    const hasAnyContent = cleaned.length || cleanedPlans.length || cleanedDiary.length ||
+      cleanedCountdowns.length || cleanedCapsules.length;
     if (!hasAnyContent) {
       showToast(T('导入失败：没有可识别的条目'));
       return;
@@ -10597,6 +11326,8 @@
       categories: cleanedCats,
       plans: cleanedPlans,
       diary: cleanedDiary,
+      capsules: cleanedCapsules,
+      hasCapsules: !isArrayFile && !!data && Array.isArray(data.capsules),
       diaryFiles: rawDiaryFiles,
       hasDiary: hasDiary,
       includeAttachments: includeAttachments,
@@ -10628,6 +11359,7 @@
         plans: ' · <b>' + cleanedPlans.length + '</b> plans',
         cats: ' · <b>' + cleanedCats.length + '</b> categories',
         diary: ' · <b>' + cleanedDiary.length + '</b> diary entries',
+        capsules: ' · <b>' + cleanedCapsules.length + '</b> time capsules',
         files: includeAttachments ? ' (with attachments)' : '',
         skipped: ' (skipped ' + skipped + ' invalid records)',
         merge: 'Added ' + added + ' · updated ' + updated + ' with the same ID',
@@ -10639,6 +11371,7 @@
         plans: ' · <b>' + cleanedPlans.length + '</b> 条计划',
         cats: ' · <b>' + cleanedCats.length + '</b> 个分类',
         diary: ' · <b>' + cleanedDiary.length + '</b> 篇日记',
+        capsules: ' · <b>' + cleanedCapsules.length + '</b> 枚时间胶囊',
         files: includeAttachments ? '（含附件）' : '',
         skipped: '（忽略 ' + skipped + ' 条无效记录）',
         merge: '新增 ' + added + ' 条 · 更新同 ID ' + updated + ' 条',
@@ -10651,6 +11384,7 @@
       (cleanedPlans.length ? summaryBits.plans : '') +
       (cleanedCats.length ? summaryBits.cats : '') +
       (cleanedDiary.length ? summaryBits.diary + summaryBits.files : '') +
+      (cleanedCapsules.length ? summaryBits.capsules : '') +
       (skipped ? summaryBits.skipped : '') +
       '<br><span class="muted">' + summaryBits.merge +
       (cleanedCats.length ? summaryBits.merged : summaryBits.uncat) + '</span>';
@@ -10731,6 +11465,29 @@
       if (pendingImport.hasMoods) state.meta.moods = pendingImport.moods.slice();
       if (pendingImport.cardStyle) state.meta.cardStyle = pendingImport.cardStyle;
       if (pendingImport.progressStyle) state.meta.progressStyle = pendingImport.progressStyle;
+      // 时间胶囊：替换时整仓替换，sealed / openAt / openedAt 全部按备份还原
+      if (pendingImport.hasCapsules) {
+        const oldCapsuleFiles = [];
+        state.capsules.forEach(function (c) {
+          (c.attachments || []).forEach(function (a) { oldCapsuleFiles.push(a.id); });
+        });
+        await capsuleClearAll();
+        const keepCapsuleFiles = new Set();
+        pendingImport.capsules.forEach(function (c) {
+          (c.attachments || []).forEach(function (a) { keepCapsuleFiles.add(a.id); });
+        });
+        for (let i = 0; i < pendingImport.capsules.length; i++) {
+          await capsuleWriteRaw(pendingImport.capsules[i]);
+        }
+        if (oldCapsuleFiles.length && storage.status === 'idb') {
+          const orphanCaps = oldCapsuleFiles.filter(function (id) {
+            return !keepCapsuleFiles.has(id);
+          });
+          if (orphanCaps.length) {
+            try { await diaryFileDelete(orphanCaps); } catch (err) { console.warn('清理旧胶囊附件失败：', err); }
+          }
+        }
+      }
       // 旧备份没有 diary：替换时保持本机日记不动，避免「用旧备份覆盖」时误删日记
       if (pendingImport.hasDiary) {
         // 被替换掉的旧日记，如果它的附件不再被新数据引用，一并清掉，避免 Blob 泄漏
@@ -10789,6 +11546,12 @@
         state.diary.forEach(function (e) { diaryMap.set(e.date, e); });
         pendingImport.diary.forEach(function (e) { diaryMap.set(e.date, Object.assign({}, e)); });
         state.diary = Array.from(diaryMap.values());
+      }
+      // 胶囊按 id 合并：同 id 以导入的为准，封存状态与打开时间原样保留
+      if (pendingImport.hasCapsules) {
+        for (let i = 0; i < pendingImport.capsules.length; i++) {
+          await capsuleWriteRaw(pendingImport.capsules[i]);
+        }
       }
     }
 
@@ -10916,6 +11679,21 @@
     }
     try { await diaryFileClear(); } catch (err) { console.warn('清空日记附件失败：', err); }
 
+    // 时间胶囊同样整仓清空：封存记录、草稿与阅读页都不留残余
+    clearTimeout(capsuleSaveTimer);
+    state.capsuleDraft = null;
+    state.capsuleEditorOpen = false;
+    state.capsuleAttachBusy = false;
+    state.capsuleAttachProgress = null;
+    closeCapsuleDetail();
+    closeCapsuleHistory();
+    const capsuleEditorEl = $('#capsuleEditor');
+    if (capsuleEditorEl) {
+      capsuleEditorEl.classList.remove('open');
+      capsuleEditorEl.hidden = true;
+    }
+    try { await capsuleClearAll(); } catch (err) { console.warn('清空时间胶囊失败：', err); }
+
     // 整体重置 meta：语言、主题、农历、备份记录、天气城市和同意记录全部回到出厂状态。
     // 界面随后按默认值重新渲染。
     state.meta = { samplesCleared: true };
@@ -10936,6 +11714,7 @@
     state.planEditingId = '';
     state.openDoneGroups.clear();
     state.expandedGroups.clear();
+    state.collapsedGroups.clear();
     // 批量选择状态一并清空，避免清空数据后仍残留勾选
     state.batchMode = false;
     state.batchSel = new Set();
@@ -11268,6 +12047,9 @@
       }
       if (handleSwipeClick(e)) return;
       if (state.swipeLock && Date.now() < state.swipeLock) return;
+      // 今天这一组的日期级组头：整组收起 / 展开（本次会话内保持）
+      const groupToggle = e.target.closest('[data-group-toggle]');
+      if (groupToggle) { toggleFlatGroup(groupToggle.dataset.groupToggle); return; }
       // 黄历卡片下方的「那天写了什么」入口：直接打开该日全文
       const diaryEntry = e.target.closest('[data-diary-open]');
       if (diaryEntry) { if (diaryEntry.tagName !== 'SECTION' && !diaryEntry.closest('#diaryBody')) openDiaryDetail(diaryEntry.dataset.diaryOpen); return; }
@@ -11304,7 +12086,9 @@
 
     $('#repeatChip').addEventListener('click', openRepSheet);
 
-    $('#dateChip').addEventListener('click', openDateSheet);
+    $('#dateChip').addEventListener('click', function () { openDateSheet('item', 'date'); });
+    $('#startTimePill').addEventListener('click', function () { openDateSheet('item', 'start'); });
+    $('#endTimePill').addEventListener('click', function () { openDateSheet('item', 'end'); });
     $('#dateSheetClose').addEventListener('click', closeDateSheet);
     $('#dateBackdrop').addEventListener('click', closeDateSheet);
     $('#dpDone').addEventListener('click', commitDateSheet);
@@ -12303,6 +13087,7 @@
     if (!$('#tripTagsPage').hidden) { closeTripTagsPage(); return true; }
     if (!$('#moodPage').hidden) { closeMoodPage(); return true; }
     if (!$('#countdownPage').hidden) { closeCountdownPage(); return true; }
+    if (!$('#capsuleHistoryPage').hidden) { closeCapsuleHistory(); return true; }
     if (!$('#agendaPage').hidden) { closeAgenda(); return true; }
     if (!$('#catPop').hidden) { closeCatPop(); return true; }
     if (!$('#modalCard').hidden) { closeModal(); return true; }
@@ -12311,6 +13096,8 @@
     // 边缘返回先关预览，不能越过它把下面的详情页或写作页退掉。
     if (!$('#diaryViewer').hidden) { closeDiaryViewer(); return true; }
     if (!$('#diaryDetailPage').hidden) { closeDiaryDetail(); return true; }
+    if (!$('#capsuleDetailPage').hidden) { closeCapsuleDetail(); return true; }
+    if (state.capsuleEditorOpen) { closeCapsuleEditor(); return true; }
     if (!$('#attachSheet').hidden) { closeAttachSheet(); return true; }
     if (!$('#exportSheet').hidden) { closeExportSheet(); return true; }
     if (state.diaryEditorOpen) { closeDiaryEditor(true); return true; }
@@ -13958,6 +14745,9 @@
       html += '<button class="diary-chip' + (active ? ' active' : '') + '" type="button"' +
         ' data-diary-filter="' + pair[0] + '" aria-pressed="' + active + '">' + esc(T(pair[1])) + '</button>';
     });
+    // 时间胶囊入口常驻：不因已有未开启胶囊而隐藏或替换
+    html += '<button class="diary-chip capsule-entry-chip" id="diaryCapsuleBtn" type="button">' +
+      esc(T('时间胶囊')) + '</button>';
     if (keys.length || state.diaryMonth) {
       html += '<span class="diary-month-wrap">' +
         '<button class="diary-month" id="diaryMonthBtn" type="button" aria-haspopup="listbox"' +
@@ -13996,6 +14786,14 @@
     renderDiaryChips();
     syncDiaryWriteButton();
     syncDiaryManageBar();
+    // 到点的时间胶囊：与入口胶囊并存，可同时出现多张
+    renderCapsuleDue();
+    // 内存快照可能滞后（多端 / 旧数据形态），渲染后向 IndexedDB 复核一次
+    if (typeof capsuleSyncFromStore === 'function') {
+      capsuleSyncFromStore().catch(function (err) {
+        console.warn('[胶囊] 同步失败：', err);
+      });
+    }
     // 倒数日横滑条：位于日记页搜索栏下方、日记列表之上
     renderCountdownStrip();
 
@@ -15183,8 +15981,10 @@
   }
 
   function openAttachSheet() {
-    if (state.diaryAttachBlocked) { showToast(state.diaryAttachBlocked); return; }
-    if (state.diaryAttachBusy) return;
+    const cap = state.capsuleEditorOpen;
+    const blocked = cap ? state.capsuleAttachBlocked : state.diaryAttachBlocked;
+    if (blocked) { showToast(blocked); return; }
+    if (cap ? state.capsuleAttachBusy : state.diaryAttachBusy) return;
     const sheet = $('#attachSheet');
     const back = $('#attachSheetBackdrop');
     back.hidden = false;
@@ -15203,6 +16003,577 @@
     back.classList.remove('open');
     sheet.hidden = true;
     back.hidden = true;
+  }
+
+  // ==================== 时间胶囊：界面 ====================
+  let capsuleSaveTimer = 0;
+  let capsuleSavedTimer = 0;
+  let capsuleDetailId = '';
+  const CAPSULE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+    '<rect x="5.2" y="8.4" width="13.6" height="11.2" rx="5.6"/>' +
+    '<path d="M12 8.4V3.6M9.4 5.2 12 3.6l2.6 1.6"/><path d="M8.4 12.6h7.2"/></svg>';
+
+  function capsuleDraftBytes() {
+    const draft = state.capsuleDraft;
+    let total = 0;
+    if (draft) draft.attachments.forEach(function (a) { total += a.size || 0; });
+    return total;
+  }
+
+  function capsuleDraftEmpty(draft) {
+    return !draft || (!String(draft.text || '').trim() &&
+      !String(draft.title || '').trim() && !draft.attachments.length);
+  }
+
+  // 打开时间显示在「日期 + 时间」两颗胶囊上，点任一颗粒进入同一个日期面板
+  function capsuleDateOnlyText(ms) {
+    const d = new Date(Number(ms));
+    if (isNaN(d.getTime())) return '';
+    if (isEn()) {
+      return CAPSULE_EN_MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+    }
+    return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  }
+
+  function capsulePickedOpenAt(dateValue, timeValue) {
+    const key = String(dateValue || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return null;
+    const m = /^(\d{2}):(\d{2})$/.exec(String(timeValue || ''));
+    const d = keyToDate(key);
+    if (isNaN(d.getTime())) return null;
+    d.setHours(m ? Number(m[1]) : 0, m ? Number(m[2]) : 0, 0, 0);
+    return d.getTime();
+  }
+
+  function syncCapsuleOpenInputs() {
+    const draft = state.capsuleDraft;
+    if (!draft) return;
+    const d = new Date(draft.openAt);
+    const dateEl = $('#ceOpenDateText');
+    const timeEl = $('#ceOpenTimeText');
+    if (dateEl) dateEl.textContent = capsuleDateOnlyText(draft.openAt);
+    if (timeEl) timeEl.textContent = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+
+  // 日期面板「确定」后写回草稿：越界自动夹取到「当前这一分钟 ~ 当前 + 10 年」
+  function applyCapsuleOpenAt(picked, silent) {
+    const draft = state.capsuleDraft;
+    if (!draft || picked === null || picked === undefined) return;
+    const clamped = capsuleClampOpenAt(picked);
+    draft.openAt = clamped;
+    if (!silent && clamped !== capsuleMinuteStart(picked)) {
+      showToast(T('打开时间需在当前时刻之后、十年之内，已自动调整'));
+    }
+    syncCapsuleOpenInputs();
+    scheduleCapsuleSave();
+  }
+
+  function scheduleCapsuleSave() {
+    clearTimeout(capsuleSaveTimer);
+    capsuleSaveTimer = setTimeout(function () { saveCapsuleDraft(true); }, 1200);
+  }
+
+  function markCapsuleSaved() {
+    const el = $('#ceSaved');
+    if (!el) return;
+    el.textContent = T('草稿已保存');
+    el.hidden = false;
+    el.classList.add('show');
+    clearTimeout(capsuleSavedTimer);
+    capsuleSavedTimer = setTimeout(function () {
+      el.classList.remove('show');
+      setTimeout(function () { if (!el.classList.contains('show')) el.hidden = true; }, 240);
+    }, 1600);
+  }
+
+  async function saveCapsuleDraft(silent) {
+    clearTimeout(capsuleSaveTimer);
+    const draft = state.capsuleDraft;
+    // 已封存的记录没有任何写入入口：这里再挡一次
+    if (!draft || draft.sealed) return { ok: false, reason: 'sealed' };
+    if (capsuleDraftEmpty(draft)) return { ok: false, reason: 'empty' };
+    const res = await capsulePut({
+      id: draft.id,
+      createdAt: draft.createdAt,
+      openAt: capsuleClampOpenAt(draft.openAt),
+      title: String(draft.title || '').trim().slice(0, CAPSULE_TITLE_MAX),
+      text: draft.text || '',
+      attachments: draft.attachments.map(function (a) { return Object.assign({}, a); }),
+      sealed: false,
+      openedAt: null
+    });
+    if (res.ok) {
+      draft.createdAt = res.capsule.createdAt;
+      draft.openAt = res.capsule.openAt;
+      if (!silent) markCapsuleSaved();
+    } else if (res.reason === 'sealed') {
+      showToast(T('这封信已封存，不能再修改'));
+    }
+    return res;
+  }
+
+  async function openCapsuleEditor() {
+    if (storage.status !== 'idb') {
+      showToast(T('当前环境不支持时间胶囊：需要浏览器数据库（IndexedDB）'));
+      return;
+    }
+    // 未封存的草稿接着写；没有就开一份新的
+    const existing = state.capsules.find(function (c) { return c.sealed !== true; }) || null;
+    state.capsuleDraft = {
+      id: existing ? existing.id : uid(),
+      createdAt: existing ? existing.createdAt : Date.now(),
+      openAt: existing ? capsuleClampOpenAt(existing.openAt) : capsuleDefaultOpenAt(),
+      title: existing ? (existing.title || '') : '',
+      text: existing ? (existing.text || '') : '',
+      attachments: existing
+        ? existing.attachments.map(function (a) { return Object.assign({}, a); })
+        : [],
+      sealed: false,
+      openedAt: null
+    };
+    state.capsuleEditorOpen = true;
+    state.capsuleAttachBusy = false;
+    state.capsuleAttachBlocked = diaryAttachBlockedReason();
+    state.capsuleAttachProgress = null;
+
+    const el = $('#capsuleEditor');
+    el.hidden = false;
+    renderCapsuleEditor();
+    requestAnimationFrame(function () { el.classList.add('open'); });
+    const scroll = $('.de-scroll', el);
+    if (scroll) scroll.scrollTop = 0;
+    setTimeout(function () {
+      const ta = $('#ceText');
+      if (ta) ta.focus();
+    }, 240);
+  }
+
+  async function closeCapsuleEditor() {
+    if (!state.capsuleEditorOpen) return;
+    clearTimeout(capsuleSaveTimer);
+    const draft = state.capsuleDraft;
+    // 清空后的草稿不留空壳；有内容的草稿落盘，下次进来接着写
+    if (draft && capsuleDraftEmpty(draft) && capsuleById(draft.id)) {
+      try { await capsuleDelete([draft.id]); } catch (err) { /* 忽略 */ }
+    } else if (draft && !draft.sealed) {
+      await saveCapsuleDraft(true);
+    }
+    state.capsuleEditorOpen = false;
+    state.capsuleDraft = null;
+    state.capsuleAttachBusy = false;
+    state.capsuleAttachProgress = null;
+    const el = $('#capsuleEditor');
+    el.classList.remove('open');
+    el.hidden = true;
+    renderAll();
+  }
+
+  function renderCapsuleEditor() {
+    const draft = state.capsuleDraft;
+    if (!draft) return;
+    $('#ceTitleInput').value = draft.title || '';
+    $('#ceText').value = draft.text || '';
+    $('#ceSaved').hidden = true;
+    syncCapsuleOpenInputs();
+    renderCapsuleAttachments();
+  }
+
+  function renderCapsuleAttachments() {
+    const draft = state.capsuleDraft;
+    if (!draft) return;
+    const grid = $('#ceAttachGrid');
+    const hint = $('#ceAttachHint');
+    const addBtn = $('#ceAttachBtn');
+    if (!grid || !hint || !addBtn) return;
+    if (state.capsuleAttachBlocked) {
+      grid.innerHTML = '';
+      grid.hidden = true;
+      addBtn.disabled = true;
+      addBtn.classList.remove('busy');
+      addBtn.textContent = T('添加');
+      hint.textContent = state.capsuleAttachBlocked;
+      return;
+    }
+    grid.hidden = false;
+    addBtn.disabled = !!state.capsuleAttachBusy;
+    addBtn.classList.toggle('busy', !!state.capsuleAttachBusy);
+    addBtn.textContent = state.capsuleAttachBusy ? T('处理中…') : T('添加');
+
+    grid.innerHTML = draft.attachments.map(function (a) {
+      const del = '<button class="de-file-del" type="button" data-capsule-attach-del="' + a.id + '"' +
+        ' aria-label="' + esc(T('删除附件')) + '">' +
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button>';
+      if (a.kind === 'image') {
+        return '<div class="de-file de-image" data-capsule-attach-open="' + a.id + '" role="button" tabindex="0">' +
+          '<img data-attach-thumb="' + a.id + '" alt="' + esc(a.name) + '">' + del + '</div>';
+      }
+      if (a.kind === 'video') {
+        return '<div class="de-file de-video" data-capsule-attach-open="' + a.id + '" role="button" tabindex="0">' +
+          '<img data-attach-thumb="' + a.id + '" alt="' + esc(a.name) + '">' +
+          '<span class="de-play" aria-hidden="true"><svg viewBox="0 0 24 24">' +
+            '<path d="M8 5.5v13l11-6.5z"/></svg></span>' +
+          (a.duration ? '<span class="de-dur">' + esc(diaryDurationText(a.duration)) + '</span>' : '') +
+          del + '</div>';
+      }
+      return '<div class="de-file de-doc" data-capsule-attach-open="' + a.id + '" role="button" tabindex="0">' +
+        '<span class="de-doc-ico"><svg viewBox="0 0 24 24" aria-hidden="true">' +
+          '<path d="M7 3.8h6.5L18 8.3v11.9H7z"/><path d="M13.5 3.8v4.5H18"/></svg></span>' +
+        '<span class="de-doc-main">' +
+          '<span class="de-doc-name">' + esc(a.name) + '</span>' +
+          '<span class="de-doc-size">' + esc(formatBytes(a.size)) + '</span>' +
+        '</span>' + del + '</div>';
+    }).join('');
+
+    if (state.capsuleAttachBusy && state.capsuleAttachProgress) {
+      hint.textContent = T('正在处理 {done} / {total} 个…', {
+        done: state.capsuleAttachProgress.done,
+        total: state.capsuleAttachProgress.total
+      });
+    } else {
+      const used = capsuleDraftBytes();
+      hint.textContent = draft.attachments.length
+        ? T('{n} 个附件 · {size} / 80MB', { n: draft.attachments.length, size: formatBytes(used) })
+        : T('单篇最多 {n} 个附件，合计不超过 80MB', { n: DIARY_MAX_FILES });
+    }
+    hydrateDiaryThumbs();
+  }
+
+  async function addCapsuleAttachments(fileList) {
+    const files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    const draft = state.capsuleDraft;
+    if (!draft || draft.sealed) return;
+    if (state.capsuleAttachBlocked) { showToast(state.capsuleAttachBlocked); return; }
+    if (storage.status !== 'idb') {
+      state.capsuleAttachBlocked = diaryAttachBlockedReason();
+      renderCapsuleAttachments();
+      showToast(state.capsuleAttachBlocked);
+      return;
+    }
+    if (state.capsuleAttachBusy) return;
+
+    const room = DIARY_MAX_FILES - draft.attachments.length;
+    if (room <= 0) { showToast(T('单篇最多 {n} 个附件', { n: DIARY_MAX_FILES })); return; }
+
+    state.capsuleAttachBusy = true;
+    state.capsuleAttachProgress = { done: 0, total: files.length };
+    renderCapsuleAttachments();
+
+    let added = 0;
+    let tooBig = 0;
+    let entryFull = 0;
+    let overflow = 0;
+    let failed = 0;
+    let quotaFull = false;
+    let videoNoted = false;
+
+    for (let i = 0; i < files.length; i++) {
+      state.capsuleAttachProgress.done = i;
+      renderCapsuleAttachments();
+      if (added >= room) { overflow += 1; continue; }
+      const file = files[i];
+      const isVideo = /^video\//.test(file.type || '');
+      if (isVideo) {
+        const vCount = draft.attachments.filter(function (a) { return a.kind === 'video'; }).length;
+        if (vCount >= DIARY_MAX_VIDEOS) {
+          if (!videoNoted) { showToast(T('每篇最多 1 个视频')); videoNoted = true; }
+          continue;
+        }
+        if (file.size > DIARY_VIDEO_MAX_BYTES) {
+          if (!videoNoted) { showToast(T('视频超过 80MB，无法添加')); videoNoted = true; }
+          continue;
+        }
+      } else if (file.size > DIARY_MAX_FILE_BYTES) {
+        tooBig += 1;
+        continue;
+      }
+      if (capsuleDraftBytes() + file.size > DIARY_ENTRY_LIMIT) {
+        entryFull += 1;
+        continue;
+      }
+      const isImage = /^image\//.test(file.type || '');
+      const id = uid();
+      try {
+        let data = file;
+        let thumb = null;
+        let w = 0;
+        let h = 0;
+        let duration = 0;
+        if (isImage) {
+          const out = await prepareDiaryImage(file);
+          data = out.data;
+          thumb = out.thumb;
+          w = out.w;
+          h = out.h;
+        } else if (isVideo) {
+          const out = await videoCoverOf(file);
+          thumb = out.thumb;
+          w = out.w;
+          h = out.h;
+          duration = out.duration;
+        }
+        if (capsuleDraftBytes() + data.size + (thumb ? thumb.size : 0) > DIARY_ENTRY_LIMIT) {
+          entryFull += 1;
+          continue;
+        }
+        await diaryFilePut({
+          id: id,
+          data: data,
+          thumb: thumb,
+          date: todayKey(),
+          name: file.name,
+          type: data.type || file.type || ''
+        });
+        if (thumb) diaryObjectUrl('t:' + id, thumb);
+        draft.attachments.push({
+          id: id,
+          name: file.name || (isImage ? 'image.jpg' : (isVideo ? 'video.mp4' : 'file')),
+          type: data.type || file.type || '',
+          size: data.size + (thumb ? thumb.size : 0),
+          kind: isImage ? 'image' : (isVideo ? 'video' : 'file'),
+          w: w,
+          h: h,
+          duration: duration
+        });
+        added += 1;
+      } catch (err) {
+        console.warn('添加胶囊附件失败：', err);
+        failed += 1;
+        if (err && (err.name === 'InvalidStateError' || err.name === 'NotFoundError')) {
+          state.capsuleAttachBlocked = diaryAttachBlockedReason();
+          break;
+        }
+        if (err && (err.name === 'QuotaExceededError' || err.code === 22)) {
+          quotaFull = true;
+          break;
+        }
+      }
+    }
+
+    state.capsuleAttachBusy = false;
+    state.capsuleAttachProgress = null;
+    if (added) {
+      saveCapsuleDraft(true);
+      haptic(12);
+    }
+    renderCapsuleAttachments();
+    const notes = [];
+    if (tooBig) notes.push(T('有 {n} 个附件超过 80MB，已跳过', { n: tooBig }));
+    if (entryFull) notes.push(T('附件合计已达 80MB，有 {n} 个已跳过', { n: entryFull }));
+    if (overflow) notes.push(T('单篇最多 {n} 个附件，多出的已跳过', { n: DIARY_MAX_FILES }));
+    if (quotaFull) notes.push(T('本机存储空间不足，附件没能保存，可以先删掉一些旧附件再试'));
+    else if (!added && failed) notes.push(T('附件没能保存，请重试'));
+    if (notes.length) showToast(notes.join('；'), 3200);
+  }
+
+  async function removeCapsuleAttachment(id) {
+    const draft = state.capsuleDraft;
+    if (!draft || draft.sealed) return;
+    const idx = draft.attachments.findIndex(function (a) { return a.id === id; });
+    if (idx === -1) return;
+    draft.attachments.splice(idx, 1);
+    ['t:', 'c:'].forEach(function (prefix) {
+      const cacheKey = prefix + id;
+      if (!diaryUrls.has(cacheKey)) return;
+      try { URL.revokeObjectURL(diaryUrls.get(cacheKey)); } catch (err) { /* 忽略 */ }
+      diaryUrls.delete(cacheKey);
+    });
+    try { await diaryFileDelete([id]); } catch (err) { console.warn('删除附件失败：', err); }
+    saveCapsuleDraft(true);
+    renderCapsuleAttachments();
+    haptic(8);
+  }
+
+  // 封存：先落一次草稿，再走 capsuleSeal；之后没有任何编辑入口
+  async function sealCapsule() {
+    const draft = state.capsuleDraft;
+    if (!draft || draft.sealed) return;
+    if (capsuleDraftEmpty(draft)) {
+      showToast(T('写点什么或加个附件再封存'));
+      return;
+    }
+    clearTimeout(capsuleSaveTimer);
+    const openAt = capsuleClampOpenAt(draft.openAt);
+    const saved = await capsulePut({
+      id: draft.id,
+      createdAt: draft.createdAt,
+      openAt: openAt,
+      title: String(draft.title || '').trim().slice(0, CAPSULE_TITLE_MAX),
+      text: draft.text || '',
+      attachments: draft.attachments.map(function (a) { return Object.assign({}, a); }),
+      sealed: false,
+      openedAt: null
+    });
+    if (!saved.ok) { showToast(T('封存失败，请重试')); return; }
+    const sealed = await capsuleSeal(draft.id);
+    if (!sealed.ok) { showToast(T('封存失败，请重试')); return; }
+    haptic(16);
+    state.capsuleEditorOpen = false;
+    state.capsuleDraft = null;
+    state.capsuleAttachBusy = false;
+    state.capsuleAttachProgress = null;
+    const el = $('#capsuleEditor');
+    el.classList.remove('open');
+    el.hidden = true;
+    renderAll();
+    openModal({
+      kind: 'capsule-sealed',
+      title: T('已封存'),
+      text: T('这封信已封存，在打开时间之前不可更改。到 {time} 会在日记界面出现。', {
+        time: capsuleOpenAtText(sealed.capsule.openAt)
+      }),
+      hideCancel: true,
+      confirmText: T('知道了')
+    });
+  }
+
+  // 日记页到点提示：一条胶囊一张卡，查看后写入 openedAt 即从这里消失
+  function renderCapsuleDue() {
+    const box = $('#diaryCapsuleDue');
+    if (!box) return;
+    const due = capsuleDueList();
+    box.hidden = !due.length;
+    if (!due.length) { box.innerHTML = ''; return; }
+    box.innerHTML = due.map(function (c) {
+      return '<button class="capsule-due-card" type="button" data-capsule-open="' + esc(c.id) + '">' +
+        '<span class="cdc-ico">' + CAPSULE_ICON + '</span>' +
+        '<span class="cdc-main">' +
+          '<span class="cdc-title">' + esc(c.title || T('写给未来的自己')) + '</span>' +
+          '<span class="cdc-sub">' + esc(T('写于 {time}', { time: capsuleWrittenText(c) })) + '</span>' +
+          '<span class="cdc-sub">' + esc(T('打开时间 {time}', { time: capsuleOpenAtText(c.openAt) })) + '</span>' +
+        '</span>' +
+        '<span class="cdc-go">' + esc(T('查看')) + '</span>' +
+      '</button>';
+    }).join('');
+  }
+
+  function hydrateCapsuleThumbs() {
+    const imgs = $$('#cdBody [data-cd-thumb]');
+    if (!imgs.length || storage.status !== 'idb') return;
+    imgs.forEach(function (img) {
+      const id = img.dataset.cdThumb;
+      const cached = diaryUrls.get('t:' + id);
+      if (cached) { img.src = cached; return; }
+      diaryFileGet(id).then(function (rec) {
+        if (!rec) { img.classList.add('missing'); return; }
+        const url = diaryObjectUrl('t:' + id, rec.thumb || rec.data);
+        if (url) img.src = url;
+      }).catch(function () { /* 缩略图缺失时保留占位 */ });
+    });
+  }
+
+  function renderCapsuleDetail(c) {
+    if (!c) return;
+    $('#cdTitle').textContent = c.title || T('时间胶囊');
+    const media = c.attachments.map(function (a) {
+      if (a.kind === 'image') {
+        return '<button class="dd-media-item" type="button" data-cd-media="' + a.id + '">' +
+          '<img alt="" data-cd-thumb="' + a.id + '"></button>';
+      }
+      if (a.kind === 'video') {
+        return '<button class="dd-media-item dd-media-video" type="button" data-cd-media="' + a.id + '">' +
+          '<span class="dd-play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>' +
+          (a.duration ? '<span class="dd-dur">' + esc(diaryDurationText(a.duration)) + '</span>' : '') +
+        '</button>';
+      }
+      return '<button class="dd-doc" type="button" data-cd-media="' + a.id + '">' +
+        '<span class="dd-doc-name">' + esc(a.name) + '</span>' +
+      '</button>';
+    }).join('');
+    const bits = [
+      '<span class="cd-seal-badge">' + esc(T('已封存')) + '</span>',
+      '<span>' + esc(T('写于 {time}', { time: capsuleWrittenText(c) })) + '</span>',
+      '<span>' + esc(T('打开时间 {time}', { time: capsuleOpenAtText(c.openAt) })) + '</span>'
+    ];
+    if (c.openedAt) bits.push('<span>' + esc(T('已开启 {time}', { time: capsuleOpenAtText(c.openedAt) })) + '</span>');
+    $('#cdBody').innerHTML =
+      '<div class="dd-meta">' + bits.join('') + '</div>' +
+      (c.title ? '<h3 class="cd-heading">' + esc(c.title) + '</h3>' : '') +
+      (c.text.trim()
+        ? '<div class="dd-text">' + esc(c.text.trim()).replace(/\n/g, '<br>') + '</div>'
+        : '') +
+      (media ? '<div class="dd-media">' + media + '</div>' : '');
+    hydrateCapsuleThumbs();
+  }
+
+  async function openCapsuleReader(id, opts) {
+    const c = capsuleById(id);
+    if (!c) return;
+    const history = !!(opts && opts.history);
+    if (history) {
+      // 历史只放已开启的；没开启的即使到点也不从这里绕过
+      if (!c.sealed || !c.openedAt) { showToast(T('还没到打开时间')); return; }
+    } else if (!capsuleDue(c)) {
+      if (!c.sealed) showToast(T('这封信还没有封存'));
+      else if (c.openedAt) showToast(T('这枚胶囊已经开启过了'));
+      else showToast(T('还没到打开时间'));
+      return;
+    }
+    capsuleDetailId = c.id;
+    renderCapsuleDetail(c);
+    const page = $('#capsuleDetailPage');
+    if (!page) return;
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+    if (!history) {
+      // 看过即写入 openedAt：从日记入口移除，历史胶囊里可重读
+      await capsuleMarkOpened(c.id);
+    }
+  }
+
+  function closeCapsuleDetail() {
+    const page = $('#capsuleDetailPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    window.setTimeout(function () {
+      if (page.classList.contains('open')) return;
+      page.hidden = true;
+      $('#cdBody').innerHTML = '';
+      capsuleDetailId = '';
+    }, 240);
+    if (state.view === 'diary') renderDiary();
+  }
+
+  function renderCapsuleHistory() {
+    const list = $('#capsuleHistoryList');
+    const empty = $('#capsuleHistoryEmpty');
+    if (!list || !empty) return;
+    const items = capsuleOpenedList();
+    empty.hidden = items.length > 0;
+    list.innerHTML = items.map(function (c) {
+      const preview = (c.text || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      return '<button class="capsule-hist-item" type="button" data-capsule-history-open="' + esc(c.id) + '">' +
+        '<span class="chi-main">' +
+          '<span class="chi-title">' + esc(c.title || T('写给未来的自己')) + '</span>' +
+          '<span class="chi-sub">' + esc(T('写于 {written} · 打开时间 {open}', {
+            written: capsuleWrittenText(c), open: capsuleOpenAtText(c.openAt)
+          })) + '</span>' +
+          (preview ? '<span class="chi-text">' + esc(preview) + '</span>' : '') +
+        '</span>' +
+        (c.attachments.length
+          ? '<span class="chi-files">' + c.attachments.length + '</span>'
+          : '') +
+      '</button>';
+    }).join('');
+  }
+
+  function openCapsuleHistory() {
+    const page = $('#capsuleHistoryPage');
+    if (!page) return;
+    renderCapsuleHistory();
+    page.hidden = false;
+    requestAnimationFrame(function () { page.classList.add('open'); });
+    const body = page.querySelector('.settings-body');
+    if (body) body.scrollTop = 0;
+  }
+
+  function closeCapsuleHistory() {
+    const page = $('#capsuleHistoryPage');
+    if (!page || page.hidden) return;
+    page.classList.remove('open');
+    window.setTimeout(function () {
+      if (!page.classList.contains('open')) page.hidden = true;
+    }, 240);
   }
 
   // ==================== 附件目录（更多 → 数据与备份） ====================
@@ -15230,6 +16601,20 @@
       for (let i = 0; i < atts.length; i++) {
         if (!atts[i] || !atts[i].id) continue;
         list.push({ id: atts[i].id, meta: atts[i], entry: entry, seq: i });
+      }
+    });
+    // 时间胶囊的附件同样进目录，归属标注为「时间胶囊 · 打开时间」
+    state.capsules.forEach(function (c) {
+      const atts = c.attachments || [];
+      for (let i = 0; i < atts.length; i++) {
+        if (!atts[i] || !atts[i].id) continue;
+        list.push({
+          id: atts[i].id,
+          meta: atts[i],
+          entry: { date: dateKey(new Date(c.openAt)) },
+          capsule: c,
+          seq: i
+        });
       }
     });
     // 'YYYY-MM-DD' 直接按字符串比较即可
@@ -15268,10 +16653,14 @@
       } else {
         thumb = '<span class="ai-thumb ai-doc"><span class="ai-doc-ico">' + ATTACH_DOC_ICON + '</span>' + badge + '</span>';
       }
+      const ownerLine = it.capsule
+        ? '<span class="ai-date ai-capsule"><span class="ai-owner">' + esc(T('时间胶囊')) + '</span>' +
+          esc(capsuleOpenAtText(it.capsule.openAt)) + '</span>'
+        : '<span class="ai-date">' + esc(diaryCardDate(it.entry.date)) + '</span>';
       return '<button class="attach-item" type="button" data-attach-open="' + esc(a.id) + '">' +
         thumb +
         '<span class="ai-meta">' +
-          '<span class="ai-date">' + esc(diaryCardDate(it.entry.date)) + '</span>' +
+          ownerLine +
           '<span class="ai-size">' + esc(formatBytes(a.size)) + '</span>' +
         '</span>' +
       '</button>';
@@ -15424,7 +16813,11 @@
     if (a.kind === 'video' && a.duration > 0) {
       rows += attachDetailRow(T('时长'), diaryDurationText(a.duration));
     }
-    if (entry) {
+    if (item.capsule) {
+      const when = capsuleOpenAtText(item.capsule.openAt) +
+        (item.capsule.title ? ' · ' + item.capsule.title : '');
+      rows += attachDetailRow(T('所属胶囊'), when);
+    } else if (entry) {
       const when = diaryCardDate(entry.date) + (entry.title ? ' · ' + entry.title : '');
       rows += attachDetailRow(T('所属日记'), when);
     }
@@ -15885,15 +17278,15 @@
     });
     $('#attachPickImage').addEventListener('click', function () {
       closeAttachSheet();
-      $('#diaryImageInput').click();
+      $(state.capsuleEditorOpen ? '#ceImageInput' : '#diaryImageInput').click();
     });
     $('#attachPickVideo').addEventListener('click', function () {
       closeAttachSheet();
-      $('#diaryVideoInput').click();
+      $(state.capsuleEditorOpen ? '#ceVideoInput' : '#diaryVideoInput').click();
     });
     $('#attachPickFile').addEventListener('click', function () {
       closeAttachSheet();
-      $('#diaryFileInput').click();
+      $(state.capsuleEditorOpen ? '#ceFileInput' : '#diaryFileInput').click();
     });
 
     ['#diaryImageInput', '#diaryVideoInput', '#diaryFileInput'].forEach(function (sel) {
@@ -15903,6 +17296,68 @@
         addDiaryAttachments(input.files);
         input.value = '';
       });
+    });
+
+    // ===== 时间胶囊 =====
+    $('#diaryChips').addEventListener('click', function (e) {
+      if (e.target.closest('#diaryCapsuleBtn')) openCapsuleEditor();
+    });
+    $('#diaryCapsuleDue').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-capsule-open]');
+      if (btn) openCapsuleReader(btn.dataset.capsuleOpen);
+    });
+    $('#ceBack').addEventListener('click', function () { closeCapsuleEditor(); });
+    $('#ceSealBtn').addEventListener('click', sealCapsule);
+    $('#ceText').addEventListener('input', function (e) {
+      if (!state.capsuleDraft) return;
+      state.capsuleDraft.text = e.target.value;
+      scheduleCapsuleSave();
+    });
+    $('#ceTitleInput').addEventListener('input', function (e) {
+      if (!state.capsuleDraft) return;
+      state.capsuleDraft.title = e.target.value.slice(0, CAPSULE_TITLE_MAX);
+      scheduleCapsuleSave();
+    });
+    ['#ceOpenDatePill', '#ceOpenTimePill'].forEach(function (sel) {
+      const btn = $(sel);
+      if (btn) btn.addEventListener('click', function () { openDateSheet('capsule'); });
+    });
+    $('#ceAttachBtn').addEventListener('click', function () {
+      if (state.capsuleAttachBlocked) { showToast(state.capsuleAttachBlocked); return; }
+      openAttachSheet();
+    });
+    ['#ceImageInput', '#ceVideoInput', '#ceFileInput'].forEach(function (sel) {
+      const input = $(sel);
+      if (!input) return;
+      input.addEventListener('change', function () {
+        addCapsuleAttachments(input.files);
+        input.value = '';
+      });
+    });
+    $('#ceAttachGrid').addEventListener('click', function (e) {
+      const del = e.target.closest('[data-capsule-attach-del]');
+      if (del) {
+        e.stopPropagation();
+        removeCapsuleAttachment(del.dataset.capsuleAttachDel);
+        return;
+      }
+      const tile = e.target.closest('[data-capsule-attach-open]');
+      if (tile && state.capsuleDraft) {
+        openDiaryAttachment(tile.dataset.capsuleAttachOpen, state.capsuleDraft.attachments);
+      }
+    });
+    $('#cdBack').addEventListener('click', closeCapsuleDetail);
+    $('#cdBody').addEventListener('click', function (e) {
+      const item = e.target.closest('[data-cd-media]');
+      if (!item) return;
+      const c = capsuleById(capsuleDetailId);
+      if (c) openDiaryAttachment(item.dataset.cdMedia, c.attachments);
+    });
+    $('#profileCapsulesBtn').addEventListener('click', openCapsuleHistory);
+    $('#capsuleHistoryBack').addEventListener('click', closeCapsuleHistory);
+    $('#capsuleHistoryList').addEventListener('click', function (e) {
+      const btn = e.target.closest('[data-capsule-history-open]');
+      if (btn) openCapsuleReader(btn.dataset.capsuleHistoryOpen, { history: true });
     });
 
     $('#diaryAttachGrid').addEventListener('click', function (e) {
@@ -16132,7 +17587,8 @@
 
   function onTick() {
     const t = todayKey();
-    if (t !== state.lastDayKey) {
+    const dayChanged = t !== state.lastDayKey;
+    if (dayChanged) {
       state.lastDayKey = t;
       renderAll();
     } else {
